@@ -1,0 +1,54 @@
+diff --git a/modules/calib3d/src/stereo_geom.cpp b/modules/calib3d/src/stereo_geom.cpp
+index 4c91522..e8da6a4 100644
+--- a/modules/calib3d/src/stereo_geom.cpp
++++ b/modules/calib3d/src/stereo_geom.cpp
+@@ -3,6 +3,7 @@
+ // of this distribution and at http://opencv.org/license.html
+ 
+ #include "precomp.hpp"
++#include <iterator>
+ 
+ namespace cv {
+ 
+diff --git a/modules/core/include/opencv2/core/cv_cpu_dispatch.h b/modules/core/include/opencv2/core/cv_cpu_dispatch.h
+index b920ba3..9e58e9f 100644
+--- a/modules/core/include/opencv2/core/cv_cpu_dispatch.h
++++ b/modules/core/include/opencv2/core/cv_cpu_dispatch.h
+@@ -192,7 +192,7 @@
+ #  define CV_LASX 1
+ #endif
+ 
+-#ifdef __EMSCRIPTEN__
++#if defined(__EMSCRIPTEN__) || (defined(__wasi__) && defined(__wasm_simd128__))
+ #  define CV_WASM_SIMD 1
+ #  include <wasm_simd128.h>
+ #endif
+diff --git a/modules/core/include/opencv2/core/hal/intrin_wasm.hpp b/modules/core/include/opencv2/core/hal/intrin_wasm.hpp
+index 7c4d8e0..2c6256c 100644
+--- a/modules/core/include/opencv2/core/hal/intrin_wasm.hpp
++++ b/modules/core/include/opencv2/core/hal/intrin_wasm.hpp
+@@ -16,7 +16,11 @@
+ // https://github.com/emscripten-core/emscripten/blob/1690a5802cd1241adc9714fb7fa2f633d38860dc/tools/shared.py#L506-L515
+ //
+ // See https://github.com/opencv/opencv/pull/25909
+-#ifndef __EMSCRIPTEN_major__
++#if defined(__wasi__) && !defined(__EMSCRIPTEN__)
++#define __EMSCRIPTEN_major__ 4
++#define __EMSCRIPTEN_minor__ 0
++#define __EMSCRIPTEN_tiny__ 0
++#elif !defined(__EMSCRIPTEN_major__)
+ #include <emscripten/version.h>
+ #endif
+ 
+diff --git a/modules/python/src2/cv2.cpp b/modules/python/src2/cv2.cpp
+index b7df25e..e71a1c2 100644
+--- a/modules/python/src2/cv2.cpp
++++ b/modules/python/src2/cv2.cpp
+@@ -6,6 +6,7 @@
+ 
+ #include "opencv2/opencv_modules.hpp"
+ #include "opencv2/core.hpp"
++#include <iterator>
+ #include "opencv2/core/utils/logger.hpp"
+ 
+ #include "pyopencv_generated_include.h"
