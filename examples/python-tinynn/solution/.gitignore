@@ -1,0 +1,5 @@
+net.pt
+net.onnx
+weights.npz
+meta.json
+reference_output.npy

@@ -1,11 +1,12 @@
 import argparse, json, pathlib, shlex, subprocess
 
-parser = argparse.ArgumentParser(description="relink CPython's python.wasm with statically linked extension modules")
+parser = argparse.ArgumentParser(description="relink CPython's python.wasm with statically linked extension modules, as a command (python.wasm) or as a reactor (runtime.wasm)")
 parser.add_argument("build", type=pathlib.Path, help="build directory of build.sh")
 parser.add_argument("sdk", type=pathlib.Path, help="wasi-sdk directory")
 parser.add_argument("output", type=pathlib.Path)
 parser.add_argument("manifests", nargs="+", type=pathlib.Path)
 parser.add_argument("--frozen", type=pathlib.Path, help="directory with frozen.c from freeze.py; embeds the Python modules so no stdlib directory is needed at runtime")
+parser.add_argument("--reactor", type=pathlib.Path, help="C file with the exported entry points (runtime/reactor.c): links a wasm reactor without main() that calls wasm_python_register_modules() before Py_InitializeFromConfig")
 arguments = parser.parse_args()
 build = arguments.build.resolve()
 sdk = arguments.sdk.resolve()
@@ -26,7 +27,18 @@ if arguments.frozen:
     registrations += "\n    PyImport_FrozenModules = wasm_python_frozen_modules;"
     subprocess.check_call(compile_command + ["-std=c23", str(arguments.frozen.resolve() / "frozen.c"), "-o", str(work / "frozen.o")])
     objects.append(work / "frozen.o")
-(work / "main.c").write_text(f"""#include <Python.h>
+if arguments.reactor:
+    # the reactor registers the modules itself right before initializing Python
+    (work / "main.c").write_text(f"""#include <Python.h>
+{declarations}
+void wasm_python_register_modules(void){{
+{registrations}
+}}
+""")
+    subprocess.check_call(compile_command + [str(arguments.reactor.resolve()), "-o", str(work / "reactor.o")])
+    objects.append(work / "reactor.o")
+else:
+    (work / "main.c").write_text(f"""#include <Python.h>
 {declarations}
 int main(int argc, char** argv){{
 {registrations}
@@ -51,5 +63,7 @@ link[0] = str(sdk / "bin/clang++")
 link = [token for token in link if token != "Programs/python.o"]
 link[link.index("-o") + 1] = str(output)
 link += [str(path) for path in objects] + ["-fwasm-exceptions", "-Wl,--strip-debug"] + archives + ["-lc++", "-lc++abi", "-lunwind", "-lc-printscan-long-double"]
+if arguments.reactor:
+    link.append("-mexec-model=reactor")
 subprocess.check_call(link, cwd=cross)
 print(output, output.stat().st_size // (1 << 20), "MiB")

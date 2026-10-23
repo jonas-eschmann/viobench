@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# CPython 3.14 + numpy + OpenCV (core, imgproc, features2d, flann, calib3d, video, cv2) statically linked into one self-contained wasm32-wasip1 python.wasm (stdlib and numpy Python code frozen in)
+# CPython 3.14 + numpy + OpenCV (core, imgproc, features2d, flann, calib3d, video, dnn, cv2) statically linked into one self-contained wasm32-wasip1 python.wasm (stdlib and numpy Python code frozen in)
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -82,12 +82,13 @@ cp -r "$NUMPY/install/usr/local/lib/python3.14/site-packages/numpy" "$BUILD/pref
 OPENCV=$BUILD/opencv-build
 if [ ! -f "$OPENCV/build.ninja" ]; then
     DISABLED=""
-    for feature in PTHREADS_PF OPENCL IPP ITT LAPACK EIGEN PROTOBUF ADE JPEG PNG SPNG TIFF WEBP OPENJPEG JASPER OPENEXR AVIF FFMPEG GSTREAMER GTK QT VTK V4L 1394 TBB OPENMP CAROTENE KLEIDICV FLATBUFFERS VA VA_INTEL QUIRC OBSENSOR CUDA GDAL GDCM OPENVX OPENNI2 LIBREALSENSE WAYLAND IMGCODEC_HDR IMGCODEC_SUNRASTER IMGCODEC_PXM IMGCODEC_PFM HAL_RVV NDSRVP; do
+    for feature in PTHREADS_PF OPENCL IPP ITT LAPACK EIGEN ADE JPEG PNG SPNG TIFF WEBP OPENJPEG JASPER OPENEXR AVIF FFMPEG GSTREAMER GTK QT VTK V4L 1394 TBB OPENMP CAROTENE KLEIDICV FLATBUFFERS VA VA_INTEL QUIRC OBSENSOR CUDA GDAL GDCM OPENVX OPENNI2 LIBREALSENSE WAYLAND IMGCODEC_HDR IMGCODEC_SUNRASTER IMGCODEC_PXM IMGCODEC_PFM HAL_RVV NDSRVP; do
         DISABLED="$DISABLED -DWITH_$feature=OFF"
     done
     WASI_DEFINES="-D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_GETPID"
-    # OPENCV_DISABLE_THREAD_SUPPORT also turns the python3 module off unless BUILD_opencv_python3 is set explicitly
-    cmake -S "$BUILD/src/opencv" -B "$OPENCV" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$SDK/share/cmake/wasi-sdk-p1.cmake" -DWASI_SDK_PREFIX="$SDK" -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CROSSCOMPILING_EMULATOR=$WASMTIME;run;--dir=/" "-DCMAKE_C_FLAGS=-msimd128 $WASI_DEFINES" "-DCMAKE_CXX_FLAGS=-msimd128 -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false $WASI_DEFINES" -DBUILD_SHARED_LIBS=OFF -DBUILD_LIST=core,imgproc,features2d,flann,calib3d,video,python3 -DOPENCV_DISABLE_THREAD_SUPPORT=ON -DBUILD_opencv_python3=ON -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_opencv_apps=OFF -DBUILD_JAVA=OFF -DBUILD_opencv_python2=OFF -DBUILD_DOCS=OFF -DBUILD_opencv_js=OFF -DOPENCV_ENABLE_NONFREE=OFF $DISABLED -DOPENCV_SKIP_PYTHON_LOADER=ON -DPYTHON3_EXECUTABLE="$VENV/bin/python" -DPYTHON3_INCLUDE_DIR="$BUILD/prefix/usr/local/include/python3.14" -DPYTHON3_LIBRARY="$CPYTHON/cross-build/wasm32-wasip1/libpython3.14.a" -DPYTHON3_NUMPY_INCLUDE_DIRS="$NUMPY/install/usr/local/lib/python3.14/site-packages/numpy/_core/include" -DPYTHON3_PACKAGES_PATH=lib/python3.14/site-packages > "$BUILD/logs/opencv-configure.log"
+    # OPENCV_DISABLE_THREAD_SUPPORT turns the python3 and dnn modules off unless BUILD_opencv_python3/BUILD_opencv_dnn are set explicitly;
+    # dnn (ONNX inference via cv2.dnn) needs the bundled protobuf, which builds fine on wasi-libc's single-threaded pthread stubs
+    cmake -S "$BUILD/src/opencv" -B "$OPENCV" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$SDK/share/cmake/wasi-sdk-p1.cmake" -DWASI_SDK_PREFIX="$SDK" -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CROSSCOMPILING_EMULATOR=$WASMTIME;run;--dir=/" "-DCMAKE_C_FLAGS=-msimd128 $WASI_DEFINES" "-DCMAKE_CXX_FLAGS=-msimd128 -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false $WASI_DEFINES" -DBUILD_SHARED_LIBS=OFF -DBUILD_LIST=core,imgproc,features2d,flann,calib3d,video,dnn,python3 -DOPENCV_DISABLE_THREAD_SUPPORT=ON -DBUILD_opencv_python3=ON -DBUILD_opencv_dnn=ON -DWITH_PROTOBUF=ON -DBUILD_PROTOBUF=ON -DPROTOBUF_UPDATE_FILES=OFF -DOPENCV_DNN_OPENCL=OFF -DOPENCV_DNN_CUDA=OFF -DOPENCV_DNN_TFLITE=OFF -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_opencv_apps=OFF -DBUILD_JAVA=OFF -DBUILD_opencv_python2=OFF -DBUILD_DOCS=OFF -DBUILD_opencv_js=OFF -DOPENCV_ENABLE_NONFREE=OFF $DISABLED -DOPENCV_SKIP_PYTHON_LOADER=ON -DPYTHON3_EXECUTABLE="$VENV/bin/python" -DPYTHON3_INCLUDE_DIR="$BUILD/prefix/usr/local/include/python3.14" -DPYTHON3_LIBRARY="$CPYTHON/cross-build/wasm32-wasip1/libpython3.14.a" -DPYTHON3_NUMPY_INCLUDE_DIRS="$NUMPY/install/usr/local/lib/python3.14/site-packages/numpy/_core/include" -DPYTHON3_PACKAGES_PATH=lib/python3.14/site-packages > "$BUILD/logs/opencv-configure.log"
 fi
 # the cv2 module target is a shared library as well: only its objects are used
 ninja -C "$OPENCV" -j "$JOBS" -k 0 > "$BUILD/logs/opencv-build.log" 2>&1 || true
@@ -98,7 +99,7 @@ python - "$BUILD" <<'EOF'
 import json, pathlib, sys
 build = pathlib.Path(sys.argv[1])
 opencv = build / "opencv-build"
-libraries = [opencv / f"lib/libopencv_{name}.a" for name in ["video", "calib3d", "features2d", "flann", "imgproc", "core"]] + [opencv / "3rdparty/lib/libzlib.a"]
+libraries = [opencv / f"lib/libopencv_{name}.a" for name in ["dnn", "video", "calib3d", "features2d", "flann", "imgproc", "core"]] + [opencv / "3rdparty/lib/liblibprotobuf.a", opencv / "3rdparty/lib/libzlib.a"]
 missing = [str(library) for library in libraries if not library.exists()]
 if missing:
     sys.exit(f"missing OpenCV libraries (see logs/opencv-build.log): {missing}")
@@ -108,7 +109,10 @@ EOF
 
 # frozen modules get __file__ under sys._stdlib_dir, so numpy's bytecode is named after /usr/local/lib/python3.14/numpy as well
 LIB=$BUILD/prefix/usr/local/lib/python3.14
-"$BUILD_PYTHON" "$HERE/scripts/freeze.py" "$BUILD/frozen" "$LIB:/usr/local/lib/python3.14:" "$LIB/site-packages/numpy:/usr/local/lib/python3.14/numpy:numpy"
+# runtime/py holds the frozen guest-side shim (_eecs116) of the solution runtime
+"$BUILD_PYTHON" "$HERE/scripts/freeze.py" "$BUILD/frozen" "$LIB:/usr/local/lib/python3.14:" "$LIB/site-packages/numpy:/usr/local/lib/python3.14/numpy:numpy" "$HERE/../runtime/py:/usr/local/lib/python3.14:"
 python "$HERE/scripts/link.py" "$BUILD" "$SDK" "$BUILD/dist/python.wasm" "$NUMPY/archives/modules.json" "$BUILD/opencv-archives/modules.json" --frozen "$BUILD/frozen"
 "$WASMTIME" compile "$BUILD/dist/python.wasm" -o "$BUILD/dist/python.cwasm"
 "$WASMTIME" run --allow-precompiled "$BUILD/dist/python.cwasm" - < "$HERE/examples/smoke_vo.py"
+# runtime.wasm: the same interpreter as a reactor exporting the solution ABI (docs/ABI.md); students bundle their code into it
+python "$HERE/scripts/link.py" "$BUILD" "$SDK" "$BUILD/dist/runtime.wasm" "$NUMPY/archives/modules.json" "$BUILD/opencv-archives/modules.json" --frozen "$BUILD/frozen" --reactor "$HERE/../runtime/reactor.c"

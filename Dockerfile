@@ -14,3 +14,6 @@ RUN git clone --depth 1 --recursive --shallow-submodules --branch v2.3.4 https:/
 RUN git clone --depth 1 --branch 4.12.0 https://github.com/opencv/opencv /opt/src/opencv && test "$(git -C /opt/src/opencv rev-parse HEAD)" = 49486f61fb25722cbcf586b7f4320921d46fb38e
 
 ENV PATH=/opt/venv/bin:$PATH
+
+# host side of the solution runtime (eecs116 package): wasmtime-py drives runtime.wasm in the build's smoke test
+RUN /opt/venv/bin/pip install --no-cache-dir wasmtime==50.0.1 numpy==2.3.4
