@@ -4,8 +4,7 @@ The data itself is not in git (`build/datasets/`). These are the commands that p
 pattern for the hidden ones; `docs/DATA.md` describes format and variants.
 
 ```bash
-# public: training pack (ProcTHOR training scenes, seeds 0..), validation, variant samples
-python -m eecs116 simulate -o build/datasets/public/default-train --episodes 400 --seed 0     --variant default
+# public: validation sets and variant samples (students generate their own training data on the lab GPUs)
 python -m eecs116 simulate -o build/datasets/public/default-val   --episodes 16  --seed 2000  --variant default      --scene-names ProcTHOR-Train-7 ProcTHOR-Train-11 ProcTHOR-Train-23
 python -m eecs116 simulate -o build/datasets/public/blur-val      --episodes 8   --seed 2000  --variant blur         --scene-names ProcTHOR-Train-7 ProcTHOR-Train-11 ProcTHOR-Train-23
 python -m eecs116 simulate -o build/datasets/public/lowlight-val  --episodes 8   --seed 2000  --variant lowlight     --scene-names ProcTHOR-Train-7 ProcTHOR-Train-11 ProcTHOR-Train-23
@@ -29,5 +28,4 @@ Rights: "In Copyright – Non-Commercial Use Permitted".
 
 Reproducibility: HyperDrone output depends on the machine (`-march=native -ffast-math`), so a set is defined by its
 files, not its seeds; keep the generated directories (and `episode.json`, which records every parameter and the spawn).
-Packaging for students: `tar -C build/datasets/public -cf default-train.tar default-train` (PNG frames do not compress
-further).
+Packaging for students: `tar -C build/datasets/public -cf public.tar .` (PNG frames do not compress further).

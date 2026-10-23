@@ -8,7 +8,7 @@ One directory per episode, EuRoC/ASL layout so that standard VIO tooling (evo, O
 <episode>/
   episode.json                                  format, name, the solution config (docs/ABI.md), meta (source, variant, ISP parameters, ...)
   mav0/cam0/data.csv                            "#timestamp [ns],filename"
-  mav0/cam0/data/<timestamp ns>.png             8-bit grayscale
+  mav0/cam0/data/<timestamp ns>.png             8-bit RGB (simulated) or grayscale (real)
   mav0/cam0/sensor.yaml                         Kalibr-style: T_BS (camera in body), intrinsics, resolution
   mav0/imu0/data.csv                            "#timestamp [ns],w_x,w_y,w_z,a_x,a_y,a_z"   (gyro first, like EuRoC)
   mav0/imu0/sensor.yaml                         rate, continuous-time noise densities
@@ -18,9 +18,11 @@ One directory per episode, EuRoC/ASL layout so that standard VIO tooling (evo, O
 `eecs116.data.read_episode(dir)` loads it into an `Episode` (frames, frame times, IMU rows `[t, a, g]`, ground truth,
 `T_body_camera`, config); `episode.ground_truth_relative()` gives the `T_c0_ck` poses a perfect solution would output
 (ground truth interpolated to each frame's mid-exposure time, moved into the camera frame via the extrinsics, re-based
-on frame 0). `episode.steps()` yields `(t, frame, imu_window)` exactly as the harness feeds a solution.
+on frame 0). `episode.steps()` yields `(t, frame, imu_window)` exactly as the harness feeds a solution;
+`episode.as_channels(1 | 3)` converts to what a solution asked for (RGB → grayscale is `cv2.COLOR_RGB2GRAY`,
+grayscale → RGB replicates). Simulated episodes are stored as RGB, real ones as grayscale.
 
-A 10 s episode at 320 × 240 is ~8 MB.
+A 10 s episode at 320 × 240 is ~20 MB (RGB PNG).
 
 ## Simulated episodes (HyperDrone)
 
@@ -33,8 +35,8 @@ A 10 s episode at 320 × 240 is ~8 MB.
   average of the sub-frames inside the shutter interval (box shutter, linear radiance) → motion blur is physically
   consistent with the trajectory. The horizontal FOV is drawn per episode from 63.8° ± 15°; intrinsics are in the
   config. The camera is an ideal pinhole, no distortion, no rolling shutter.
-- Camera/ISP model (`eecs116.data.isp`): exposure scaling, photon shot noise (full-well capacity), Gaussian read
-  noise, digital gain, clipping, sRGB encoding, 8-bit quantisation. Rec. 709 luma of the rendered RGB.
+- Camera/ISP model (`eecs116.data.isp`): exposure scaling, per-channel photon shot noise (full-well capacity),
+  Gaussian read noise, digital gain, clipping, sRGB encoding, 8-bit quantisation.
 - Determinism: a seed fixes the scene, spawn, route, IMU noise and ISP draws *on one machine and build*
   (HyperDrone compiles with `-march=native -ffast-math`); the published sets are therefore distributed as files, not
   as seeds. `episode.json` keeps the spawn point and all parameters.
@@ -50,16 +52,17 @@ A 10 s episode at 320 × 240 is ~8 MB.
 | `oversaturated` | 1–5 ms | 2–5 | 0.001–0.004 | 10k–40k e⁻ | large clipped areas |
 
 `eecs116.data.variants.sample(variant, rng)` draws a parameter set the way the generator does — use it (and
-`eecs116.data.isp.apply`) as training augmentation.
+`eecs116.data.isp.apply`) as training augmentation, or simply call `simulate(..., variant=...)`; the same code
+produces the hidden sets with other seeds. There is no pre-rendered training set: generate what you need on the lab
+machines (`examples/python-tinynn/train.py --generate N` shows training straight from the generator).
 
 ### Published sets
 
 | set | content | purpose |
 |---|---|---|
-| `default-train` | ProcTHOR training scenes, many seeds | training data; also a generator you can run yourself (`[sim]` extra, GPU) |
-| `default-val` | ProcTHOR scenes not in `default-train` | local validation |
-| `blur-sample`, `lowlight-sample`, `oversaturated-sample` | a few episodes each | see what the hidden variants look like |
-| `real-sample` | one EuRoC snippet | see the real-data format |
+| `default-val` | 16 episodes, 3 ProcTHOR scenes | local validation, format reference |
+| `blur-val`, `lowlight-val`, `oversaturated-val` | 8 episodes each | see what the hidden variants look like |
+| `real-sample` | three EuRoC V1_01 snippets | see the real-data format |
 
 Hidden (server only): `default`, `blur`, `lowlight`, `oversaturated` (new seeds, HSSD validation scenes) and `real`
 (EuRoC snippets from sequences other than the sample).

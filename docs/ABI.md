@@ -20,13 +20,23 @@ and Rust solutions implement it directly (`examples/cpp-minimal`).
 Call sequence per episode: `instantiate → _initialize → [load_bundle] → init → alloc × 3 → step × N → drop`.
 There is no `reset`: every episode gets a fresh instance (instantiation costs ~0.1 s, Python init ~0.1 s).
 
+## Manifest (optional custom section `eecs116.manifest`)
+
+A JSON object the harness reads from the binary *before* `init`: `{"channels": 1 | 3, "entry": "module:Class"}`.
+`channels` selects what `step` receives: grayscale (`1`, the default) or RGB (`3`). `python -m eecs116 bundle` writes it
+from `eecs116.json` or `--channels`; native modules add it with `python -m eecs116 manifest solution.wasm --channels 3`.
+The config then reports `image.channels`/`image.layout` accordingly and `image.color` tells whether the colour is real
+(real-data sets are grayscale and are replicated into three channels for RGB solutions).
+
 ## Buffers
 
 All numbers are little-endian; integers are `i32`, floats `f64`.
 
-- **`frame`**: `height × width × channels` bytes of `uint8`, row-major, C-contiguous. For `channels == 1` the Python
-  runtime hands the solution a `(H, W)` array, otherwise `(H, W, C)`. Size and channel count come from the config and
-  are constant for the episode. The buffer is **reused for the next frame**: keep a copy if you need the old frame.
+- **`frame`**: `height × width × channels` bytes of `uint8`, row-major, C-contiguous; channels is 1 (grayscale, default)
+  or 3 (RGB, if the manifest asks for it; grayscale is the ITU-R 601 luma of the stored RGB, `cv2.COLOR_RGB2GRAY`). For
+  `channels == 1` the Python runtime hands the solution a `(H, W)` array, otherwise `(H, W, 3)`. Size and channel
+  count come from the config and are constant for the episode. The buffer is **reused for the next frame**: keep a copy
+  if you need the old frame.
 - **`imu`**: `imu_count` rows of 7 `f64`: `[t, ax, ay, az, gx, gy, gz]` — time in seconds, specific force in m/s²
   (includes gravity, body frame), angular rate in rad/s (body frame). The rows are all IMU samples with
   `t_previous_frame < t ≤ t_frame` in time order; `imu_count` may be 0 (the first frame typically carries the hover
@@ -61,7 +71,7 @@ In Python, `sys.exit()` is caught like any exception (status `-1`); `os._exit()`
 ```json
 {
   "abi_version": 1,
-  "image": {"width": 320, "height": 240, "channels": 1, "dtype": "uint8", "layout": "HW"},
+  "image": {"width": 320, "height": 240, "channels": 1, "dtype": "uint8", "layout": "HW", "color": false, "source_channels": 3},
   "camera": {"fx": 190.7, "fy": 190.7, "cx": 159.5, "cy": 119.5, "model": "pinhole", "distortion": []},
   "imu": {"rate_hz": 200.0,
           "accel_noise_std": 0.28, "gyro_noise_std": 0.07,

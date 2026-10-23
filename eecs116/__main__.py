@@ -31,11 +31,12 @@ def command_bundle(arguments):
     from .bundle import BundleError, bundle
 
     try:
-        summary = bundle(arguments.directory, arguments.output, runtime=arguments.runtime, entry=arguments.entry)
+        summary = bundle(arguments.directory, arguments.output, runtime=arguments.runtime, entry=arguments.entry, channels=arguments.channels)
     except BundleError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
-    print(f"wrote {summary['output']} ({summary['bytes'] / 2**20:.1f} MiB, bundle {summary['bundle_bytes'] / 1024:.0f} KiB, {len(summary['files'])} files, entry {summary['entry']})")
+    print(f"wrote {summary['output']} ({summary['bytes'] / 2**20:.1f} MiB, bundle {summary['bundle_bytes'] / 1024:.0f} KiB, {len(summary['files'])} files, "
+          f"entry {summary['entry']}, {'RGB' if summary['channels'] == 3 else 'grayscale'} frames)")
     for warning in summary["warnings"]:
         print(f"warning: {warning}")
     print(f"next: python -m eecs116 check {summary['output']}")
@@ -54,21 +55,44 @@ def command_unbundle(arguments):
     return 0
 
 
+def command_manifest(arguments):
+    from .bundle import BundleError, read_manifest, write_manifest
+
+    try:
+        updates = {}
+        if arguments.channels is not None:
+            updates["channels"] = arguments.channels
+        if arguments.entry is not None:
+            updates["entry"] = arguments.entry
+        manifest = write_manifest(arguments.wasm, updates) if updates else read_manifest(open(arguments.wasm, "rb").read())
+    except BundleError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    print(manifest)
+    return 0
+
+
 def command_check(arguments):
     import numpy as np
 
     from .config import make_config
     from .solution import Limits, Solution, SolutionError
 
-    config = make_config(width=arguments.width, height=arguments.height, channels=arguments.channels, num_frames=arguments.frames)
     rng = np.random.default_rng(0)
-    shape = (arguments.height, arguments.width) if arguments.channels == 1 else (arguments.height, arguments.width, arguments.channels)
-    dt = 1.0 / config["episode"]["frame_rate_hz"]
-    imu_dt = 1.0 / config["imu"]["rate_hz"]
-    rows_per_frame = int(round(dt / imu_dt))
 
     def run():
-        solution = Solution(arguments.wasm, limits=Limits(), log_dir=arguments.logs, dev_dir=arguments.dir, inherit_stdio=arguments.verbose)
+        try:
+            solution = Solution(arguments.wasm, limits=Limits(), log_dir=arguments.logs, dev_dir=arguments.dir, inherit_stdio=arguments.verbose)
+        except SolutionError as error:
+            print(f"load failed: {error}")
+            return 1
+        channels = arguments.channels or solution.channels
+        config = make_config(width=arguments.width, height=arguments.height, channels=channels, num_frames=arguments.frames)
+        shape = (arguments.height, arguments.width) if channels == 1 else (arguments.height, arguments.width, channels)
+        dt = 1.0 / config["episode"]["frame_rate_hz"]
+        imu_dt = 1.0 / config["imu"]["rate_hz"]
+        rows_per_frame = int(round(dt / imu_dt))
+        print(f"solution: {'RGB' if channels == 3 else 'grayscale'} frames {shape}, manifest {solution.manifest or '{}'}")
         try:
             solution.init(config)
         except SolutionError as error:
@@ -80,8 +104,8 @@ def command_check(arguments):
             t = (k + 1) * dt
             base = np.linspace(0, 255, arguments.width, dtype=np.float32)[None, :] + rng.normal(0, 20, (arguments.height, arguments.width))
             frame = np.clip(base, 0, 255).astype(np.uint8)
-            if arguments.channels > 1:
-                frame = np.repeat(frame[:, :, None], arguments.channels, axis=2)
+            if channels > 1:
+                frame = np.repeat(frame[:, :, None], channels, axis=2)
             times = t - dt + imu_dt * np.arange(1, rows_per_frame + 1)
             imu = np.column_stack([times, rng.normal(0, 0.3, (rows_per_frame, 3)) + [0, 0, 9.81], rng.normal(0, 0.07, (rows_per_frame, 3))])
             try:
@@ -131,7 +155,7 @@ def command_simulate(arguments):
     from .data.simulate import SimConfig, hssd_scenes, procthor_scenes, simulate
 
     sim = SimConfig(width=arguments.width, height=arguments.height, instances=arguments.instances, frame_rate_hz=arguments.frame_rate,
-                    fov_range=arguments.fov_range, hold_seconds=arguments.hover, aa_grid=arguments.aa_grid)
+                    fov_range=arguments.fov_range, hold_seconds=arguments.hover, aa_grid=arguments.aa_grid, channels=arguments.channels)
     if arguments.scenes == "procthor-train":
         scenes = procthor_scenes(arguments.scene_names)
     elif arguments.scenes == "hssd-val":
@@ -202,7 +226,14 @@ def main(argv=None):
     bundle.add_argument("-o", "--output", required=True, help="output .wasm")
     bundle.add_argument("--runtime", help="runtime.wasm to build on (default: $EECS116_RUNTIME or the repository build)")
     bundle.add_argument("--entry", help=f"module:Class of the solution (default {abi.DEFAULT_ENTRY} or eecs116.json)")
+    bundle.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS, help="frames the solution wants: 1 grayscale (default) or 3 RGB (or eecs116.json)")
     bundle.set_defaults(function=command_bundle)
+
+    manifest = commands.add_parser("manifest", help="show or change the manifest of a solution .wasm (native modules declare RGB this way)")
+    manifest.add_argument("wasm")
+    manifest.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS)
+    manifest.add_argument("--entry")
+    manifest.set_defaults(function=command_manifest)
 
     unbundle = commands.add_parser("unbundle", help="extract the bundled directory from a solution .wasm")
     unbundle.add_argument("wasm")
@@ -215,7 +246,7 @@ def main(argv=None):
     check.add_argument("--frames", type=int, default=5)
     check.add_argument("--width", type=int, default=320)
     check.add_argument("--height", type=int, default=240)
-    check.add_argument("--channels", type=int, default=1)
+    check.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS, help="override the manifest's channel choice")
     check.add_argument("--logs", help="directory for stdout.txt/stderr.txt (default: temporary)")
     check.add_argument("-v", "--verbose", action="store_true", help="pass the guest's stdout/stderr through instead of capturing them")
     check.set_defaults(function=command_check)
@@ -245,6 +276,7 @@ def main(argv=None):
     simulate.add_argument("--fov-range", type=float, default=15.0, help="horizontal FOV = 63.8 + U(-range, range) degrees")
     simulate.add_argument("--hover", type=float, default=1.0, help="seconds of hover at the start of each episode")
     simulate.add_argument("--aa-grid", type=int, default=1)
+    simulate.add_argument("--channels", type=int, default=3, choices=abi.SUPPORTED_CHANNELS, help="store RGB (default) or grayscale frames")
     simulate.set_defaults(function=command_simulate)
 
     convert = commands.add_parser("convert-euroc", help="cut a EuRoC MAV sequence (ASL format directory) into challenge episodes")

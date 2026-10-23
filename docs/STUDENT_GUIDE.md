@@ -9,8 +9,13 @@ pip install "eecs116[data] @ git+https://github.com/<course>/course-eecs116-216-
 export EECS116_RUNTIME=~/eecs116/runtime.wasm
 ```
 
-Optional: `pip install "eecs116[sim]"` for the HyperDrone generator (needs an NVIDIA GPU + CUDA; first use compiles
-for a minute) and `pip install "eecs116[train]"` for PyTorch.
+On the lab machines (RTX 5080): `pip install "eecs116[sim,train]"` adds the HyperDrone generator (first use compiles
+for a minute) and PyTorch. There is no pre-rendered training set — you generate what you need:
+
+```bash
+python -m eecs116 simulate -o data/train --episodes 200 --seed 1 --variant default     # ~15 s per 8 episodes
+python -m eecs116 simulate -o data/train-blur --episodes 64 --seed 500 --variant blur
+```
 
 Read `docs/TASK.md` (what to estimate, how it is scored) and `docs/ABI.md`/`docs/RUNTIME.md` (what the sandbox offers).
 
@@ -27,16 +32,19 @@ python -m eecs116 evaluate $EECS116_RUNTIME --dir my_solution datasets/default-v
 
 ## 3. Iterate
 
-- Data: `datasets/default-train` for training/tuning, `datasets/default-val` for validation, the `*-sample` sets to see
-  the hidden variants, `real-sample` for the real-data format. Generate more with `python -m eecs116 simulate`
-  (GPU) — the hidden sets use the same generator with other seeds and scenes.
+- Data: generate training data with `python -m eecs116 simulate` (any variant, any amount); `datasets/default-val`
+  and the `*-val` sets are for validation and show the hidden variants, `real-sample` the real-data format. The hidden
+  sets use the same generator with other seeds and scenes.
 - Inspect an episode in Python: `from eecs116.data import read_episode; ep = read_episode("datasets/default-val/<name>")`,
   then `ep.frames`, `ep.imu`, `ep.ground_truth_relative()`, `ep.steps()`.
 - Augmentation: `eecs116.data.variants.sample(name, rng)` + `eecs116.data.isp.apply(...)` reproduce the blur /
   low-light / saturation pipeline on your own renders (apply them to linear frames: `srgb_to_linear(frame / 255)`).
 - Compute: watch the fuel column. Python-level loops over pixels are expensive; OpenCV calls are cheap per pixel;
   a `cv2.dnn` forward of a small CNN costs about as much as one `goodFeaturesToTrack`.
-- Learned models: `examples/python-tinynn` shows PyTorch → ONNX → `cv2.dnn` inside the runtime, with a numpy fallback.
+- Learned models: `examples/python-tinynn` shows PyTorch → ONNX → `cv2.dnn` inside the runtime, with a numpy fallback,
+  and `train.py --generate N` trains straight from the simulator.
+- Colour: frames are grayscale unless you put `{"channels": 3}` into `eecs116.json` next to your `solution.py`
+  (then `step` gets `(H, W, 3)` RGB; real-data episodes are grayscale replicated into three channels).
 
 ## 4. Submit
 

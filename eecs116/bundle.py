@@ -15,6 +15,8 @@ from pathlib import Path
 from . import abi
 from .wasm_sections import append_custom, find_custom, strip_custom
 
+MANIFEST_KEYS = {"entry", "channels", "format"}
+
 IGNORED_DIRECTORIES = {"__pycache__", ".git", ".hg", ".svn", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea", ".vscode", "node_modules"}
 IGNORED_SUFFIXES = {".pyc", ".pyo"}
 SIZE_WARNING_BYTES = 64 << 20
@@ -103,7 +105,39 @@ def validate(directory, files, entry):
     return warnings
 
 
-def make_zip(directory, files, entry):
+def read_manifest(wasm):
+    """Manifest dict of a solution binary: the eecs116.manifest section, else eecs116.json inside the bundle, else {}."""
+    section = find_custom(wasm, abi.MANIFEST_SECTION)
+    if section is not None:
+        return json.loads(section.decode("utf-8"))
+    payload = find_custom(wasm, abi.BUNDLE_SECTION)
+    if payload is not None:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            if abi.BUNDLE_MANIFEST in archive.namelist():
+                return json.loads(archive.read(abi.BUNDLE_MANIFEST).decode("utf-8"))
+    return {}
+
+
+def validate_manifest(manifest):
+    channels = manifest.get("channels", abi.DEFAULT_CHANNELS)
+    if channels not in abi.SUPPORTED_CHANNELS:
+        raise BundleError(f"manifest channels must be one of {abi.SUPPORTED_CHANNELS}, got {channels!r}")
+    unknown = set(manifest) - MANIFEST_KEYS
+    if unknown:
+        raise BundleError(f"unknown manifest keys {sorted(unknown)} (known: {sorted(MANIFEST_KEYS)})")
+    return manifest
+
+
+def write_manifest(wasm_path, updates):
+    """Merges updates into the binary's manifest section (for native modules: `eecs116 manifest x.wasm --channels 3`)."""
+    wasm_path = Path(wasm_path)
+    wasm = wasm_path.read_bytes()
+    manifest = validate_manifest({**read_manifest(wasm), **updates})
+    wasm_path.write_bytes(append_custom(wasm, abi.MANIFEST_SECTION, json.dumps(manifest, sort_keys=True).encode("utf-8")))
+    return manifest
+
+
+def make_zip(directory, files, entry, channels=abi.DEFAULT_CHANNELS):
     """Uncompressed (the guest has no zlib), deterministic zip with the manifest at the end."""
     directory = Path(directory)
     manifest = {}
@@ -119,30 +153,33 @@ def make_zip(directory, files, entry):
             info.compress_type = zipfile.ZIP_STORED
             info.external_attr = 0o644 << 16
             archive.writestr(info, data)
-        manifest.update({"format": 1, "entry": entry})
+        manifest.update({"format": 1, "entry": entry, "channels": int(channels)})
+        validate_manifest(manifest)
         info = zipfile.ZipInfo(abi.BUNDLE_MANIFEST, date_time=ZIP_EPOCH)
         info.external_attr = 0o644 << 16
         archive.writestr(info, json.dumps(manifest, indent=1, sort_keys=True))
-    return buffer.getvalue()
+    return buffer.getvalue(), manifest
 
 
-def bundle(directory, output, runtime=None, entry=None):
-    """Writes output (.wasm) and returns a summary dict."""
+def bundle(directory, output, runtime=None, entry=None, channels=None):
+    """Writes output (.wasm) and returns a summary dict. entry/channels default to eecs116.json in the directory."""
     directory = Path(directory)
     files = collect_files(directory)
     manifest_path = directory / abi.BUNDLE_MANIFEST
+    existing = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
     if entry is None:
-        entry = abi.DEFAULT_ENTRY
-        if manifest_path.is_file():
-            entry = json.loads(manifest_path.read_text()).get("entry", entry)
+        entry = existing.get("entry", abi.DEFAULT_ENTRY)
+    if channels is None:
+        channels = existing.get("channels", abi.DEFAULT_CHANNELS)
     warnings = validate(directory, files, entry)
     runtime_path = Path(runtime) if runtime else default_runtime()
     runtime_bytes = runtime_path.read_bytes()
-    base = strip_custom(runtime_bytes, abi.BUNDLE_SECTION)
-    payload = make_zip(directory, files, entry)
+    base = strip_custom(strip_custom(runtime_bytes, abi.BUNDLE_SECTION), abi.MANIFEST_SECTION)
+    payload, manifest = make_zip(directory, files, entry, channels)
     result = append_custom(base, abi.BUNDLE_SECTION, payload)
-    if find_custom(result, abi.BUNDLE_SECTION) != payload:
-        raise BundleError("internal error: bundle section does not round-trip")
+    result = append_custom(result, abi.MANIFEST_SECTION, json.dumps(manifest, sort_keys=True).encode("utf-8"))
+    if find_custom(result, abi.BUNDLE_SECTION) != payload or read_manifest(result) != manifest:
+        raise BundleError("internal error: bundle sections do not round-trip")
     output = Path(output)
     output.write_bytes(result)
     return {
@@ -151,6 +188,7 @@ def bundle(directory, output, runtime=None, entry=None):
         "files": [file.as_posix() for file in files],
         "bundle_bytes": len(payload),
         "entry": entry,
+        "channels": int(channels),
         "runtime": str(runtime_path),
         "runtime_sha256": hashlib.sha256(base).hexdigest(),
         "warnings": warnings,

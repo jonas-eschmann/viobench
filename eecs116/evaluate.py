@@ -55,10 +55,11 @@ def run_episode(wasm_path, episode, runtime, limits, log_dir, dataset_name="", d
     solution = None
     try:
         solution = Solution(wasm_path, runtime, limits=limits, log_dir=log_dir, dev_dir=dev_dir)
-        solution.init(episode.config)
+        config, frames = episode.as_channels(solution.channels)
+        solution.init(config)
         fuel_init, wall_init = solution.init_fuel, solution.init_wall_seconds
         consecutive = 0
-        for index, (t, frame, imu) in enumerate(episode.steps()):
+        for index, (t, frame, imu) in enumerate(episode.steps(frames)):
             result = solution.step(t, frame, imu)
             name = abi.status_name(result.status)
             statuses[name] = statuses.get(name, 0) + 1

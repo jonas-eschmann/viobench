@@ -80,3 +80,16 @@ def test_isp_identity_and_effects():
     assert np.abs(noisy.astype(float) - clean.astype(float)).mean() > 2.0
     # a static stack blurs to itself
     np.testing.assert_allclose(integrate_exposure(np.repeat(srgb[:1], 5, axis=0)), srgb_to_linear(srgb[0]), atol=1e-6)
+
+
+def test_as_channels_conversions():
+    episode = synthetic_episode(n_frames=3, width=16, height=12)
+    config, frames = episode.as_channels(3)
+    assert frames.shape == (3, 12, 16, 3) and config["image"]["channels"] == 3 and config["image"]["color"] is False
+    np.testing.assert_array_equal(frames[..., 0], episode.frames)
+    rgb = type(episode)(episode.name, {**episode.config, "image": {**episode.config["image"], "channels": 3, "layout": "HWC"}},
+                        episode.frame_times, frames, episode.imu, episode.ground_truth, episode.T_body_camera)
+    config, gray = rgb.as_channels(1)
+    assert gray.shape == (3, 12, 16) and config["image"]["channels"] == 1 and config["image"]["source_channels"] == 3
+    np.testing.assert_array_equal(gray, episode.frames)  # replicated channels -> identical luma
+    assert rgb.as_channels(3)[1] is frames

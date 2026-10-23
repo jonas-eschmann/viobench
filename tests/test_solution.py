@@ -245,3 +245,36 @@ def test_abi_constants_match_the_shim(runtime_path):
     shim = (runtime_path.parent.parent.parent.parent / "runtime" / "py" / "_eecs116.py").read_text()
     for name in ("STATUS_OK", "STATUS_NO_ESTIMATE", "STATUS_EXCEPTION", "STATUS_PROTOCOL", "STATUS_RUNTIME", "STATUS_NO_SOLUTION", "STATUS_NOT_FINITE"):
         assert f"{name} = {getattr(abi, name)}" in shim
+
+
+def test_rgb_opt_in_via_manifest(runtime, runtime_path, solution_dir, tmp_path):
+    source = """
+import numpy as np
+class Solution:
+    def __init__(self, config):
+        assert config["image"]["channels"] == 3 and config["image"]["layout"] == "HWC"
+    def step(self, t, frame, imu):
+        assert frame.shape == (48, 64, 3)
+        return [float(frame[1, 2, 0]), float(frame[1, 2, 1]), float(frame[1, 2, 2]), 0, 0, 0, 1]
+"""
+    directory = solution_dir(source, {"eecs116.json": '{"channels": 3}'})
+    wasm = tmp_path / "rgb.wasm"
+    summary = bundle(directory, wasm, runtime=runtime_path)
+    assert summary["channels"] == 3
+    solution = Solution(wasm, runtime, log_dir=tmp_path / "logs")
+    assert solution.channels == 3 and solution.manifest["channels"] == 3
+    with pytest.raises(SolutionError, match="declares 3"):
+        solution.init(CONFIG)  # grayscale config does not match the declaration
+    solution = Solution(wasm, runtime, log_dir=tmp_path / "logs2")
+    solution.init(make_config(width=64, height=48, channels=3, num_frames=10))
+    rgb = np.stack([FRAME, FRAME // 2, FRAME // 3], axis=2)
+    result = solution.step(0.05, rgb, IMU)
+    assert result.status == abi.STATUS_OK, solution.stderr_tail()
+    np.testing.assert_array_equal(result.pose[:3], rgb[1, 2])
+    # the manifest command rewrites the section; bundling again from a --channels flag overrides eecs116.json
+    from eecs116.bundle import read_manifest, write_manifest
+
+    assert write_manifest(wasm, {"channels": 1})["channels"] == 1 and read_manifest(wasm.read_bytes())["channels"] == 1
+    assert bundle(directory, wasm, runtime=runtime_path, channels=1)["channels"] == 1
+    with pytest.raises(Exception, match="channels"):
+        write_manifest(wasm, {"channels": 4})

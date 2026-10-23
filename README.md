@@ -29,7 +29,8 @@ HyperDrone, the metrics, baselines, and the submission server.
 
 - `runtime.wasm` (`wasm-python/`, `runtime/`): CPython 3.14 + numpy + OpenCV (incl. `dnn` for ONNX) as a wasip1
   reactor exporting `init`/`step`; the student's directory is appended as a custom section, no toolchain needed.
-- `eecs116/` (pip package): `bundle`, `check`, `evaluate`, `simulate`, `convert-euroc`, `leaderboard` commands; the
+  Frames are grayscale by default; a submission opts into RGB through its manifest (`eecs116.json` / `eecs116 manifest`).
+- `eecs116/` (pip package): `bundle`, `manifest`, `check`, `evaluate`, `simulate`, `convert-euroc`, `leaderboard` commands; the
   `Solution` wrapper (wasmtime 50, fuel metering), `metrics`, the `data` package (episode container, ASL-layout I/O,
   camera/ISP model, HyperDrone generator), the FastAPI `server`.
 - `examples/`: `python-minimal` (identity), `python-deadreckoning` (IMU only), `python-orb` (KLT + essential matrix +
@@ -54,9 +55,11 @@ median fuel per frame; `python -m eecs116 leaderboard` output):
 
 | solution | default | blur | lowlight | oversaturated | real (EuRoC V1_01) | fuel/frame |
 |---|---|---|---|---|---|---|
-| `python-deadreckoning` (IMU only) | 18.8 | 7.4 | 14.1 | 18.5 | 30.8 | 3.6 M |
-| `python-orb` (KLT + essential matrix + IMU) | 4.2 | 4.1 | 4.1 | 4.2 | 4.3 | 140–350 M (3.4 G on low light: noise → thousands of corners) |
-| `python-tinynn` (CNN via `cv2.dnn`, trained on 8 episodes) | 1.2 | 1.1 | 1.6 | 2.4 | 3.8 | 12 M |
+| `python-deadreckoning` (IMU only) | 18.8 | 7.8 | 14.8 | 18.5 | 30.8 | 3.6 M |
+| `python-orb` (KLT + essential matrix + IMU) | 4.3 | 4.1 | 4.1 | 4.2 | 4.3 | 140–550 M (noise in low light → many corners) |
+| `python-tinynn` (CNN via `cv2.dnn`, trained on 8 episodes) | 1.2 | 1.1 | 1.4 | 2.3 | 3.8 | 12 M |
+
+All three consume grayscale frames (the default); a submission opts into RGB through its manifest.
 
 ## Layout
 

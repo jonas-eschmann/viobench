@@ -26,8 +26,8 @@ def runtime():
 def solution_dir(tmp_path):
     """Factory: write solution.py (and extra files) into a fresh directory and return it."""
 
-    def make(source, extra=None):
-        directory = tmp_path / "solution"
+    def make(source, extra=None, name="solution"):
+        directory = tmp_path / name
         directory.mkdir()
         (directory / "solution.py").write_text(source)
         for name, content in (extra or {}).items():

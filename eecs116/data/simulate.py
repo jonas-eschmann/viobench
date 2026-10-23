@@ -5,8 +5,9 @@
         ...
 
 Needs `pip install hyperdrone` and a GPU (the environment module is JIT-compiled per configuration on first use;
-the rendered spec header's hash is the key). Frames are grayscale uint8 after the camera/ISP model
-(eecs116.data.isp) with per-episode parameters drawn from the variant's public ranges (eecs116.data.variants).
+the rendered spec header's hash is the key). Frames are RGB uint8 after the camera/ISP model (eecs116.data.isp)
+with per-episode parameters drawn from the variant's public ranges (eecs116.data.variants); solutions receive
+grayscale unless they opt into RGB (Episode.as_channels).
 """
 import hashlib
 import json
@@ -38,7 +39,7 @@ class SimConfig:
     fov_range: float = 15.0  # horizontal FOV = nominal (63.8 deg) + U(-fov_range, fov_range) degrees per episode
     hold_seconds: float = 1.0  # hover before the route starts
     aa_grid: int = 1
-    channels: int = 1
+    channels: int = 3  # stored frames; the harness converts to what a solution asks for (grayscale by default)
 
     def render_header(self, imu_rate_hz):
         text = TEMPLATE.read_text()

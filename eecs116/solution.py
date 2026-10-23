@@ -10,8 +10,9 @@ import numpy as np
 import wasmtime
 
 from . import abi
+from .bundle import BundleError, read_manifest, validate_manifest
 from .engine import Runtime
-from .wasm_sections import split_bundle
+from .wasm_sections import split_bundle, strip_custom
 
 
 @dataclass
@@ -67,7 +68,16 @@ class Solution:
         self.dead = False
         self.initialized = False
         wasm = self.path.read_bytes()
+        try:
+            self.manifest = read_manifest(wasm)
+            if self.dev_dir is not None and (self.dev_dir / abi.BUNDLE_MANIFEST).is_file():  # dev mode: the directory's eecs116.json
+                self.manifest = {**self.manifest, **json.loads((self.dev_dir / abi.BUNDLE_MANIFEST).read_text())}
+            validate_manifest(self.manifest)
+        except (BundleError, ValueError) as error:
+            raise SolutionError(str(error)) from None
+        self.channels = int(self.manifest.get("channels", abi.DEFAULT_CHANNELS))  # 1 (default) or 3: what step() receives
         base, self.bundle = split_bundle(wasm, abi.BUNDLE_SECTION)
+        base = strip_custom(base, abi.MANIFEST_SECTION)  # every submission on the same runtime shares one compilation
         module = self.runtime.module(base)
         export_names = {export.name for export in module.exports}
         missing = [name for name in abi.REQUIRED_EXPORTS if name not in export_names]
@@ -186,6 +196,9 @@ class Solution:
             raise SolutionError(f"{self.path.name} is a bare runtime without solution code: run `python -m eecs116 bundle` or pass --dir")
         self.config = dict(config)
         self.config.setdefault("abi_version", abi.ABI_VERSION)
+        if int(self.config["image"].get("channels", 1)) != self.channels:
+            raise SolutionError(f"config promises {self.config['image'].get('channels', 1)} channel(s) but the solution declares {self.channels}; "
+                                "adapt the episode with Episode.as_channels() first")
         encoded = json.dumps(self.config).encode("utf-8")
         pointer = self.alloc(len(encoded))
         self.write(pointer, encoded)

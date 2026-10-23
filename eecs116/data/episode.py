@@ -1,6 +1,9 @@
 """In-memory episode: frames, IMU, ground truth and the config a solution receives."""
 from dataclasses import dataclass, field
 
+import copy
+
+import cv2
 import numpy as np
 
 from .. import abi
@@ -78,10 +81,33 @@ class Episode:
         lower = 0 if index == 0 else np.searchsorted(self.imu[:, 0], self.frame_times[index - 1] + self.TIME_TOLERANCE, side="right")
         return self.imu[lower:upper]
 
-    def steps(self):
-        """(t, frame, imu_window) per frame, the way the harness feeds a solution."""
+    def steps(self, frames=None):
+        """(t, frame, imu_window) per frame, the way the harness feeds a solution (frames: optional override)."""
+        frames = self.frames if frames is None else frames
         for index in range(self.num_frames):
-            yield self.frame_times[index], self.frames[index], self.imu_window(index)
+            yield self.frame_times[index], frames[index], self.imu_window(index)
+
+    @property
+    def channels(self):
+        return 1 if self.frames.ndim == 3 else int(self.frames.shape[3])
+
+    def as_channels(self, channels):
+        """(config, frames) for a solution that wants 1 or 3 channels: RGB -> gray via ITU-R 601 luma
+        (cv2.COLOR_RGB2GRAY), gray -> RGB by replication (config["image"]["color"] says whether colour is real)."""
+        channels = int(channels)
+        if channels not in abi.SUPPORTED_CHANNELS:
+            raise ValueError(f"channels must be one of {abi.SUPPORTED_CHANNELS}")
+        source = self.channels
+        if channels == source:
+            frames = self.frames
+        elif channels == 1:
+            frames = np.stack([cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY) for frame in self.frames])
+        else:
+            frames = np.repeat(self.frames[..., None], 3, axis=3)
+        config = copy.deepcopy(self.config)
+        config["image"].update({"channels": channels, "layout": "HW" if channels == 1 else "HWC", "color": source == 3 and channels == 3,
+                                "source_channels": source})
+        return config, frames
 
     def camera_poses_world(self, times=None):
         """(N, 7) pose of the camera in the world frame at the given times (default: frame times)."""

@@ -44,3 +44,29 @@ def test_evaluate_report(runtime, runtime_path, solution_dir, tmp_path):
     assert json.loads((tmp_path / "report" / "report.json").read_text())["episodes"][0]["name"] == episode.name
     estimate = np.loadtxt(tmp_path / "report" / "logs" / "set" / episode.name / "estimate.tum")
     np.testing.assert_allclose(estimate[:, 1:], gt, atol=1e-6)
+
+
+def test_evaluate_converts_rgb_episode_per_solution(runtime, runtime_path, solution_dir, tmp_path):
+    episode = synthetic_episode(n_frames=6, width=64, height=48)
+    rgb = np.stack([episode.frames, episode.frames // 2, episode.frames // 4], axis=3)
+    episode = type(episode)(episode.name, {**episode.config, "image": {**episode.config["image"], "channels": 3, "layout": "HWC"}},
+                            episode.frame_times, rgb, episode.imu, episode.ground_truth, episode.T_body_camera, episode.meta)
+    dataset = tmp_path / "set"
+    write_episode(episode, dataset / episode.name)
+    probe = """
+import numpy as np
+class Solution:
+    def __init__(self, config):
+        self.channels = config["image"]["channels"]
+        self.color = config["image"].get("color")
+    def step(self, t, frame, imu):
+        return [frame.ndim, self.channels, float(self.color), 0, 0, 0, 1]
+"""
+    for channels in (1, 3):
+        directory = solution_dir(probe, {"eecs116.json": '{"channels": %d}' % channels}, name=f"probe{channels}")
+        wasm = tmp_path / f"probe{channels}.wasm"
+        bundle(directory, wasm, runtime=runtime_path)
+        report = evaluate(wasm, [dataset], output_dir=tmp_path / f"report{channels}", runtime=runtime, log=lambda *a: None)
+        estimate = np.loadtxt(tmp_path / f"report{channels}" / "logs" / "set" / episode.name / "estimate.tum")
+        assert estimate[0, 1] == (2 if channels == 1 else 3) and estimate[0, 2] == channels and estimate[0, 3] == (1.0 if channels == 3 else 0.0)
+        assert report["summary"]["overall"]["completed"] == 1

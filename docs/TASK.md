@@ -8,7 +8,7 @@ compute they spend per frame, so the leaderboard is a curve, not a number.
 
 | | |
 |---|---|
-| Frames | grayscale `uint8`, `height × width` (default 240 × 320), pinhole camera without distortion, intrinsics in the config (`fx, fy, cx, cy`; the horizontal field of view varies between roughly 48° and 80° across episodes), global shutter, timestamp = mid-exposure |
+| Frames | `uint8`, `height × width` grayscale by default (240 × 320) — or `height × width × 3` RGB if your submission opts in (`eecs116.json`: `{"channels": 3}`, see `docs/ABI.md`; real-data sets are grayscale, replicated into three channels, `config["image"]["color"]` says so). Pinhole camera without distortion, intrinsics in the config (`fx, fy, cx, cy`; the horizontal field of view varies between roughly 48° and 80° across episodes), global shutter, timestamp = mid-exposure |
 | Frame rate | 20 Hz (default; `config["episode"]["frame_rate_hz"]`) |
 | IMU | 200 Hz, in the body/IMU frame: specific force in m/s² (gravity included: a resting IMU reads ≈ 9.81 along the direction opposite to gravity), angular rate in rad/s. In simulation the body frame is x forward, y left, z up and the IMU sits at the body origin; in real data it is whatever the sensor calibration says (`T_cam_imu` is exact, the initial orientation w.r.t. gravity is not given). Noise and bias magnitudes are listed in the config (`imu.*_noise_std` per sample, `*_bias_init_max`, `*_random_walk`). |
 | Extrinsics | `imu.T_cam_imu` (4 × 4, row-major): body/IMU coordinates → camera coordinates (OpenCV: x right, y down, z forward). `imu.T_imu_cam` is the inverse. |
@@ -61,5 +61,6 @@ mark an episode failed: its ATE is the stationary-estimator error and it stays o
 
 ## Datasets
 
-See `docs/DATA.md`: public training/validation sets generated with the same pipeline as the hidden ones, public samples
-of every hidden category, the parameter ranges of the degradations, and the on-disk format.
+See `docs/DATA.md`: the generator you run yourself on the lab GPUs (the hidden sets come from the same pipeline), small
+public validation sets and samples of every hidden category, the parameter ranges of the degradations, and the on-disk
+format.

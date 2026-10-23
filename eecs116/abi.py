@@ -3,7 +3,10 @@
 ABI_VERSION = 1
 
 BUNDLE_SECTION = "eecs116.bundle"  # wasm custom section holding the zip of the student's directory
-BUNDLE_MANIFEST = "eecs116.json"  # optional file inside the bundle: {"entry": "module:Class"}
+MANIFEST_SECTION = "eecs116.manifest"  # wasm custom section with the manifest JSON (read by the harness before init)
+BUNDLE_MANIFEST = "eecs116.json"  # optional file in the directory: {"entry": "module:Class", "channels": 1 | 3}
+DEFAULT_CHANNELS = 1  # grayscale unless the manifest opts into RGB
+SUPPORTED_CHANNELS = (1, 3)
 DEFAULT_ENTRY = "solution:Solution"
 SOLUTION_DIR_VARIABLE = "EECS116_SOLUTION_DIR"  # dev mode: guest path of the preopened solution directory
 

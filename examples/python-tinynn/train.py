@@ -44,7 +44,8 @@ class TinyNet(torch.nn.Module):
 
 def samples_from_episode(episode):
     """(images (N-1, 2, H, W) float, imu (N-1, 9), target (N-1, 6)) for consecutive frame pairs."""
-    small = np.stack([cv2.resize(frame, (INPUT_WIDTH, INPUT_HEIGHT), interpolation=cv2.INTER_AREA) for frame in episode.frames]).astype(np.float32) / 255.0
+    _, frames = episode.as_channels(1)  # the solution runs on grayscale frames (the default), so train on the same
+    small = np.stack([cv2.resize(frame, (INPUT_WIDTH, INPUT_HEIGHT), interpolation=cv2.INTER_AREA) for frame in frames]).astype(np.float32) / 255.0
     T = poses_to_matrices(episode.ground_truth_relative())
     T_cam_imu = np.asarray(episode.config["imu"]["T_cam_imu"]).reshape(4, 4)
     images, imus, targets = [], [], []
@@ -65,7 +66,10 @@ def samples_from_episode(episode):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("datasets", nargs="+")
+    parser.add_argument("datasets", nargs="*", help="episode directories or dataset roots")
+    parser.add_argument("--generate", type=int, default=0, metavar="BATCHES",
+                        help="also generate BATCHES x 8 fresh episodes with HyperDrone (GPU), variant drawn at random per batch")
+    parser.add_argument("--generate-seed", type=int, default=10_000)
     parser.add_argument("--out", default=str(Path(__file__).resolve().parent / "solution"))
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch", type=int, default=64)
@@ -76,13 +80,28 @@ def main():
     episodes = [path for root in arguments.datasets for path in list_episodes(root)]
     if arguments.max_episodes:
         episodes = episodes[:arguments.max_episodes]
+    if not episodes and not arguments.generate:
+        parser.error("give episode directories and/or --generate N")
     images, imus, targets = [], [], []
-    for path in episodes:
-        i, m, t = samples_from_episode(read_episode(path))
+
+    def add(episode):
+        i, m, t = samples_from_episode(episode)
         images.append(i)
         imus.append(m)
         targets.append(t)
-        print(f"{path.name}: {len(i)} pairs")
+        print(f"{episode.name}: {len(i)} pairs")
+
+    for path in episodes:
+        add(read_episode(path))
+    if arguments.generate:  # "infinite" data: straight from the simulator, with the public degradation variants as augmentation
+        from eecs116.data.simulate import SimConfig, simulate
+        from eecs116.data.variants import VARIANTS
+
+        rng = np.random.default_rng(arguments.generate_seed)
+        for batch in range(arguments.generate):
+            variant = str(rng.choice(sorted(VARIANTS)))
+            for episode in simulate(SimConfig(), [arguments.generate_seed + batch], variant=variant):
+                add(episode)
     images, imus, targets = np.concatenate(images), np.concatenate(imus), np.concatenate(targets)
     imu_mean, imu_std = imus.mean(0), imus.std(0) + 1e-6
     target_std = targets.std(0) + 1e-6
