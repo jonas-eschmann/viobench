@@ -29,7 +29,8 @@ HyperDrone, the metrics, baselines, and the submission server.
 
 - `runtime.wasm` (`wasm-python/`, `runtime/`): CPython 3.14 + numpy + OpenCV (incl. `dnn` for ONNX) as a wasip1
   reactor exporting `init`/`step`; the student's directory is appended as a custom section, no toolchain needed.
-  Frames are grayscale by default; a submission opts into RGB through its manifest (`eecs116.json` / `eecs116 manifest`).
+  Frames are 320 × 240 grayscale by default; a submission opts into RGB and/or 640 × 480 through its manifest
+  (`eecs116.json` / `eecs116 manifest`); episodes are stored at 640 × 480 and resampled per submission.
 - `eecs116/` (pip package): `bundle`, `manifest`, `check`, `evaluate`, `simulate`, `convert-euroc`, `leaderboard` commands; the
   `Solution` wrapper (wasmtime 50, fuel metering), `metrics`, the `data` package (episode container, ASL-layout I/O,
   camera/ISP model, HyperDrone generator), the FastAPI `server`.
@@ -50,16 +51,16 @@ python -m eecs116 evaluate orb.wasm build/datasets/public/default-val -o report-
 python -m eecs116 leaderboard report-* --plot leaderboard.png
 ```
 
-Baselines on the public validation sets (10 s episodes, 320 × 240 @ 20 Hz; median ATE over episodes in metres,
+Baselines on the public validation sets (10 s episodes, stored at 640 × 480, consumed at 320 × 240 @ 20 Hz; median ATE over episodes in metres,
 median fuel per frame; `python -m eecs116 leaderboard` output):
 
 | solution | default | blur | lowlight | oversaturated | real (EuRoC V1_01) | fuel/frame |
 |---|---|---|---|---|---|---|
-| `python-deadreckoning` (IMU only) | 18.8 | 7.8 | 14.8 | 18.5 | 30.8 | 3.6 M |
-| `python-orb` (KLT + essential matrix + IMU) | 4.3 | 4.1 | 4.1 | 4.2 | 4.3 | 140–550 M (noise in low light → many corners) |
-| `python-tinynn` (CNN via `cv2.dnn`, trained on 8 episodes) | 1.2 | 1.1 | 1.4 | 2.3 | 3.8 | 12 M |
+| `python-deadreckoning` (IMU only) | 18.8 | 8.2 | 14.1 | 18.5 | 30.8 | 3.6 M |
+| `python-orb` (KLT + essential matrix + IMU) | 4.3 | 4.1 | 4.1 | 4.2 | 4.8 | 140–600 M (noise in low light → many corners) |
+| `python-tinynn` (CNN via `cv2.dnn`, trained on 8 episodes) | 1.2 | 1.2 | 1.4 | 2.3 | 3.8 | 12 M |
 
-All three consume grayscale frames (the default); a submission opts into RGB through its manifest.
+All three consume 320 × 240 grayscale frames (the default); a submission opts into RGB / VGA through its manifest.
 
 ## Layout
 

@@ -7,6 +7,8 @@ MANIFEST_SECTION = "eecs116.manifest"  # wasm custom section with the manifest J
 BUNDLE_MANIFEST = "eecs116.json"  # optional file in the directory: {"entry": "module:Class", "channels": 1 | 3}
 DEFAULT_CHANNELS = 1  # grayscale unless the manifest opts into RGB
 SUPPORTED_CHANNELS = (1, 3)
+DEFAULT_RESOLUTION = (320, 240)  # (width, height) unless the manifest opts into VGA
+SUPPORTED_RESOLUTIONS = ((320, 240), (640, 480))
 DEFAULT_ENTRY = "solution:Solution"
 SOLUTION_DIR_VARIABLE = "EECS116_SOLUTION_DIR"  # dev mode: guest path of the preopened solution directory
 

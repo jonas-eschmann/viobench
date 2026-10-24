@@ -15,7 +15,7 @@ from pathlib import Path
 from . import abi
 from .wasm_sections import append_custom, find_custom, strip_custom
 
-MANIFEST_KEYS = {"entry", "channels", "format"}
+MANIFEST_KEYS = {"entry", "channels", "resolution", "format"}
 
 IGNORED_DIRECTORIES = {"__pycache__", ".git", ".hg", ".svn", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea", ".vscode", "node_modules"}
 IGNORED_SUFFIXES = {".pyc", ".pyo"}
@@ -118,10 +118,29 @@ def read_manifest(wasm):
     return {}
 
 
+def parse_resolution(value):
+    """'640x480' | [640, 480] | (640, 480) -> (640, 480)"""
+    if isinstance(value, str):
+        parts = value.lower().replace("×", "x").split("x")
+        if len(parts) != 2:
+            raise BundleError(f"resolution must look like 640x480, got {value!r}")
+        value = parts
+    try:
+        width, height = (int(v) for v in value)
+    except (TypeError, ValueError):
+        raise BundleError(f"resolution must be [width, height], got {value!r}") from None
+    return width, height
+
+
 def validate_manifest(manifest):
     channels = manifest.get("channels", abi.DEFAULT_CHANNELS)
     if channels not in abi.SUPPORTED_CHANNELS:
         raise BundleError(f"manifest channels must be one of {abi.SUPPORTED_CHANNELS}, got {channels!r}")
+    if "resolution" in manifest:
+        resolution = parse_resolution(manifest["resolution"])
+        if resolution not in abi.SUPPORTED_RESOLUTIONS:
+            raise BundleError(f"manifest resolution must be one of {['x'.join(map(str, r)) for r in abi.SUPPORTED_RESOLUTIONS]}, got {manifest['resolution']!r}")
+        manifest["resolution"] = list(resolution)
     unknown = set(manifest) - MANIFEST_KEYS
     if unknown:
         raise BundleError(f"unknown manifest keys {sorted(unknown)} (known: {sorted(MANIFEST_KEYS)})")
@@ -137,7 +156,7 @@ def write_manifest(wasm_path, updates):
     return manifest
 
 
-def make_zip(directory, files, entry, channels=abi.DEFAULT_CHANNELS):
+def make_zip(directory, files, entry, channels=abi.DEFAULT_CHANNELS, resolution=abi.DEFAULT_RESOLUTION):
     """Uncompressed (the guest has no zlib), deterministic zip with the manifest at the end."""
     directory = Path(directory)
     manifest = {}
@@ -153,7 +172,7 @@ def make_zip(directory, files, entry, channels=abi.DEFAULT_CHANNELS):
             info.compress_type = zipfile.ZIP_STORED
             info.external_attr = 0o644 << 16
             archive.writestr(info, data)
-        manifest.update({"format": 1, "entry": entry, "channels": int(channels)})
+        manifest.update({"format": 1, "entry": entry, "channels": int(channels), "resolution": list(parse_resolution(resolution))})
         validate_manifest(manifest)
         info = zipfile.ZipInfo(abi.BUNDLE_MANIFEST, date_time=ZIP_EPOCH)
         info.external_attr = 0o644 << 16
@@ -161,8 +180,8 @@ def make_zip(directory, files, entry, channels=abi.DEFAULT_CHANNELS):
     return buffer.getvalue(), manifest
 
 
-def bundle(directory, output, runtime=None, entry=None, channels=None):
-    """Writes output (.wasm) and returns a summary dict. entry/channels default to eecs116.json in the directory."""
+def bundle(directory, output, runtime=None, entry=None, channels=None, resolution=None):
+    """Writes output (.wasm) and returns a summary dict. entry/channels/resolution default to eecs116.json in the directory."""
     directory = Path(directory)
     files = collect_files(directory)
     manifest_path = directory / abi.BUNDLE_MANIFEST
@@ -171,11 +190,13 @@ def bundle(directory, output, runtime=None, entry=None, channels=None):
         entry = existing.get("entry", abi.DEFAULT_ENTRY)
     if channels is None:
         channels = existing.get("channels", abi.DEFAULT_CHANNELS)
+    if resolution is None:
+        resolution = existing.get("resolution", abi.DEFAULT_RESOLUTION)
     warnings = validate(directory, files, entry)
     runtime_path = Path(runtime) if runtime else default_runtime()
     runtime_bytes = runtime_path.read_bytes()
     base = strip_custom(strip_custom(runtime_bytes, abi.BUNDLE_SECTION), abi.MANIFEST_SECTION)
-    payload, manifest = make_zip(directory, files, entry, channels)
+    payload, manifest = make_zip(directory, files, entry, channels, resolution)
     result = append_custom(base, abi.BUNDLE_SECTION, payload)
     result = append_custom(result, abi.MANIFEST_SECTION, json.dumps(manifest, sort_keys=True).encode("utf-8"))
     if find_custom(result, abi.BUNDLE_SECTION) != payload or read_manifest(result) != manifest:
@@ -189,6 +210,7 @@ def bundle(directory, output, runtime=None, entry=None, channels=None):
         "bundle_bytes": len(payload),
         "entry": entry,
         "channels": int(channels),
+        "resolution": manifest["resolution"],
         "runtime": str(runtime_path),
         "runtime_sha256": hashlib.sha256(base).hexdigest(),
         "warnings": warnings,

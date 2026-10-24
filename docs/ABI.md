@@ -22,11 +22,14 @@ There is no `reset`: every episode gets a fresh instance (instantiation costs ~0
 
 ## Manifest (optional custom section `eecs116.manifest`)
 
-A JSON object the harness reads from the binary *before* `init`: `{"channels": 1 | 3, "entry": "module:Class"}`.
-`channels` selects what `step` receives: grayscale (`1`, the default) or RGB (`3`). `python -m eecs116 bundle` writes it
-from `eecs116.json` or `--channels`; native modules add it with `python -m eecs116 manifest solution.wasm --channels 3`.
-The config then reports `image.channels`/`image.layout` accordingly and `image.color` tells whether the colour is real
-(real-data sets are grayscale and are replicated into three channels for RGB solutions).
+A JSON object the harness reads from the binary *before* `init`:
+`{"channels": 1 | 3, "resolution": [320, 240] | [640, 480], "entry": "module:Class"}`.
+`channels` selects what `step` receives: grayscale (`1`, the default) or RGB (`3`); `resolution` selects 320 × 240
+(default) or VGA 640 × 480. `python -m eecs116 bundle` writes the manifest from `eecs116.json` or `--channels`/`--resolution`;
+native modules add it with `python -m eecs116 manifest solution.wasm --channels 3 --resolution 640x480`. The harness
+resamples every episode to the declared format (area averaging down, bilinear up, intrinsics rescaled) and the config
+reports what happened: `image.color` (real colour or replicated grayscale), `image.upscaled` (the source had fewer
+pixels), `image.source_channels`, `image.source_resolution`.
 
 ## Buffers
 
@@ -71,7 +74,8 @@ In Python, `sys.exit()` is caught like any exception (status `-1`); `os._exit()`
 ```json
 {
   "abi_version": 1,
-  "image": {"width": 320, "height": 240, "channels": 1, "dtype": "uint8", "layout": "HW", "color": false, "source_channels": 3},
+  "image": {"width": 320, "height": 240, "channels": 1, "dtype": "uint8", "layout": "HW",
+            "color": false, "upscaled": false, "source_channels": 3, "source_resolution": [640, 480]},
   "camera": {"fx": 190.7, "fy": 190.7, "cx": 159.5, "cy": 119.5, "model": "pinhole", "distortion": []},
   "imu": {"rate_hz": 200.0,
           "accel_noise_std": 0.28, "gyro_noise_std": 0.07,

@@ -55,7 +55,7 @@ def run_episode(wasm_path, episode, runtime, limits, log_dir, dataset_name="", d
     solution = None
     try:
         solution = Solution(wasm_path, runtime, limits=limits, log_dir=log_dir, dev_dir=dev_dir)
-        config, frames = episode.as_channels(solution.channels)
+        config, frames = episode.adapt(solution.channels, solution.resolution)
         solution.init(config)
         fuel_init, wall_init = solution.init_fuel, solution.init_wall_seconds
         consecutive = 0

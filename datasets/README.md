@@ -10,6 +10,7 @@ python -m eecs116 simulate -o build/datasets/public/blur-val      --episodes 8  
 python -m eecs116 simulate -o build/datasets/public/lowlight-val  --episodes 8   --seed 2000  --variant lowlight     --scene-names ProcTHOR-Train-7 ProcTHOR-Train-11 ProcTHOR-Train-23
 python -m eecs116 simulate -o build/datasets/public/oversaturated-val --episodes 8 --seed 2000 --variant oversaturated --scene-names ProcTHOR-Train-7 ProcTHOR-Train-11 ProcTHOR-Train-23
 python -m eecs116 convert-euroc build/datasets/raw/euroc/V1_01_easy -o build/datasets/public/real-sample --max-snippets 3
+# (simulate renders 640x480 RGB and convert-euroc crops to 640x480 grayscale by default; the harness resamples per submission)
 
 # hidden (server only): other seeds, HSSD validation scenes (CC BY-NC), other EuRoC sequences
 python -m eecs116 simulate -o build/datasets/hidden/default       --episodes 32 --seed 90000 --variant default       --scenes hssd-val

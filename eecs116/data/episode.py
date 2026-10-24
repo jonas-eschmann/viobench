@@ -91,22 +91,41 @@ class Episode:
     def channels(self):
         return 1 if self.frames.ndim == 3 else int(self.frames.shape[3])
 
+    @property
+    def resolution(self):
+        return int(self.frames.shape[2]), int(self.frames.shape[1])
+
     def as_channels(self, channels):
-        """(config, frames) for a solution that wants 1 or 3 channels: RGB -> gray via ITU-R 601 luma
-        (cv2.COLOR_RGB2GRAY), gray -> RGB by replication (config["image"]["color"] says whether colour is real)."""
-        channels = int(channels)
+        return self.adapt(channels=channels)
+
+    def adapt(self, channels=None, resolution=None):
+        """(config, frames) for a solution that wants 1 or 3 channels and a given (width, height).
+
+        RGB -> gray is the ITU-R 601 luma (cv2.COLOR_RGB2GRAY), gray -> RGB replicates (config["image"]["color"] says
+        whether colour is real). Downscaling uses area averaging, upscaling bilinear interpolation
+        (config["image"]["upscaled"] says so); the intrinsics are rescaled with the pixel-centre convention."""
+        channels = self.channels if channels is None else int(channels)
+        resolution = self.resolution if resolution is None else (int(resolution[0]), int(resolution[1]))
         if channels not in abi.SUPPORTED_CHANNELS:
             raise ValueError(f"channels must be one of {abi.SUPPORTED_CHANNELS}")
-        source = self.channels
-        if channels == source:
-            frames = self.frames
-        elif channels == 1:
-            frames = np.stack([cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY) for frame in self.frames])
-        else:
-            frames = np.repeat(self.frames[..., None], 3, axis=3)
+        source_channels, source_resolution = self.channels, self.resolution
+        frames = self.frames
+        if channels != source_channels:
+            frames = np.stack([cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY) for frame in frames]) if channels == 1 else np.repeat(frames[..., None], 3, axis=3)
         config = copy.deepcopy(self.config)
-        config["image"].update({"channels": channels, "layout": "HW" if channels == 1 else "HWC", "color": source == 3 and channels == 3,
-                                "source_channels": source})
+        camera = config["camera"]
+        if resolution != source_resolution:
+            width, height = resolution
+            scale_x, scale_y = width / source_resolution[0], height / source_resolution[1]
+            if abs(scale_x - scale_y) > 1e-9:
+                raise ValueError(f"aspect ratio change {source_resolution} -> {resolution} is not supported")
+            interpolation = cv2.INTER_AREA if scale_x < 1 else cv2.INTER_LINEAR
+            frames = np.stack([cv2.resize(frame, (width, height), interpolation=interpolation) for frame in frames])
+            camera["fx"], camera["fy"] = camera["fx"] * scale_x, camera["fy"] * scale_y
+            camera["cx"], camera["cy"] = (camera["cx"] + 0.5) * scale_x - 0.5, (camera["cy"] + 0.5) * scale_y - 0.5
+        config["image"].update({"width": resolution[0], "height": resolution[1], "channels": channels, "layout": "HW" if channels == 1 else "HWC",
+                                "color": source_channels == 3 and channels == 3, "source_channels": source_channels,
+                                "source_resolution": list(source_resolution), "upscaled": resolution[0] > source_resolution[0]})
         return config, frames
 
     def camera_poses_world(self, times=None):

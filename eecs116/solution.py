@@ -76,6 +76,7 @@ class Solution:
         except (BundleError, ValueError) as error:
             raise SolutionError(str(error)) from None
         self.channels = int(self.manifest.get("channels", abi.DEFAULT_CHANNELS))  # 1 (default) or 3: what step() receives
+        self.resolution = tuple(self.manifest.get("resolution", abi.DEFAULT_RESOLUTION))  # (width, height) of the frames
         base, self.bundle = split_bundle(wasm, abi.BUNDLE_SECTION)
         base = strip_custom(base, abi.MANIFEST_SECTION)  # every submission on the same runtime shares one compilation
         module = self.runtime.module(base)
@@ -196,9 +197,12 @@ class Solution:
             raise SolutionError(f"{self.path.name} is a bare runtime without solution code: run `python -m eecs116 bundle` or pass --dir")
         self.config = dict(config)
         self.config.setdefault("abi_version", abi.ABI_VERSION)
-        if int(self.config["image"].get("channels", 1)) != self.channels:
-            raise SolutionError(f"config promises {self.config['image'].get('channels', 1)} channel(s) but the solution declares {self.channels}; "
-                                "adapt the episode with Episode.as_channels() first")
+        image = self.config["image"]
+        if int(image.get("channels", 1)) != self.channels:  # the array layout the guest reshapes to must match the declaration
+            raise SolutionError(f"config promises {image.get('channels', 1)} channel(s) but the solution declares {self.channels}; "
+                                "adapt the episode with Episode.adapt() first")
+        # the resolution is informational to the guest (it reads width/height from the config): evaluate adapts episodes
+        # to self.resolution, check builds its config from it, direct API users may pass any size
         encoded = json.dumps(self.config).encode("utf-8")
         pointer = self.alloc(len(encoded))
         self.write(pointer, encoded)

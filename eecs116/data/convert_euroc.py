@@ -82,7 +82,7 @@ def load_sequence(sequence):
     }
 
 
-def convert(sequence, width=320, height=240, snippet_seconds=10.0, max_snippets=None, start_seconds=0.0, stride_seconds=None,
+def convert(sequence, width=640, height=480, snippet_seconds=10.0, max_snippets=None, start_seconds=0.0, stride_seconds=None,
             hover_seconds_first=1.0, log=print):
     """Yields Episodes cut from the sequence. Only frames inside the ground-truth time span are used."""
     raw = load_sequence(sequence)

@@ -24,7 +24,8 @@ class ISPParams:
 
 def srgb_to_linear(x):
     x = np.asarray(x, dtype=np.float32)
-    return np.where(x <= 0.04045, x / 12.92, ((x + 0.055) / 1.055) ** 2.4)
+    high = ((x + np.float32(0.055)) * np.float32(1 / 1.055)) ** np.float32(2.4)
+    return np.where(x <= 0.04045, x * np.float32(1 / 12.92), high)
 
 
 def linear_to_srgb(x):
@@ -54,10 +55,12 @@ def apply(linear, params, rng, grayscale=True):
         linear = luminance(linear)
     signal = linear * np.float32(params.exposure_scale)
     if np.isfinite(params.full_well) and params.full_well > 0:
-        electrons = rng.poisson(np.clip(signal, 0, None) * params.full_well).astype(np.float32)
-        signal = electrons / np.float32(params.full_well)
+        # photon shot noise: Poisson(signal * full_well) / full_well, Gaussian approximation (std = sqrt(N) electrons);
+        # exact Poisson sampling costs 4x more and only differs below ~20 electrons per pixel
+        std = np.sqrt(np.clip(signal, 0, None) / np.float32(params.full_well), dtype=np.float32)
+        signal = signal + rng.standard_normal(signal.shape, dtype=np.float32) * std
     if params.read_noise > 0:
-        signal = signal + rng.normal(0.0, params.read_noise, signal.shape).astype(np.float32)
+        signal = signal + rng.standard_normal(signal.shape, dtype=np.float32) * np.float32(params.read_noise)
     signal = signal * np.float32(params.digital_gain) + np.float32(params.black_level)
     encoded = linear_to_srgb(np.clip(signal, 0.0, 1.0))
     return np.clip(np.rint(encoded * 255.0), 0, 255).astype(np.uint8)

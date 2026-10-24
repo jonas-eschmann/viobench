@@ -13,7 +13,7 @@ On the lab machines (RTX 5080): `pip install "eecs116[sim,train]"` adds the Hype
 for a minute) and PyTorch. There is no pre-rendered training set — you generate what you need:
 
 ```bash
-python -m eecs116 simulate -o data/train --episodes 200 --seed 1 --variant default     # ~15 s per 8 episodes
+python -m eecs116 simulate -o data/train --episodes 200 --seed 1 --variant default     # ~20 s per 8 episodes (640x480), blur ~45 s
 python -m eecs116 simulate -o data/train-blur --episodes 64 --seed 500 --variant blur
 ```
 
@@ -43,8 +43,10 @@ python -m eecs116 evaluate $EECS116_RUNTIME --dir my_solution datasets/default-v
   a `cv2.dnn` forward of a small CNN costs about as much as one `goodFeaturesToTrack`.
 - Learned models: `examples/python-tinynn` shows PyTorch → ONNX → `cv2.dnn` inside the runtime, with a numpy fallback,
   and `train.py --generate N` trains straight from the simulator.
-- Colour: frames are grayscale unless you put `{"channels": 3}` into `eecs116.json` next to your `solution.py`
-  (then `step` gets `(H, W, 3)` RGB; real-data episodes are grayscale replicated into three channels).
+- Colour and resolution: frames are 320 × 240 grayscale unless `eecs116.json` next to your `solution.py` says
+  `{"channels": 3}` (RGB, `(H, W, 3)`) and/or `{"resolution": [640, 480]}` (VGA). Real-data episodes are grayscale
+  (replicated into three channels); if a set only exists at 320 × 240 you receive an upscale
+  (`config["image"]["upscaled"]`). More pixels cost fuel in everything you run on them.
 
 ## 4. Submit
 

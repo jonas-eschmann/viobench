@@ -70,3 +70,31 @@ class Solution:
         estimate = np.loadtxt(tmp_path / f"report{channels}" / "logs" / "set" / episode.name / "estimate.tum")
         assert estimate[0, 1] == (2 if channels == 1 else 3) and estimate[0, 2] == channels and estimate[0, 3] == (1.0 if channels == 3 else 0.0)
         assert report["summary"]["overall"]["completed"] == 1
+
+
+def test_evaluate_resolution_opt_in(runtime, runtime_path, solution_dir, tmp_path):
+    episode = synthetic_episode(n_frames=4, width=64, height=48)
+    dataset = tmp_path / "set"
+    write_episode(episode, dataset / episode.name)
+    probe = """
+class Solution:
+    def __init__(self, config):
+        self.config = config
+    def step(self, t, frame, imu):
+        image = self.config["image"]
+        return [frame.shape[1], frame.shape[0], self.config["camera"]["fx"], float(image["upscaled"]), 0, 0, 1]
+"""
+    import pytest
+
+    # only the two supported resolutions are accepted by the manifest validation
+
+    with pytest.raises(Exception, match="resolution"):
+        bundle(solution_dir(probe, {"eecs116.json": '{"resolution": [128, 96]}'}, name="bad"), tmp_path / "bad.wasm", runtime=runtime_path)
+    directory = solution_dir(probe, {"eecs116.json": '{"resolution": "640x480"}'}, name="vga")
+    wasm = tmp_path / "vga.wasm"
+    assert bundle(directory, wasm, runtime=runtime_path)["resolution"] == [640, 480]
+    report = evaluate(wasm, [dataset], output_dir=tmp_path / "report", runtime=runtime, log=lambda *a: None)
+    estimate = np.loadtxt(tmp_path / "report" / "logs" / "set" / episode.name / "estimate.tum")
+    assert estimate[0, 1] == 640 and estimate[0, 2] == 480 and estimate[0, 4] == 1.0  # upscaled from 64x48
+    assert estimate[0, 3] == pytest.approx(episode.config["camera"]["fx"] * 10)
+    assert report["summary"]["overall"]["completed"] == 1

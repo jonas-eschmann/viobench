@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -32,8 +33,8 @@ NOMINAL_FOV_DEGREES = 63.78166175396324  # preset camera, horizontal
 
 @dataclass(frozen=True)
 class SimConfig:
-    width: int = 320
-    height: int = 240
+    width: int = 640  # stored resolution; the harness resamples to what a solution asks for (320x240 by default)
+    height: int = 480
     instances: int = 8  # episodes rendered in parallel (one reset = one batch); part of the JIT key
     frame_rate_hz: float = 20.0
     fov_range: float = 15.0  # horizontal FOV = nominal (63.8 deg) + U(-fov_range, fov_range) degrees per episode
@@ -167,18 +168,31 @@ def _run_batch(env, sim, seed, scene_name, variant, log):
     imu_rows = []
     frames = [[] for _ in range(total)]
     frame_times = []
+    sub_frames = min(sub_frames, frame_every)  # a shutter longer than the frame interval would overlap the previous frame
     ring = deque(maxlen=sub_frames)
     terminated = np.zeros(total, dtype=bool)
+    instance_rngs = [np.random.default_rng(rng.integers(2**63)) for _ in range(total)]
+    pool = ThreadPoolExecutor(max_workers=min(total, os.cpu_count() or 1))  # numpy releases the GIL on large arrays
+
+    def to_linear(rendered):
+        convert = (lambda x: luminance(srgb_to_linear(x))) if sim.channels == 1 else srgb_to_linear
+        return np.stack(list(pool.map(convert, rendered)))
+
+    def develop(instance):
+        params, k = isp[instance]
+        stack = [linear[instance] for linear in list(ring)[-k:]]
+        return apply(np.mean(stack, axis=0) if len(stack) > 1 else stack[-1], params, instance_rngs[instance], grayscale=False)
+
     started = time.perf_counter()
     for step in range(steps):
-        rendered = env.frames()  # (total, H, W, 3) sRGB float32 in [0, 1], camera at the pre-step state (time step*dt)
-        ring.append(luminance(srgb_to_linear(rendered)) if sim.channels == 1 else srgb_to_linear(rendered))
+        # only sub-frames inside the longest shutter window before a frame's closing step are needed: converting
+        # every render to linear radiance would dominate the run time at 640x480
+        if step % frame_every >= frame_every - sub_frames:
+            rendered = env.frames()  # (total, H, W, 3) sRGB float32 in [0, 1], camera at the pre-step state (time step*dt)
+            ring.append(to_linear(rendered))
         if step % frame_every == frame_every - 1:
-            for instance in range(total):
-                params, k = isp[instance]
-                stack = list(ring)[-k:]
-                linear = np.mean(stack, axis=0)[instance] if len(stack) > 1 else stack[-1][instance]
-                frames[instance].append(apply(linear, params, rng, grayscale=False))
+            for instance, frame in enumerate(pool.map(develop, range(total))):
+                frames[instance].append(frame)
             frame_times.append(step * dt)  # provisional: the per-instance mid-exposure correction is applied below
         env.step()
         sample = env.observe_imu()  # the sample produced by this step, stamped at its end
@@ -188,6 +202,7 @@ def _run_batch(env, sim, seed, scene_name, variant, log):
                                              matrix_to_quaternion(_block(state, layout, "orientation_rotation_matrix").reshape(-1, 3, 3))]))
         terminated |= env.terminated()
     elapsed = time.perf_counter() - started
+    pool.shutdown()
     fovs = [float((p["cameras"].get("front") or next(iter(p["cameras"].values())))["fov"]) for p in parameters]
     log(f"seed {seed} scene {scene_name}: {steps} steps x {total} instances in {elapsed:.1f}s ({steps * total / elapsed:.0f} steps/s), "
         f"{int(terminated.sum())} terminated, fov {np.round(fovs, 1).tolist()}")

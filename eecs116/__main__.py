@@ -31,12 +31,13 @@ def command_bundle(arguments):
     from .bundle import BundleError, bundle
 
     try:
-        summary = bundle(arguments.directory, arguments.output, runtime=arguments.runtime, entry=arguments.entry, channels=arguments.channels)
+        summary = bundle(arguments.directory, arguments.output, runtime=arguments.runtime, entry=arguments.entry, channels=arguments.channels,
+                         resolution=arguments.resolution)
     except BundleError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(f"wrote {summary['output']} ({summary['bytes'] / 2**20:.1f} MiB, bundle {summary['bundle_bytes'] / 1024:.0f} KiB, {len(summary['files'])} files, "
-          f"entry {summary['entry']}, {'RGB' if summary['channels'] == 3 else 'grayscale'} frames)")
+          f"entry {summary['entry']}, {'RGB' if summary['channels'] == 3 else 'grayscale'} {summary['resolution'][0]}x{summary['resolution'][1]} frames)")
     for warning in summary["warnings"]:
         print(f"warning: {warning}")
     print(f"next: python -m eecs116 check {summary['output']}")
@@ -64,6 +65,8 @@ def command_manifest(arguments):
             updates["channels"] = arguments.channels
         if arguments.entry is not None:
             updates["entry"] = arguments.entry
+        if arguments.resolution is not None:
+            updates["resolution"] = arguments.resolution
         manifest = write_manifest(arguments.wasm, updates) if updates else read_manifest(open(arguments.wasm, "rb").read())
     except BundleError as error:
         print(f"error: {error}", file=sys.stderr)
@@ -87,8 +90,10 @@ def command_check(arguments):
             print(f"load failed: {error}")
             return 1
         channels = arguments.channels or solution.channels
-        config = make_config(width=arguments.width, height=arguments.height, channels=channels, num_frames=arguments.frames)
-        shape = (arguments.height, arguments.width) if channels == 1 else (arguments.height, arguments.width, channels)
+        width = arguments.width or solution.resolution[0]
+        height = arguments.height or solution.resolution[1]
+        config = make_config(width=width, height=height, channels=channels, num_frames=arguments.frames)
+        shape = (height, width) if channels == 1 else (height, width, channels)
         dt = 1.0 / config["episode"]["frame_rate_hz"]
         imu_dt = 1.0 / config["imu"]["rate_hz"]
         rows_per_frame = int(round(dt / imu_dt))
@@ -102,7 +107,7 @@ def command_check(arguments):
         failures = 0
         for k in range(arguments.frames):
             t = (k + 1) * dt
-            base = np.linspace(0, 255, arguments.width, dtype=np.float32)[None, :] + rng.normal(0, 20, (arguments.height, arguments.width))
+            base = np.linspace(0, 255, width, dtype=np.float32)[None, :] + rng.normal(0, 20, (height, width))
             frame = np.clip(base, 0, 255).astype(np.uint8)
             if channels > 1:
                 frame = np.repeat(frame[:, :, None], channels, axis=2)
@@ -227,11 +232,13 @@ def main(argv=None):
     bundle.add_argument("--runtime", help="runtime.wasm to build on (default: $EECS116_RUNTIME or the repository build)")
     bundle.add_argument("--entry", help=f"module:Class of the solution (default {abi.DEFAULT_ENTRY} or eecs116.json)")
     bundle.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS, help="frames the solution wants: 1 grayscale (default) or 3 RGB (or eecs116.json)")
+    bundle.add_argument("--resolution", help="frames the solution wants: 320x240 (default) or 640x480 (or eecs116.json)")
     bundle.set_defaults(function=command_bundle)
 
     manifest = commands.add_parser("manifest", help="show or change the manifest of a solution .wasm (native modules declare RGB this way)")
     manifest.add_argument("wasm")
     manifest.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS)
+    manifest.add_argument("--resolution", help="320x240 or 640x480")
     manifest.add_argument("--entry")
     manifest.set_defaults(function=command_manifest)
 
@@ -244,8 +251,8 @@ def main(argv=None):
     check.add_argument("wasm", help="solution .wasm (or a bare runtime.wasm together with --dir)")
     check.add_argument("--dir", help="dev mode: mount this solution directory instead of a bundle")
     check.add_argument("--frames", type=int, default=5)
-    check.add_argument("--width", type=int, default=320)
-    check.add_argument("--height", type=int, default=240)
+    check.add_argument("--width", type=int, help="override the manifest's resolution")
+    check.add_argument("--height", type=int)
     check.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS, help="override the manifest's channel choice")
     check.add_argument("--logs", help="directory for stdout.txt/stderr.txt (default: temporary)")
     check.add_argument("-v", "--verbose", action="store_true", help="pass the guest's stdout/stderr through instead of capturing them")
@@ -269,8 +276,8 @@ def main(argv=None):
     simulate.add_argument("--variant", default="default", choices=["default", "blur", "lowlight", "oversaturated"])
     simulate.add_argument("--scenes", default="procthor-train", choices=["procthor-train", "hssd-train", "hssd-val"])
     simulate.add_argument("--scene-names", nargs="*", help="restrict to these scene names")
-    simulate.add_argument("--width", type=int, default=320)
-    simulate.add_argument("--height", type=int, default=240)
+    simulate.add_argument("--width", type=int, default=640, help="stored resolution (the harness resamples to what a solution asks for)")
+    simulate.add_argument("--height", type=int, default=480)
     simulate.add_argument("--instances", type=int, default=8)
     simulate.add_argument("--frame-rate", type=float, default=20.0)
     simulate.add_argument("--fov-range", type=float, default=15.0, help="horizontal FOV = 63.8 + U(-range, range) degrees")
@@ -286,8 +293,8 @@ def main(argv=None):
     convert.add_argument("--stride", type=float, help="seconds between snippet starts (default: --snippet, no overlap)")
     convert.add_argument("--start", type=float, default=0.0, help="skip this many seconds at the beginning")
     convert.add_argument("--max-snippets", type=int)
-    convert.add_argument("--width", type=int, default=320)
-    convert.add_argument("--height", type=int, default=240)
+    convert.add_argument("--width", type=int, default=640, help="EuRoC's 752x480 crops to 640x480 without scaling")
+    convert.add_argument("--height", type=int, default=480)
     convert.set_defaults(function=command_convert_euroc)
 
     leaderboard = commands.add_parser("leaderboard", help="aggregate report.json files into the ATE-vs-fuel table (and plot)")

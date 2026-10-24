@@ -93,3 +93,18 @@ def test_as_channels_conversions():
     assert gray.shape == (3, 12, 16) and config["image"]["channels"] == 1 and config["image"]["source_channels"] == 3
     np.testing.assert_array_equal(gray, episode.frames)  # replicated channels -> identical luma
     assert rgb.as_channels(3)[1] is frames
+
+
+def test_adapt_resolution_rescales_frames_and_intrinsics():
+    episode = synthetic_episode(n_frames=2, width=64, height=48)
+    config, frames = episode.adapt(resolution=(32, 24))
+    assert frames.shape == (2, 24, 32) and config["image"]["width"] == 32 and config["image"]["upscaled"] is False
+    assert config["camera"]["fx"] == pytest.approx(episode.config["camera"]["fx"] / 2)
+    assert config["camera"]["cx"] == pytest.approx((episode.config["camera"]["cx"] + 0.5) / 2 - 0.5)
+    # a frame-centre ray keeps its direction: the principal point stays at the image centre
+    assert config["camera"]["cx"] == pytest.approx(32 / 2 - 0.5) and config["camera"]["cy"] == pytest.approx(24 / 2 - 0.5)
+    config_up, frames_up = episode.adapt(channels=3, resolution=(128, 96))
+    assert frames_up.shape == (2, 96, 128, 3) and config_up["image"]["upscaled"] is True and config_up["image"]["source_resolution"] == [64, 48]
+    assert config_up["camera"]["fx"] == pytest.approx(episode.config["camera"]["fx"] * 2)
+    with pytest.raises(ValueError, match="aspect"):
+        episode.adapt(resolution=(64, 24))
