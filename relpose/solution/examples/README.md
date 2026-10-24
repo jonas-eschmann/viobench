@@ -13,3 +13,7 @@ Each directory is a submission as it would be handed in; copy one to start. Pyth
 
 Fuel numbers are per frame at 320 × 240 grayscale (the default input); see `README.md` at the top for the full table
 over all public conditions. `relpose evaluate <wasm> build/datasets/public/default-val` reproduces them.
+
+Every Python example ends with a three-line `if __name__ == "__main__":` footer, so `python solution.py <episode dir>`
+runs it in-process with the debugger of your choice; the native example gets a host `debug` executable from the same
+`CMakeLists.txt` (`docs/DEBUGGING.md`).

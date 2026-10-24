@@ -12,8 +12,12 @@
 
 #define RELPOSE_ABI_VERSION 1
 
-/* Mark a function as a wasm export under its own name. */
+/* Mark a function as a wasm export under its own name (a no-op in a host debug build). */
+#if defined(__wasm__)
 #define RELPOSE_EXPORT(name) __attribute__((export_name(#name)))
+#else
+#define RELPOSE_EXPORT(name)
+#endif
 
 /* Buffer layouts: everything little-endian; pointers are offsets into the module's linear memory. */
 #define RELPOSE_IMU_ROW_VALUES 7 /* [t_s, ax, ay, az, gx, gy, gz] as double */

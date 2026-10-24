@@ -22,3 +22,8 @@ class Solution:
             print(f"first frame at t={t:.3f}s shape={frame.shape} dtype={frame.dtype} imu rows={len(imu)}")
         self.frames += 1
         return np.array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0])
+
+if __name__ == "__main__":  # debug outside the sandbox: python solution.py <episode dirs...>  (docs/DEBUGGING.md)
+    from relpose.tools.runner.direct import main
+
+    main(Solution)

@@ -21,7 +21,7 @@ one WebAssembly module; we are unopinionated about what runs inside it. The eval
 |---|---|
 | [`relpose/tools/`](relpose/tools/) | host side (the importable package): `abi` (the contract), `datasets` (episodes, producers), `runner`, `server`, `cli` |
 | [`relpose/solution/`](relpose/solution/) | guest side: how a solution `.wasm` is made, by you — `toolchain/` (one Docker image), `runtime/{native,python}`, `examples/{native,python}` |
-| [`docs/`](docs/) | [TASK](docs/TASK.md) (what to estimate, scoring), [STUDENT_GUIDE](docs/STUDENT_GUIDE.md), [INSTRUCTOR_GUIDE](docs/INSTRUCTOR_GUIDE.md), contracts: [ABI](docs/ABI.md), [RUNTIME](docs/RUNTIME.md), [DATA](docs/DATA.md) |
+| [`docs/`](docs/) | [TASK](docs/TASK.md) (what to estimate, scoring), [STUDENT_GUIDE](docs/STUDENT_GUIDE.md), [DEBUGGING](docs/DEBUGGING.md), [INSTRUCTOR_GUIDE](docs/INSTRUCTOR_GUIDE.md), contracts: [ABI](docs/ABI.md), [RUNTIME](docs/RUNTIME.md), [DATA](docs/DATA.md) |
 | [`tests/`](tests/) | pytest suite driving a real `runtime.wasm` through the harness |
 
 ## Quick start
@@ -37,7 +37,8 @@ relpose leaderboard report-* --plot leaderboard.png
 ```
 
 `relpose --help` lists the commands by role: solution (`bundle`, `unbundle`, `manifest`), runner (`check`, `evaluate`,
-`leaderboard`), datasets (`simulate`, `convert-euroc`). Evaluation needs only wasmtime: no Docker, no GPU.
+`leaderboard`, `debug`, `score`), datasets (`simulate`, `convert-euroc`, `feed`). Evaluation needs only wasmtime: no
+Docker, no GPU. Debugging happens outside the sandbox, in your own process: `docs/DEBUGGING.md`.
 
 ## Baselines
 

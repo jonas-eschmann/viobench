@@ -145,3 +145,8 @@ class Solution:
         self.previous_points = self._detect(frame)
         T_c0_c = np.linalg.inv(self.T_w_c0) @ self._pose_camera()
         return np.concatenate([T_c0_c[:3, 3], matrix_to_quaternion(T_c0_c[:3, :3])])
+
+if __name__ == "__main__":  # debug outside the sandbox: python solution.py <episode dirs...>  (docs/DEBUGGING.md)
+    from relpose.tools.runner.direct import main
+
+    main(Solution)

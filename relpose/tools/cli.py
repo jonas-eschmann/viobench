@@ -2,7 +2,8 @@
 
 solution     bundle, unbundle, manifest        Python runtime + directory <-> solution.wasm; declare RGB / VGA (any module)
 runner       check, evaluate, leaderboard      run a module on synthetic frames / on a dataset (disk or freshly simulated); aggregate reports
-datasets     simulate, convert-euroc           write episodes with HyperDrone (GPU); cut EuRoC sequences into episodes
+             debug, score                      run a Python solution in-process (debugger-friendly); score a pose file
+datasets     simulate, convert-euroc, feed     write episodes with HyperDrone (GPU); cut EuRoC sequences into episodes; export raw inputs for native debugging
 
 The CLI is the one host component that also reaches into the guest side (for `bundle`); the runner library never does.
 """
@@ -33,34 +34,6 @@ def run_with_large_stack(function):
     if "error" in outcome:
         raise outcome["error"]
     return outcome.get("result")
-
-
-def simulated_dataset(arguments):
-    """The ad-hoc Dataset provider from CLI arguments (--simulate N)."""
-    from .datasets.generate.simulation import SimConfig, hssd_scenes, procthor_scenes, simulate
-
-    sim = SimConfig(width=arguments.width, height=arguments.height, instances=arguments.instances, frame_rate_hz=arguments.frame_rate,
-                    fov_range=arguments.fov_range, hold_seconds=arguments.hover, aa_grid=arguments.aa_grid, channels=arguments.channels)
-    scenes = {"procthor-train": lambda: procthor_scenes(arguments.scene_names), "hssd-val": lambda: hssd_scenes("val", arguments.scene_names),
-              "hssd-train": lambda: hssd_scenes("train", arguments.scene_names)}[arguments.scenes]()
-    seeds = range(arguments.seed, arguments.seed + arguments.batches)
-    return simulate(sim, seeds, scenes=scenes, condition=arguments.condition)
-
-
-def add_simulation_arguments(parser, prefix=""):
-    parser.add_argument(f"--{prefix}seed", dest="seed", type=int, default=0, help="first seed; seeds also pick the scene round-robin")
-    parser.add_argument(f"--{prefix}batches", dest="batches", type=int, default=1_000_000, help="maximum number of seeds/batches to run")
-    parser.add_argument("--condition", default="default", choices=["default", "blur", "lowlight", "oversaturated"])
-    parser.add_argument("--scenes", default="procthor-train", choices=["procthor-train", "hssd-train", "hssd-val"])
-    parser.add_argument("--scene-names", nargs="*", help="restrict to these scene names")
-    parser.add_argument("--width", type=int, default=640, help="rendered resolution (the runner resamples to what a solution asks for)")
-    parser.add_argument("--height", type=int, default=480)
-    parser.add_argument("--instances", type=int, default=8, help="flights per batch")
-    parser.add_argument("--frame-rate", type=float, default=20.0)
-    parser.add_argument("--fov-range", type=float, default=15.0, help="horizontal FOV = 63.8 + U(-range, range) degrees")
-    parser.add_argument("--hover", type=float, default=1.0, help="seconds of hover at the start of each episode")
-    parser.add_argument("--aa-grid", type=int, default=1)
-    parser.add_argument("--channels", type=int, default=3, choices=abi.SUPPORTED_CHANNELS, help="render RGB (default) or grayscale")
 
 
 # --- solution (guest side) -------------------------------------------------------------------------------------
@@ -143,7 +116,9 @@ def command_evaluate(arguments):
         if arguments.datasets:
             yield from episodes(arguments.datasets)
         if arguments.simulate:
-            yield from itertools.islice(simulated_dataset(arguments), arguments.simulate)
+            from .datasets.generate.simulation import dataset_from_arguments
+
+            yield from itertools.islice(dataset_from_arguments(arguments), arguments.simulate)
 
     def run():
         result = evaluate(arguments.wasm, dataset(), output_dir=arguments.output, limits=limits, dev_dir=arguments.dir, max_episodes=max_episodes)
@@ -153,6 +128,19 @@ def command_evaluate(arguments):
         return 0 if summary["completed"] == summary["episodes"] else 1
 
     return run_with_large_stack(run)
+
+
+def command_debug(arguments):
+    from .runner.direct import run_arguments
+
+    return run_arguments(arguments)  # plain Python on the main thread: breakpoint() and Ctrl-C behave
+
+
+def command_score(arguments):
+    from .runner.score import score
+
+    score(arguments.episode, arguments.tum)
+    return 0
 
 
 def command_leaderboard(arguments):
@@ -182,17 +170,36 @@ def command_leaderboard(arguments):
 def command_simulate(arguments):
     from pathlib import Path
 
+    from .datasets.generate.simulation import dataset_from_arguments
     from .datasets.storage import write_episode
 
     output = Path(arguments.output)
     output.mkdir(parents=True, exist_ok=True)
     written = 0
-    for episode in itertools.islice(simulated_dataset(arguments), arguments.episodes):
+    for episode in itertools.islice(dataset_from_arguments(arguments), arguments.episodes):
         write_episode(episode, output / episode.name)
         written += 1
         print(f"wrote {output / episode.name} ({episode.num_frames} frames, {episode.duration:.1f}s, fov {episode.config['camera']['horizontal_fov_degrees']:.1f} deg)")
     print(f"{written} episodes in {output}")
     return 0 if written >= arguments.episodes else 1
+
+
+def command_feed(arguments):
+    from .datasets.feed import write_feed
+    from .datasets.storage import episodes
+
+    if arguments.episode:
+        episode = next(iter(episodes([arguments.episode])))
+    elif arguments.simulate:
+        from .datasets.generate.simulation import dataset_from_arguments
+
+        episode = next(iter(dataset_from_arguments(arguments)))
+    else:
+        raise SystemExit("feed needs an episode directory or --simulate")
+    resolution = tuple(int(v) for v in arguments.resolution.lower().split("x")) if arguments.resolution else abi.DEFAULT_RESOLUTION
+    directory = write_feed(episode, arguments.output, channels=arguments.channels or abi.DEFAULT_CHANNELS, resolution=resolution)
+    print(f"feed of {episode.name} ({episode.num_frames} frames at {resolution[0]}x{resolution[1]}x{arguments.channels or abi.DEFAULT_CHANNELS}) in {directory}")
+    return 0
 
 
 def command_convert_euroc(arguments):
@@ -215,6 +222,9 @@ def command_convert_euroc(arguments):
 # --- parser ----------------------------------------------------------------------------------------------------
 
 def main(argv=None):
+    from .datasets.generate.simulation import add_simulation_arguments
+    from .runner.direct import add_arguments as add_debug_arguments
+
     parser = argparse.ArgumentParser(prog="relpose", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True, metavar="command")
 
@@ -262,6 +272,15 @@ def main(argv=None):
     add_simulation_arguments(evaluate)
     evaluate.set_defaults(function=command_evaluate)
 
+    debug = commands.add_parser("debug", help="[runner] run a Python solution directory in this process (no sandbox): breakpoints, prints, plots")
+    add_debug_arguments(debug)
+    debug.set_defaults(function=command_debug)
+
+    score = commands.add_parser("score", help="[runner] metrics of a pose file (TUM: t x y z qx qy qz qw) against an episode")
+    score.add_argument("episode", help="episode directory")
+    score.add_argument("tum", help="estimate.tum written by a debug build or your own script")
+    score.set_defaults(function=command_score)
+
     leaderboard = commands.add_parser("leaderboard", help="[runner] aggregate report.json files into the ATE-vs-fuel table (and plot)")
     leaderboard.add_argument("reports", nargs="+", help="report.json files or directories containing them")
     leaderboard.add_argument("-o", "--output", help="write the markdown table here")
@@ -273,6 +292,15 @@ def main(argv=None):
     simulate.add_argument("--episodes", type=int, default=8, help="episodes to write (a batch of --instances flights per seed)")
     add_simulation_arguments(simulate)
     simulate.set_defaults(function=command_simulate)
+
+    feed = commands.add_parser("feed", help="[datasets] export one episode's inputs as raw files for a native debug build (relpose_debug_main.c)")
+    feed.add_argument("episode", nargs="?", help="episode directory (or use --simulate)")
+    feed.add_argument("-o", "--output", required=True, help="feed directory")
+    feed.add_argument("--simulate", action="store_true", help="feed a fresh HyperDrone episode instead (GPU; options below)")
+    feed.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS, help="what your solution declares (default grayscale)")
+    feed.add_argument("--resolution", help="what your solution declares (default 320x240)")
+    add_simulation_arguments(feed)
+    feed.set_defaults(function=command_feed)
 
     convert = commands.add_parser("convert-euroc", help="[datasets] cut a EuRoC MAV sequence (ASL format directory) into episodes")
     convert.add_argument("sequence", help="sequence directory (containing mav0/)")

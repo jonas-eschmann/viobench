@@ -12,7 +12,18 @@ relpose manifest relpose/solution/examples/native/cpp_minimal/build/solution.was
 ```
 
 Your own project: copy `relpose/solution/examples/native/cpp_minimal`, keep `#include "relpose_abi.h"` and the two CMake lines
-(`include(${RELPOSE_NATIVE_DIR}/relpose_reactor.cmake)`, `relpose_solution(<target>)`).
+(`include(${RELPOSE_NATIVE_DIR}/relpose_reactor.cmake)`, `relpose_solution(<target> <sources...>)`).
+
+**Debugging on the host** (`docs/DEBUGGING.md`): the same `relpose_solution(...)` call, configured with your host compiler
+instead of the wasi-sdk toolchain, builds an executable `debug` = your sources + `relpose_debug_main.c` (`-g -O1`) that
+replays one episode's inputs through `init`/`step` exactly like the sandbox and writes `estimate.tum`:
+
+```bash
+relpose feed build/datasets/public/default-val/<name> -o build/feed      # raw arrays: config.json, frames.u8, imu.f64, ...
+cmake -S relpose/solution/examples/native/cpp_minimal -B build-host && cmake --build build-host
+build-host/debug build/feed estimate.tum && relpose score build/datasets/public/default-val/<name> estimate.tum
+gdb --args build-host/debug build/feed
+```
 
 Rules of the sandbox (`docs/RUNTIME.md` lists the Python-specific ones): `exit()`, `abort()` and uncaught C++ exceptions
 trap and end the episode, return a negative status instead; stdout/stderr are captured into the evaluation log (make

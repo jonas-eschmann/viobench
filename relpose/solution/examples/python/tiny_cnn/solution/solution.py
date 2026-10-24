@@ -10,7 +10,6 @@ import json
 import cv2
 import numpy as np
 
-import solution_bundle as bundle
 from preintegrate import exp_so3, preintegrate
 from tinynn import TinyNet
 
@@ -33,6 +32,8 @@ def quaternion_from_matrix(R):
 
 class Solution:
     def __init__(self, config):
+        import solution_bundle as bundle  # the files next to this one (in the runtime, or on the host under `python solution.py`)
+
         self.meta = json.loads(bundle.read_text("meta.json"))
         self.size = (int(self.meta["input_width"]), int(self.meta["input_height"]))
         self.imu_mean = np.asarray(self.meta["imu_mean"], dtype=np.float32)
@@ -75,3 +76,8 @@ class Solution:
         self.T = self.T @ delta
         self.previous = small
         return np.concatenate([self.T[:3, 3], quaternion_from_matrix(self.T[:3, :3])])
+
+if __name__ == "__main__":  # debug outside the sandbox: python solution.py <episode dirs...>  (docs/DEBUGGING.md)
+    from relpose.tools.runner.direct import main
+
+    main(Solution)

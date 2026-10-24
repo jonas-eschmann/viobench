@@ -10,5 +10,7 @@ relpose check relpose/solution/examples/native/cpp_minimal/build/solution.wasm
 relpose manifest relpose/solution/examples/native/cpp_minimal/build/solution.wasm --channels 3   # optional: ask for RGB (or --resolution 640x480)
 ```
 
-`CMakeLists.txt` is three lines of substance: `add_executable`, `include(${RELPOSE_NATIVE_DIR}/relpose_reactor.cmake)`,
-`relpose_solution(solution)`. Rules of the sandbox, OpenCV linking and Rust notes: `relpose/solution/runtime/native/README.md`.
+`CMakeLists.txt` is two lines of substance: `include(${RELPOSE_NATIVE_DIR}/relpose_reactor.cmake)` and
+`relpose_solution(solution solution.cpp)`. Configured with the host compiler instead (`cmake -S . -B build-host && cmake --build build-host`)
+the same call builds `build-host/debug`, which replays a `relpose feed` directory through your `init`/`step` under gdb
+(`docs/DEBUGGING.md`). Rules of the sandbox, OpenCV linking and Rust notes: `relpose/solution/runtime/native/README.md`.

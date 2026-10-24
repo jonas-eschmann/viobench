@@ -1,3 +1,4 @@
 {
-    "cmake.sourceDirectory": "/home/jonas/git/course-eecs116-216-final-project/examples/native/cpp_minimal"
+    "cmake.sourceDirectory": "${workspaceFolder}/relpose/solution/examples/native/cpp_minimal",
+    "cmake.buildDirectory": "${workspaceFolder}/relpose/solution/examples/native/cpp_minimal/build-host"
 }

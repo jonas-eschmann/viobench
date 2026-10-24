@@ -1,0 +1,31 @@
+{
+    // docs/DEBUGGING.md — adjust the solution / episode paths to yours
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "relpose: debug Python solution",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "relpose",
+            "args": [
+                "debug",
+                "${workspaceFolder}/relpose/solution/examples/python/dead_reckoning",
+                "${workspaceFolder}/build/datasets/public/default-val",
+                "--episode-limit", "1"
+            ],
+            "cwd": "${workspaceFolder}",
+            "console": "integratedTerminal",
+            "justMyCode": false
+        },
+        {
+            "name": "relpose: debug native solution (gdb)",
+            "type": "cppdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/relpose/solution/examples/native/cpp_minimal/build-host/debug",
+            "args": ["${workspaceFolder}/build/feed", "${workspaceFolder}/build/feed/estimate.tum"],
+            "cwd": "${workspaceFolder}",
+            "MIMode": "gdb",
+            "preLaunchTask": "relpose: build native debug"
+        }
+    ]
+}

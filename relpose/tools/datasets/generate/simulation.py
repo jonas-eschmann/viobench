@@ -248,3 +248,31 @@ def _versions():
         return {"hyperdrone": version("hyperdrone"), "hyperlux": version("hyperlux")}
     except Exception:  # noqa: BLE001
         return {}
+
+
+# --- command-line plumbing shared by `relpose simulate`, `relpose evaluate --simulate`, `relpose debug --simulate`, `relpose feed --simulate`
+
+def add_simulation_arguments(parser):
+    """Adds the generator's options to an argparse parser (names match SimConfig and simulate())."""
+    parser.add_argument("--seed", type=int, default=0, help="first seed; seeds also pick the scene round-robin")
+    parser.add_argument("--batches", type=int, default=1_000_000, help="maximum number of seeds/batches to run")
+    parser.add_argument("--condition", default="default", choices=["default", "blur", "lowlight", "oversaturated"])
+    parser.add_argument("--scenes", default="procthor-train", choices=["procthor-train", "hssd-train", "hssd-val"])
+    parser.add_argument("--scene-names", nargs="*", help="restrict to these scene names")
+    parser.add_argument("--width", type=int, default=640, help="rendered resolution (the runner resamples to what a solution asks for)")
+    parser.add_argument("--height", type=int, default=480)
+    parser.add_argument("--instances", type=int, default=8, help="flights per batch")
+    parser.add_argument("--frame-rate", type=float, default=20.0)
+    parser.add_argument("--fov-range", type=float, default=15.0, help="horizontal FOV = 63.8 + U(-range, range) degrees")
+    parser.add_argument("--hover", type=float, default=1.0, help="seconds of hover at the start of each episode")
+    parser.add_argument("--aa-grid", type=int, default=1)
+    parser.add_argument("--render-channels", dest="render_channels", type=int, default=3, choices=(1, 3), help="render RGB (default) or grayscale")
+
+
+def dataset_from_arguments(arguments):
+    """The ad-hoc Dataset provider configured from add_simulation_arguments() options."""
+    sim = SimConfig(width=arguments.width, height=arguments.height, instances=arguments.instances, frame_rate_hz=arguments.frame_rate,
+                    fov_range=arguments.fov_range, hold_seconds=arguments.hover, aa_grid=arguments.aa_grid, channels=arguments.render_channels)
+    scenes = {"procthor-train": lambda: procthor_scenes(arguments.scene_names), "hssd-val": lambda: hssd_scenes("val", arguments.scene_names),
+              "hssd-train": lambda: hssd_scenes("train", arguments.scene_names)}[arguments.scenes]()
+    return simulate(sim, range(arguments.seed, arguments.seed + arguments.batches), scenes=scenes, condition=arguments.condition)

@@ -34,13 +34,18 @@ relpose evaluate build/runtime/dist/runtime.wasm --dir my_solution --simulate 8 
 
 `check` catches crashes and protocol errors; `evaluate` gives ATE/RPE and fuel per frame on real episodes
 (`report-dev/report.json`, per-episode `estimate.tum` for plotting with `evo`). `--dir` mounts your directory into the
-guest, so edits take effect immediately and tracebacks show real paths; bundling comes last.
+guest, so edits take effect immediately and tracebacks show real paths; bundling comes last. To step through your code
+with a debugger run it outside the sandbox: `relpose debug my_solution build/datasets/public/default-val --episode-limit 1`
+(or `python my_solution/solution.py …`), see `docs/DEBUGGING.md`.
 
 ## 3. Iterate
 
 - Data: generate training data with `relpose simulate` (any condition, any amount); `build/datasets/public/default-val`
   and the other `*-val` sets are for validation and show the hidden conditions, `real-sample` the real-data format. The
   hidden sets use the same generator with other seeds and scenes.
+- Debug: `relpose debug my_solution <episodes>` runs your `Solution` in your own Python process, so `breakpoint()`, prints
+  and matplotlib work; `trace()` yields per-frame inputs and poses for plots (`docs/DEBUGGING.md`). No fuel there:
+  `check`/`evaluate` remain the measure.
 - Inspect an episode in Python: `from relpose.tools.datasets import read_episode; ep = read_episode("build/datasets/public/default-val/<name>")`,
   then `ep.frames`, `ep.imu`, `ep.ground_truth_relative()`, `ep.steps()`.
 - Augmentation: `relpose.tools.datasets.generate.conditions.sample(name, rng)` + `relpose.tools.datasets.generate.camera.apply(...)` reproduce the
@@ -70,7 +75,8 @@ accuracy-vs-fuel curve; your best points form your Pareto front. Quotas: 20 subm
 
 A C++ (or Rust) solution implements four exports and skips the interpreter entirely: `relpose/solution/runtime/native/` (header, CMake
 snippet, `build.sh`) and `relpose/solution/examples/native/cpp_minimal`. The toolchain image has wasi-sdk; the Python-runtime build leaves
-OpenCV's static libraries behind if you want them.
+OpenCV's static libraries behind if you want them. Configured with your host compiler, the same `CMakeLists.txt` builds a
+`debug` executable that replays an episode (`relpose feed`) through your code under gdb (`docs/DEBUGGING.md`).
 
 ## 6. Common problems
 
