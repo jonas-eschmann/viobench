@@ -10,10 +10,10 @@ import numpy as np
 import wasmtime
 
 from .. import abi
-from ..packaging import PackagingError
-from ..packaging.embed import runtime_descriptor
-from ..packaging.manifest import read_manifest, validate_manifest
-from ..packaging.wasm_binary import strip_custom
+from ..abi import AbiError
+from ..abi.manifest import read_manifest, validate_manifest
+from ..abi.module import runtime_descriptor
+from ..abi.wasm_binary import strip_custom
 from .engine import Engine
 
 
@@ -75,7 +75,7 @@ class Sandbox:
             if self.dev_dir is not None and (self.dev_dir / abi.BUNDLE_MANIFEST).is_file():  # dev mode: the directory's solution.json
                 self.manifest = {**self.manifest, **json.loads((self.dev_dir / abi.BUNDLE_MANIFEST).read_text())}
             validate_manifest(self.manifest)
-        except (PackagingError, ValueError) as error:
+        except (AbiError, ValueError) as error:
             raise SandboxError(str(error)) from None
         self.channels = int(self.manifest.get("channels", abi.DEFAULT_CHANNELS))  # 1 (default) or 3: what step() receives
         self.resolution = tuple(self.manifest.get("resolution", abi.DEFAULT_RESOLUTION))  # (width, height) of the frames

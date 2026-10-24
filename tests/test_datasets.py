@@ -1,11 +1,11 @@
 import numpy as np
 import pytest
 
-from relpose.abi.config import make_config
-from relpose.datasets.episode import Episode, interpolate_poses
-from relpose.datasets.storage import list_episodes, read_episode, write_episode
-from relpose.datasets.camera import SensorParams, apply, integrate_exposure, linear_to_srgb, srgb_to_linear
-from relpose.evaluation.metrics import matrices_to_poses, poses_to_matrices, quaternion_to_matrix
+from relpose.tools.abi.config import make_config
+from relpose.tools.datasets.episode import Episode, interpolate_poses
+from relpose.tools.datasets.storage import list_episodes, read_episode, write_episode
+from relpose.tools.datasets.generate.camera import SensorParams, apply, integrate_exposure, linear_to_srgb, srgb_to_linear
+from relpose.tools.runner.metrics import matrices_to_poses, poses_to_matrices, quaternion_to_matrix
 
 
 def synthetic_episode(n_frames=8, rate=20.0, imu_rate=200.0, width=32, height=24):
@@ -62,7 +62,7 @@ def test_write_read_roundtrip(tmp_path):
     np.testing.assert_allclose(loaded.imu, episode.imu, rtol=1e-6, atol=1e-9)
     np.testing.assert_allclose(loaded.ground_truth, episode.ground_truth, rtol=1e-6, atol=1e-9)
     np.testing.assert_allclose(loaded.T_body_camera, episode.T_body_camera)
-    assert loaded.config == episode.config and loaded.meta == {"condition": "test"}
+    assert loaded.config == episode.config and loaded.meta["condition"] == "test" and loaded.meta["dataset"] == tmp_path.name
     assert (directory / "mav0" / "cam0" / "sensor.yaml").is_file() and (directory / "mav0" / "imu0" / "sensor.yaml").is_file()
 
 

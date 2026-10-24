@@ -1,6 +1,6 @@
 import pytest
 
-from relpose.packaging.wasm_binary import append_custom, find_custom, iter_sections, read_leb128, split_bundle, strip_custom, write_leb128
+from relpose.tools.abi.wasm_binary import append_custom, find_custom, iter_sections, read_leb128, split_bundle, strip_custom, write_leb128
 
 # the smallest valid module: magic + version, no sections
 EMPTY_MODULE = b"\0asm\x01\0\0\0"
@@ -23,15 +23,15 @@ def test_iter_sections_reads_ids_and_names():
 
 def test_append_find_strip_custom():
     payload = bytes(range(256)) * 3
-    bundled = append_custom(TINY_MODULE, "relpose.packaging.bundle", payload)
-    assert find_custom(bundled, "relpose.packaging.bundle") == payload
+    bundled = append_custom(TINY_MODULE, "relpose.solution.runtime.python.bundler.bundle", payload)
+    assert find_custom(bundled, "relpose.solution.runtime.python.bundler.bundle") == payload
     assert find_custom(bundled, "name") == b""
-    assert strip_custom(bundled, "relpose.packaging.bundle") == TINY_MODULE
-    assert split_bundle(bundled, "relpose.packaging.bundle") == (TINY_MODULE, payload)
+    assert strip_custom(bundled, "relpose.solution.runtime.python.bundler.bundle") == TINY_MODULE
+    assert split_bundle(bundled, "relpose.solution.runtime.python.bundler.bundle") == (TINY_MODULE, payload)
     # appending again replaces instead of duplicating
-    rebundled = append_custom(bundled, "relpose.packaging.bundle", b"x")
-    assert find_custom(rebundled, "relpose.packaging.bundle") == b"x"
-    assert strip_custom(rebundled, "relpose.packaging.bundle") == TINY_MODULE
+    rebundled = append_custom(bundled, "relpose.solution.runtime.python.bundler.bundle", b"x")
+    assert find_custom(rebundled, "relpose.solution.runtime.python.bundler.bundle") == b"x"
+    assert strip_custom(rebundled, "relpose.solution.runtime.python.bundler.bundle") == TINY_MODULE
 
 
 def test_rejects_non_wasm():
@@ -40,7 +40,7 @@ def test_rejects_non_wasm():
 
 
 def test_memory_and_data_section_roundtrip():
-    from relpose.packaging.wasm_binary import (DATA_SECTION_ID, MEMORY_SECTION_ID, DataSegment, Memory, encode_data_section, encode_memory_section,
+    from relpose.tools.abi.wasm_binary import (DATA_SECTION_ID, MEMORY_SECTION_ID, DataSegment, Memory, encode_data_section, encode_memory_section,
                                        parse_data_section, parse_memory_section, read_sleb128, replace_sections, section_payload, write_sleb128)
 
     for value in (0, 1, 63, 64, -1, -64, -65, 2**31 - 1, -2**31):

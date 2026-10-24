@@ -1,14 +1,17 @@
-"""`relpose evaluate`: run a solution .wasm over episodes on disk, meter it, score it, and write a report."""
+"""`relpose evaluate`: run a solution .wasm over a Dataset (any iterable of Episodes), meter it, score it, write a report.
+
+The Dataset may be episode directories on disk (`datasets.storage.episodes`) or fresh episodes from the simulator
+(`datasets.generate.simulation.simulate`); the runner does not care, and reads frames one at a time either way.
+"""
 import json
 import platform
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
 
 from .. import abi
-from ..datasets.storage import list_episodes, read_episode
 from .engine import WASMTIME_VERSION, Engine
 from .metrics import evaluate_trajectory
 from .sandbox import Limits, Sandbox, SandboxError, SandboxTrap
@@ -43,7 +46,8 @@ def null_pose_estimates(n):
     return np.full((n, abi.POSE_VALUES), np.nan)
 
 
-def run_episode(wasm_path, episode, engine, limits, log_dir, dataset_name="", dev_dir=None, progress=None):
+def run_episode(wasm_path, episode, engine, limits, log_dir, dev_dir=None, progress=None):
+    """One episode through a fresh Sandbox; returns (EpisodeReport, estimates (N, 7) with NaN rows for missing frames)."""
     estimates = null_pose_estimates(episode.num_frames)
     fuel = np.zeros(episode.num_frames)
     wall = np.zeros(episode.num_frames)
@@ -78,14 +82,13 @@ def run_episode(wasm_path, episode, engine, limits, log_dir, dataset_name="", de
         failure = f"trap {trap.trap_code}: {trap.trap_message}"
     except SandboxError as error:
         failure = str(error).splitlines()[0]
-    fed = int(np.count_nonzero(fuel)) if not completed else episode.num_frames
-    fed = max(fed, 1)
+    fed = episode.num_frames if completed else max(int(np.count_nonzero(fuel)), 1)
     metrics = evaluate_trajectory(episode.ground_truth_relative(), estimates, episode.frame_times)
-    per_frame_fuel = fuel[:fed] if fed else np.zeros(1)
-    per_frame_wall = wall[:fed] if fed else np.zeros(1)
+    per_frame_fuel = fuel[:fed]
+    per_frame_wall = wall[:fed]
     return EpisodeReport(
         name=episode.name,
-        dataset=dataset_name,
+        dataset=episode.dataset,
         frames=episode.num_frames,
         completed=completed,
         failure=failure,
@@ -123,9 +126,21 @@ def summarize(reports):
     return {"overall": summary(reports), "datasets": {name: summary([r for r in reports if r.dataset == name]) for name in datasets}}
 
 
-def evaluate(wasm_path, dataset_roots, output_dir=None, limits=None, engine=None, dev_dir=None, max_episodes=None,
+def as_dataset(dataset):
+    """Anything a user may pass as a dataset -> an iterable of Episodes: paths go through the file-system provider."""
+    from ..datasets.storage import episodes
+
+    if isinstance(dataset, (str, Path)):
+        return episodes([dataset])
+    dataset = list(dataset) if not hasattr(dataset, "__next__") else dataset
+    if isinstance(dataset, list) and dataset and all(isinstance(item, (str, Path)) for item in dataset):
+        return episodes(dataset)
+    return dataset
+
+
+def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, dev_dir=None, max_episodes=None,
              save_estimates=True, progress=None, log=print):
-    """dataset_roots: episode directories or directories of episodes. Returns the report dict (also written as report.json)."""
+    """dataset: episode directories / dataset roots, or any iterable of Episodes. Returns the report dict (also written as report.json)."""
     wasm_path = Path(wasm_path)
     engine = engine or Engine()
     limits = limits or Limits()
@@ -133,26 +148,21 @@ def evaluate(wasm_path, dataset_roots, output_dir=None, limits=None, engine=None
     output_dir.mkdir(parents=True, exist_ok=True)
     reports = []
     started = time.perf_counter()
-    for root in dataset_roots:
-        root = Path(root)
-        episodes = list_episodes(root)
-        if not episodes:
-            raise FileNotFoundError(f"no episodes under {root}")
-        if max_episodes:
-            episodes = episodes[:max_episodes]
-        dataset_name = root.name if (root / "episode.json").is_file() is False else root.parent.name
-        for episode_dir in episodes:
-            episode = read_episode(episode_dir)
-            log_dir = output_dir / "logs" / dataset_name / episode.name
-            report, estimates = run_episode(wasm_path, episode, engine, limits, log_dir, dataset_name=dataset_name, dev_dir=dev_dir, progress=progress)
-            reports.append(report)
-            if save_estimates:
-                np.savetxt(log_dir / "estimate.tum", np.column_stack([episode.frame_times, estimates]), fmt="%.9g",
-                           header="t x y z qx qy qz qw (camera k in camera 0 frame)", comments="# ")
-            m = report.metrics
-            log(f"{dataset_name}/{episode.name}: {'ok' if report.completed else 'FAILED'} ATE {m['ate_rmse']:.3f} m  RPE {m['rpe_translation_rmse']:.3f} m/s  "
-                f"rot {np.degrees(m['rotation_rmse']):.1f} deg  coverage {m['coverage']:.2f}  fuel/frame {report.fuel_per_frame_median:,.0f} (p95 {report.fuel_per_frame_p95:,.0f})  "
-                f"wall/frame {report.wall_per_frame_median_ms:.1f} ms" + (f"  [{report.failure}]" if report.failure else ""))
+    for count, episode in enumerate(as_dataset(dataset)):
+        if max_episodes is not None and count >= max_episodes:
+            break
+        log_dir = output_dir / "logs" / episode.dataset / episode.name
+        report, estimates = run_episode(wasm_path, episode, engine, limits, log_dir, dev_dir=dev_dir, progress=progress)
+        reports.append(report)
+        if save_estimates:
+            np.savetxt(log_dir / "estimate.tum", np.column_stack([episode.frame_times, estimates]), fmt="%.9g",
+                       header="t x y z qx qy qz qw (camera k in camera 0 frame)", comments="# ")
+        m = report.metrics
+        log(f"{episode.dataset}/{episode.name}: {'ok' if report.completed else 'FAILED'} ATE {m['ate_rmse']:.3f} m  RPE {m['rpe_translation_rmse']:.3f} m/s  "
+            f"rot {np.degrees(m['rotation_rmse']):.1f} deg  coverage {m['coverage']:.2f}  fuel/frame {report.fuel_per_frame_median:,.0f} (p95 {report.fuel_per_frame_p95:,.0f})  "
+            f"wall/frame {report.wall_per_frame_median_ms:.1f} ms" + (f"  [{report.failure}]" if report.failure else ""))
+    if not reports:
+        raise ValueError("the dataset yielded no episodes")
     result = {
         "solution": str(wasm_path),
         "solution_bytes": wasm_path.stat().st_size,

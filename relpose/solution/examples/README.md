@@ -1,7 +1,7 @@
-# examples/ — complete solutions in both flavours
+# relpose/solution/examples/ — complete solutions in both flavours
 
 Each directory is a submission as it would be handed in; copy one to start. Python ones are packaged with
-`relpose bundle <dir> -o x.wasm`, the native one with `submission/native/build.sh <dir>`.
+`relpose bundle <dir> -o x.wasm`, the native one with `relpose/solution/runtime/native/build.sh <dir>`.
 
 | example | what it shows | ATE default-val [m] | fuel/frame |
 |---|---|---|---|

@@ -1,8 +1,8 @@
-"""Constants of the solution ABI (docs/ABI.md), shared by the host harness, submission/python/reactor.c and submission/python/guest/relpose_guest.py."""
+"""Constants of the solution ABI (docs/ABI.md), shared by the host harness, relpose/solution/runtime/python/reactor.c and relpose/solution/runtime/python/guest/relpose_guest.py."""
 
 ABI_VERSION = 1
 
-BUNDLE_MAGIC = b"RELPOSEBUNDLEv1\0"  # 16-byte head of the runtime's bundle descriptor (see submission/python/reactor.c)
+BUNDLE_MAGIC = b"RELPOSEBUNDLEv1\0"  # 16-byte head of the runtime's bundle descriptor (see relpose/solution/runtime/python/reactor.c)
 BUNDLE_DESCRIPTOR_BYTES = 32  # magic[16] | address u32 | length u32 | version u32 | reserved u32
 MANIFEST_SECTION = "relpose.manifest"  # wasm custom section with the manifest JSON (read by the harness before init)
 BUNDLE_MANIFEST = "solution.json"  # optional file in the directory: {"entry": "module:Class", "channels": 1 | 3}
@@ -41,3 +41,7 @@ STATUS_NAMES = {
 
 def status_name(status):
     return STATUS_NAMES.get(status, f"unknown({status})")
+
+
+class AbiError(Exception):
+    """A module or manifest violates the contract (malformed manifest, unsupported option, inconsistent descriptor)."""

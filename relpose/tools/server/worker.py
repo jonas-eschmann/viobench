@@ -1,6 +1,6 @@
 """Evaluation worker: polls the queue, runs `relpose evaluate` on the hidden datasets, stores the summary.
 
-    RELPOSE_DATASETS=/data/hidden/default:/data/hidden/blur:... relpose.server.worker
+    RELPOSE_DATASETS=/data/hidden/default:/data/hidden/blur:... relpose.tools.server.worker
 
 Runs each evaluation in a subprocess (own process = own memory, killed on timeout). Run the worker as an unprivileged
 user in a container without network: the guest is sandboxed by wasmtime, but the evaluation host process is not.

@@ -3,7 +3,7 @@
 HyperDrone outputs clean sRGB frames at the IMU rate; this module turns a stack of consecutive renders into one
 sensor frame: box-shutter integration over the exposure (motion blur), exposure scaling (low light /
 oversaturation), photon shot noise, read noise, clipping, sRGB encoding and 8-bit quantisation. The same code serves
-the held-out conditions and students' training augmentation (relpose.datasets.conditions has the public parameter ranges).
+the held-out conditions and students' training augmentation (relpose.tools.datasets.generate.conditions has the public parameter ranges).
 """
 from dataclasses import asdict, dataclass
 

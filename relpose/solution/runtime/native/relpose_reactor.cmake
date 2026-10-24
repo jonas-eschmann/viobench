@@ -4,7 +4,7 @@
 # Configure with the wasi-sdk toolchain file (the toolchain image has it at /opt/wasi-sdk):
 #   cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=/opt/wasi-sdk/share/cmake/wasi-sdk-p1.cmake
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "WASI")
-    message(FATAL_ERROR "relpose: configure with -DCMAKE_TOOLCHAIN_FILE=<wasi-sdk>/share/cmake/wasi-sdk-p1.cmake (see submission/native/build.sh)")
+    message(FATAL_ERROR "relpose: configure with -DCMAKE_TOOLCHAIN_FILE=<wasi-sdk>/share/cmake/wasi-sdk-p1.cmake (see relpose/solution/runtime/native/build.sh)")
 endif()
 
 function(relpose_solution target)

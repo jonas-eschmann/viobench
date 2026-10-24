@@ -1,8 +1,8 @@
 """The EuRoC converter on a synthetic ASL-layout sequence (our writer produces the same layout)."""
 import numpy as np
 
-from relpose.datasets.euroc import convert, rectification
-from relpose.datasets.storage import write_episode
+from relpose.tools.datasets.generate.euroc import convert, rectification
+from relpose.tools.datasets.storage import write_episode
 from tests.test_datasets import synthetic_episode
 
 

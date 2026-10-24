@@ -3,7 +3,7 @@
 1. Train on episode directories (any mix of the published sets or your own `simulate` output):
 
    ```bash
-   python examples/python/tiny_cnn/train.py datasets/default-train --epochs 10
+   python relpose/solution/examples/python/tiny_cnn/train.py datasets/default-train --epochs 10
    ```
 
    writes `solution/net.onnx`, `solution/weights.npz`, `solution/meta.json` (and `net.pt`).
@@ -11,7 +11,7 @@
 2. Bundle and test:
 
    ```bash
-   relpose bundle examples/python/tiny_cnn/solution -o tinynn.wasm
+   relpose bundle relpose/solution/examples/python/tiny_cnn/solution -o tinynn.wasm
    relpose check tinynn.wasm
    relpose evaluate tinynn.wasm datasets/default-val
    ```

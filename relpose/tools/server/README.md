@@ -7,8 +7,8 @@ an SQLite queue, the worker evaluates them one at a time on the hidden datasets 
 pip install -e ".[server,data]"
 mkdir -p server-data && printf "s3cr3t-token-1 alice\ns3cr3t-token-2 bob\n" > server-data/tokens.txt
 RELPOSE_DATASETS=/data/hidden/default:/data/hidden/blur:/data/hidden/lowlight:/data/hidden/oversaturated:/data/hidden/real \
-    python -m relpose.server.worker &
-uvicorn relpose.server.app:app --host 0.0.0.0 --port 8000
+    python -m relpose.tools.server.worker &
+uvicorn relpose.tools.server.app:app --host 0.0.0.0 --port 8000
 ```
 
 Students:

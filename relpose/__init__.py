@@ -1,22 +1,26 @@
-"""relpose: host-side toolkit of the relative pose-estimation challenge.
+"""relpose: compute-aware relative pose estimation challenge.
 
-Subpackages mirror the architecture: `abi` (the contract), `packaging` (directory -> solution.wasm), `evaluation`
-(solution.wasm -> numbers), `datasets` (episodes: storage, generation, real data), `server` (submissions).
+Two halves, split at the WebAssembly boundary:
+- `relpose.tools`    host side — runs, scores, serves: `abi` (the contract), `datasets`, `runner`, `server`, `cli`.
+- `relpose.solution` guest side — how a solution .wasm is built: toolchain, runtime/{native,python}, examples.
+                     Mostly files, not modules; the Python runtime's bundler is the one importable piece.
+
+`import relpose` gives the host-side essentials: Engine, Sandbox, Limits, StepResult, Episode, read_episode, evaluate.
 """
-from . import abi
-from .evaluation.engine import Engine
-from .evaluation.sandbox import Limits, Sandbox, SandboxError, SandboxTrap, StepResult
+from .tools import abi
+from .tools.runner.engine import Engine
+from .tools.runner.sandbox import Limits, Sandbox, SandboxError, SandboxTrap, StepResult
 
 __all__ = ["abi", "Engine", "Limits", "Sandbox", "SandboxError", "SandboxTrap", "StepResult", "Episode", "read_episode", "evaluate"]
 
 
 def __getattr__(name):  # heavier optional dependencies (cv2, yaml) load on first use
     if name in ("Episode", "read_episode"):
-        from . import datasets
+        from .tools import datasets
 
         return getattr(datasets, name)
     if name == "evaluate":
-        from .evaluation.run import evaluate
+        from .tools.runner.run import evaluate
 
         return evaluate
     raise AttributeError(name)

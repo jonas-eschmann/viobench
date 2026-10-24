@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "relpose"
 version = "0.1.0"
-description = "Compute-aware relative pose-estimation challenge: package, check and evaluate solution .wasm modules; episode datasets; submission server"
+description = "Compute-aware relative pose-estimation challenge: run and score solution .wasm modules, episode datasets, submission server, and the recipes to build a solution"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -22,13 +22,16 @@ server = ["fastapi", "uvicorn", "python-multipart"]
 dev = ["pytest", "opencv-python-headless>=4.9", "pyyaml>=6", "torch", "onnx"]
 
 [project.scripts]
-relpose = "relpose.cli:main"
+relpose = "relpose.tools.cli:main"
 
+# relpose.tools is the host side; relpose.solution is the guest side and consists of files, not modules, except the
+# Python runtime's bundler, reached through implicit namespace packages (no __init__.py in solution/runtime/python).
 [tool.setuptools.packages.find]
-include = ["relpose*"]
+include = ["relpose", "relpose.tools*", "relpose.solution", "relpose.solution.runtime", "relpose.solution.runtime.python", "relpose.solution.runtime.python.bundler"]
+namespaces = true
 
 [tool.setuptools.package-data]
-"relpose.datasets" = ["*.h.in"]
+"relpose.tools.datasets.generate" = ["*.h.in", "recipes/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

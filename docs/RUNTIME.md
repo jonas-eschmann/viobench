@@ -3,7 +3,7 @@
 `runtime.wasm` is CPython 3.14 with numpy and OpenCV compiled to `wasm32-wasip1` as a *reactor* that implements the
 solution ABI (`docs/ABI.md`). `relpose bundle <dir>` embeds your directory (zipped) into the module as a
 data segment and records its address in the runtime's bundle descriptor; nothing is compiled and the result is a
-self-contained module. At `init` the embedded shim (`submission/python/guest/relpose_guest.py`) finds the zip in its own memory,
+self-contained module. At `init` the embedded shim (`relpose/solution/runtime/python/guest/relpose_guest.py`) finds the zip in its own memory,
 installs an importer over it, imports `solution:Solution` and constructs it with the config; each `step` wraps the raw
 buffers in numpy arrays and calls `Solution.step`.
 
@@ -62,13 +62,13 @@ CNN through `cv2.dnn` ~12 M; 1 s of wall time corresponds to roughly 2 × 10¹�
 
 ## Native solutions
 
-C, C++ and Rust modules implement the same exports directly (`examples/native/cpp_minimal`); the bundle mechanism is only
+C, C++ and Rust modules implement the same exports directly (`relpose/solution/examples/native/cpp_minimal`); the bundle mechanism is only
 needed by the Python runtime. The harness treats both identically.
 
 ## Building the runtime (you)
 
-`submission/toolchain/build-image.sh` once, then `submission/python/build.sh` (runs `submission/python/cpython/build-wasm.sh`
+`relpose/solution/toolchain/build-image.sh` once, then `relpose/solution/runtime/python/build.sh` (runs `relpose/solution/runtime/python/cpython/build-wasm.sh`
 in the toolchain container, 10–15 min): produces `build/runtime/dist/runtime.wasm` (the reactor `relpose bundle` embeds
-your directory into) and `python.wasm` (a command-line Python for experiments: `submission/python/cpython/python.sh`).
-Patches, module lists and the frozen-stdlib mechanism are documented in `submission/python/README.md`; change them
+your directory into) and `python.wasm` (a command-line Python for experiments: `relpose/solution/runtime/python/cpython/python.sh`).
+Patches, module lists and the frozen-stdlib mechanism are documented in `relpose/solution/runtime/python/README.md`; change them
 freely, the contract is only the ABI. `tests/` exercises the result through the harness (`pytest`).

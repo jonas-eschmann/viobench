@@ -2,7 +2,7 @@
  *
  * A solution is a wasm32-wasip1 *reactor* that exports the functions declared below (plus `memory`). The harness
  * calls, per episode: _initialize (if present) -> init(config_json) -> alloc x3 -> step(...) x N. Anything may run
- * inside; this header is a convenience for C/C++ solutions, the Python runtime (submission/python/reactor.c) uses it
+ * inside; this header is a convenience for C/C++ solutions, the Python runtime (relpose/solution/runtime/python/reactor.c) uses it
  * too, so status codes exist in exactly one place.
  */
 #ifndef RELPOSE_ABI_H

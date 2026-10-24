@@ -2,7 +2,7 @@
 
 Use it as the template for your own: keep the class name `Solution`, the constructor signature and `step`.
 Bundle and check it with
-    relpose bundle examples/python/minimal -o minimal.wasm
+    relpose bundle relpose/solution/examples/python/minimal -o minimal.wasm
     relpose check minimal.wasm
 """
 import numpy as np

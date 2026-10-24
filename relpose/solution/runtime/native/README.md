@@ -5,13 +5,13 @@ A solution is any `wasm32-wasip1` reactor that exports the ABI in `relpose_abi.h
 few thousand fuel units of overhead instead of the interpreter's.
 
 ```bash
-submission/toolchain/build-image.sh                           # once: the image with wasi-sdk 34
-submission/native/build.sh examples/native/cpp_minimal        # cmake inside the image → examples/native/cpp_minimal/build/solution.wasm
-relpose check examples/native/cpp_minimal/build/solution.wasm
-relpose manifest examples/native/cpp_minimal/build/solution.wasm --channels 3 --resolution 640x480   # optional opt-ins
+relpose/solution/toolchain/build-image.sh                           # once: the image with wasi-sdk 34
+relpose/solution/runtime/native/build.sh relpose/solution/examples/native/cpp_minimal        # cmake inside the image → relpose/solution/examples/native/cpp_minimal/build/solution.wasm
+relpose check relpose/solution/examples/native/cpp_minimal/build/solution.wasm
+relpose manifest relpose/solution/examples/native/cpp_minimal/build/solution.wasm --channels 3 --resolution 640x480   # optional opt-ins
 ```
 
-Your own project: copy `examples/native/cpp_minimal`, keep `#include "relpose_abi.h"` and the two CMake lines
+Your own project: copy `relpose/solution/examples/native/cpp_minimal`, keep `#include "relpose_abi.h"` and the two CMake lines
 (`include(${RELPOSE_NATIVE_DIR}/relpose_reactor.cmake)`, `relpose_solution(<target>)`).
 
 Rules of the sandbox (`docs/RUNTIME.md` lists the Python-specific ones): `exit()`, `abort()` and uncaught C++ exceptions

@@ -10,7 +10,7 @@ RUNTIME = Path(os.environ.get("RELPOSE_RUNTIME", REPO / "build" / "runtime" / "d
 @pytest.fixture(scope="session")
 def runtime_path():
     if not RUNTIME.is_file():
-        pytest.skip(f"runtime.wasm not built ({RUNTIME}); run submission/python/build.sh")
+        pytest.skip(f"runtime.wasm not built ({RUNTIME}); run relpose/solution/runtime/python/build.sh")
     return RUNTIME
 
 

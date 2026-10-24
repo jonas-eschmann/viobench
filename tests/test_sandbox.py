@@ -6,8 +6,8 @@ import pytest
 from wasmtime import TrapCode
 
 from relpose import Limits, Sandbox, SandboxError, SandboxTrap, abi
-from relpose.packaging.bundle import bundle
-from relpose.abi.config import make_config
+from relpose.solution.runtime.python.bundler.bundle import bundle
+from relpose.tools.abi.config import make_config
 
 CONFIG = make_config(width=64, height=48, channels=1, num_frames=10)
 FRAME = (np.arange(48 * 64, dtype=np.uint32).reshape(48, 64) % 251).astype(np.uint8)
@@ -268,8 +268,8 @@ class Solution:
 
 
 def test_unbundle_roundtrip(runtime_path, solution_dir, tmp_path):
-    from relpose.packaging.bundle import unbundle
-    from relpose.packaging.embed import extract_bundle, runtime_descriptor, strip_bundle
+    from relpose.solution.runtime.python.bundler.bundle import unbundle
+    from relpose.solution.runtime.python.bundler.embed import extract_bundle, runtime_descriptor, strip_bundle
 
     directory = solution_dir(IDENTITY, {"data/w.npy": b"\x93NUMPY" + bytes(100), "pkg/__init__.py": "X = 1\n"})
     wasm = tmp_path / "s.wasm"
@@ -287,7 +287,7 @@ def test_unbundle_roundtrip(runtime_path, solution_dir, tmp_path):
 
 
 def strip_custom_manifest(wasm):
-    from relpose.packaging.wasm_binary import strip_custom
+    from relpose.tools.abi.wasm_binary import strip_custom
 
     return strip_custom(wasm, abi.MANIFEST_SECTION)
 
@@ -296,8 +296,8 @@ def test_abi_constants_match_the_guest_shim_and_the_native_header():
     from pathlib import Path
 
     repo = Path(__file__).resolve().parents[1]
-    shim = (repo / "submission" / "python" / "guest" / "relpose_guest.py").read_text()
-    header = (repo / "submission" / "native" / "relpose_abi.h").read_text()
+    shim = (repo / "relpose" / "solution" / "runtime" / "python" / "guest" / "relpose_guest.py").read_text()
+    header = (repo / "relpose" / "solution" / "runtime" / "native" / "relpose_abi.h").read_text()
     for name in ("STATUS_OK", "STATUS_NO_ESTIMATE", "STATUS_EXCEPTION", "STATUS_PROTOCOL", "STATUS_RUNTIME", "STATUS_NO_SOLUTION", "STATUS_NOT_FINITE"):
         assert f"{name} = {getattr(abi, name)}" in shim
         assert f"#define RELPOSE_{name} {getattr(abi, name)}" in header
@@ -329,7 +329,7 @@ class Solution:
     assert result.status == abi.STATUS_OK, sandbox.stderr_tail()
     np.testing.assert_array_equal(result.pose[:3], rgb[1, 2])
     # the manifest command rewrites the section; bundling again from a --channels flag overrides solution.json
-    from relpose.packaging.manifest import read_manifest, write_manifest
+    from relpose.tools.abi.manifest import read_manifest, write_manifest
 
     assert write_manifest(wasm, {"channels": 1})["channels"] == 1 and read_manifest(wasm.read_bytes())["channels"] == 1
     assert bundle(directory, wasm, runtime=runtime_path, channels=1)["channels"] == 1

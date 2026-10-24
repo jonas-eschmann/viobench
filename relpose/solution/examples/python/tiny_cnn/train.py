@@ -1,10 +1,10 @@
 """Train a tiny frame-pair + IMU network to predict the relative camera motion between consecutive frames.
 
-    python examples/python/tiny_cnn/train.py <episode dirs or dataset roots>... --epochs 10 --out examples/python/tiny_cnn/solution
+    python relpose/solution/examples/python/tiny_cnn/train.py <episode dirs or dataset roots>... --epochs 10 --out relpose/solution/examples/python/tiny_cnn/solution
 
 Writes net.pt (PyTorch), net.onnx (opset 13, loadable by cv2.dnn inside the wasm runtime), weights.npz (for the
 numpy fallback) and meta.json (normalisation constants) into the solution directory, which is then bundled with
-    relpose bundle examples/python/tiny_cnn/solution -o tinynn.wasm
+    relpose bundle relpose/solution/examples/python/tiny_cnn/solution -o tinynn.wasm
 The model is a demonstration of the tooling (PyTorch -> ONNX -> cv2.dnn in wasm), not a strong estimator.
 """
 import argparse
@@ -20,9 +20,9 @@ import torch
 sys.path.insert(0, str(Path(__file__).resolve().parent / "solution"))
 from preintegrate import exp_so3, log_so3, preintegrate  # noqa: E402  (shared with the solution)
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from relpose.datasets.storage import list_episodes, read_episode  # noqa: E402
-from relpose.evaluation.metrics import invert, poses_to_matrices  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))  # repository root
+from relpose.tools.datasets.storage import list_episodes, read_episode  # noqa: E402
+from relpose.tools.runner.metrics import invert, poses_to_matrices  # noqa: E402
 
 INPUT_WIDTH, INPUT_HEIGHT = 64, 48
 
@@ -94,8 +94,8 @@ def main():
     for path in episodes:
         add(read_episode(path))
     if arguments.generate:  # "infinite" data: straight from the simulator, with the public degradation conditions as augmentation
-        from relpose.datasets.simulation import SimConfig, simulate
-        from relpose.datasets.conditions import CONDITIONS
+        from relpose.tools.datasets.generate.simulation import SimConfig, simulate
+        from relpose.tools.datasets.generate.conditions import CONDITIONS
 
         rng = np.random.default_rng(arguments.generate_seed)
         for batch in range(arguments.generate):

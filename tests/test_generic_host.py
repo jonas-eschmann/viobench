@@ -8,8 +8,8 @@ import json
 import numpy as np
 import wasmtime
 
-from relpose.packaging.bundle import bundle
-from relpose.abi.config import make_config
+from relpose.solution.runtime.python.bundler.bundle import bundle
+from relpose.tools.abi.config import make_config
 
 SOLUTION = """
 import numpy as np

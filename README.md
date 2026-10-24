@@ -5,36 +5,39 @@ one WebAssembly module; we are unopinionated about what runs inside it. The eval
 (Wasmtime fuel) and places every submission on an accuracy-vs-compute curve.
 
 ```
- examples/ ──submission/ (Python runtime + relpose bundle | native toolchain)──▶ solution.wasm
-                                                                                     │
- datasets/ recipes ──relpose simulate (HyperDrone, GPU) / relpose convert-euroc──▶ episodes on disk
-                                                                                     ▼
-                                              relpose evaluate (wasmtime sandbox) ──▶ report.json ──▶ relpose leaderboard
-                                              relpose.server: upload → the same evaluate on hidden episodes → leaderboard
+                      ┌──────────────── relpose/solution (guest) ────────────────┐
+                      │ runtime/native: the ABI header      runtime/python: CPython+numpy+OpenCV reactor + bundler │
+                      │ examples/{native,python}: complete solutions                                             │
+                      └──────────────────────────────── builds ──▶ solution.wasm ─┘
+                                                                        │ fs (CLI) / http (server)
+┌──────────────────────────────── relpose/tools (host) ──────────────────▼──────────────────────────────┐
+│ datasets: episodes from disk (HyperDrone-generated, EuRoC-converted) or fresh from HyperDrone (ad hoc) │
+│ runner:   wasmtime sandbox, fuel + wall time per frame, ATE/RPE → report.json → leaderboard            │
+│ server:   upload → the same runner on hidden episodes → leaderboard;   cli: `relpose ...`              │
+└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 | directory | role |
 |---|---|
-| [`docs/`](docs/) | the task and scoring ([TASK](docs/TASK.md)), guides for [students](docs/STUDENT_GUIDE.md) and [instructors](docs/INSTRUCTOR_GUIDE.md), the contracts: [ABI](docs/ABI.md), [runtime](docs/RUNTIME.md), [data](docs/DATA.md) |
-| [`submission/`](submission/) | how a solution `.wasm` is made, by you: one toolchain image, a reference Python flavour (CPython + numpy + OpenCV runtime that `relpose bundle` embeds your directory into) and a reference native flavour (C/C++/Rust against `relpose_abi.h`) |
-| [`relpose/`](relpose/) | the host toolkit, `pip install -e .`: `abi` (the contract), `packaging` (directory ↔ `.wasm`), `evaluation` (`.wasm` → numbers), `datasets` (episodes: storage, generation, real data), `server` (submissions) |
-| [`examples/`](examples/) | complete solutions in both flavours: identity, IMU dead reckoning, KLT + essential matrix + IMU, a tiny CNN via `cv2.dnn`, a C++ reactor |
-| [`datasets/`](datasets/) | the recipes that produce the published and hidden episode sets (the data itself lives in `build/datasets/`) |
-| [`tests/`](tests/) | pytest suite mirroring the package; drives a real `runtime.wasm` through the harness |
+| [`relpose/tools/`](relpose/tools/) | host side (the importable package): `abi` (the contract), `datasets` (episodes, producers), `runner`, `server`, `cli` |
+| [`relpose/solution/`](relpose/solution/) | guest side: how a solution `.wasm` is made, by you — `toolchain/` (one Docker image), `runtime/{native,python}`, `examples/{native,python}` |
+| [`docs/`](docs/) | [TASK](docs/TASK.md) (what to estimate, scoring), [STUDENT_GUIDE](docs/STUDENT_GUIDE.md), [INSTRUCTOR_GUIDE](docs/INSTRUCTOR_GUIDE.md), contracts: [ABI](docs/ABI.md), [RUNTIME](docs/RUNTIME.md), [DATA](docs/DATA.md) |
+| [`tests/`](tests/) | pytest suite driving a real `runtime.wasm` through the harness |
 
 ## Quick start
 
 ```bash
 python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,data]"
-submission/toolchain/build-image.sh && submission/python/build.sh      # Docker; 10-15 min once → build/runtime/dist/runtime.wasm
-pytest                                                                 # ~50 tests through the harness
-relpose bundle examples/python/klt_imu -o klt.wasm && relpose check klt.wasm
-relpose evaluate klt.wasm build/datasets/public/default-val -o report-klt
+relpose/solution/toolchain/build-image.sh && relpose/solution/runtime/python/build.sh   # Docker; 10-15 min once → build/runtime/dist/runtime.wasm
+pytest
+relpose bundle relpose/solution/examples/python/klt_imu -o klt.wasm && relpose check klt.wasm
+relpose evaluate klt.wasm build/datasets/public/default-val -o report-klt         # episodes on disk
+relpose evaluate klt.wasm --simulate 8 --condition blur -o report-klt-blur        # fresh episodes from HyperDrone (GPU)
 relpose leaderboard report-* --plot leaderboard.png
 ```
 
-`relpose --help` lists the commands by role: packaging (`bundle`, `unbundle`, `manifest`), evaluation (`check`,
-`evaluate`, `leaderboard`), datasets (`simulate`, `convert-euroc`). Evaluation needs only wasmtime: no Docker, no GPU.
+`relpose --help` lists the commands by role: solution (`bundle`, `unbundle`, `manifest`), runner (`check`, `evaluate`,
+`leaderboard`), datasets (`simulate`, `convert-euroc`). Evaluation needs only wasmtime: no Docker, no GPU.
 
 ## Baselines
 
@@ -47,5 +50,5 @@ episodes in metres, median fuel per frame):
 | `examples/python/klt_imu` (KLT + essential matrix + IMU) | 4.3 | 4.1 | 4.1 | 4.2 | 4.8 | 140–600 M |
 | `examples/python/tiny_cnn` (CNN via `cv2.dnn`, trained on 8 episodes) | 1.2 | 1.2 | 1.4 | 2.3 | 3.8 | 12 M |
 
-A submission opts into RGB and/or 640 × 480 through its manifest (`solution.json` or `relpose manifest`); the harness
+A submission opts into RGB and/or 640 × 480 through its manifest (`solution.json` or `relpose manifest`); the runner
 resamples every episode per submission.

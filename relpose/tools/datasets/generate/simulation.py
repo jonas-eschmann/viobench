@@ -1,12 +1,12 @@
 """Episode generator on HyperDrone: random autopilot flights through ProcTHOR/HSSD scenes, rendered at IMU rate.
 
-    from relpose.datasets.simulation import SimConfig, simulate
+    from relpose.tools.datasets.generate.simulation import SimConfig, simulate
     for episode in simulate(SimConfig(), seeds=range(4), condition="default"):
         ...
 
 Needs `pip install hyperdrone` and a GPU (the environment module is JIT-compiled per configuration on first use;
-the rendered spec header's hash is the key). Frames are RGB uint8 after the camera/ISP model (relpose.datasets.camera)
-with per-episode parameters drawn from the condition's public ranges (relpose.datasets.conditions); solutions receive
+the rendered spec header's hash is the key). Frames are RGB uint8 after the camera/ISP model (relpose.tools.datasets.generate.camera)
+with per-episode parameters drawn from the condition's public ranges (relpose.tools.datasets.generate.conditions); solutions receive
 grayscale unless they opt into RGB (Episode.as_channels).
 """
 import hashlib
@@ -19,12 +19,12 @@ from pathlib import Path
 
 import numpy as np
 
-from .. import abi
-from ..abi.config import make_config, pinhole_intrinsics
-from ..evaluation.metrics import matrix_to_quaternion, quaternion_to_matrix
+from ... import abi
+from ...abi.config import make_config, pinhole_intrinsics
+from ...geometry import matrix_to_quaternion, quaternion_to_matrix
+from ..episode import Episode
 from .camera import apply, luminance, srgb_to_linear
 from .conditions import sample as sample_condition
-from .episode import Episode
 
 TEMPLATE = Path(__file__).with_name("hyperdrone_world.h.in")
 CACHE_VARIABLE = "RELPOSE_CACHE"
@@ -135,7 +135,7 @@ def simulate(sim, seeds, scenes=None, condition="default", scene_names=None, log
                 env.close()
             if header is None:
                 header = sim.render_header(200.0)
-            env = hyperdrone.HyperDrone([reference], config=hyperdrone.Config(num_worlds=1, hyperdrone_world=str(header)), seed=int(seed))
+            env = hyperdrone.HyperDrone([reference], config=hyperdrone.Config(num_worlds=1, spec_header=str(header)), seed=int(seed))
             current_scene = scene_name
             imu_rate = float(round(1.0 / float(env.dt)))
             if header.name != sim.render_header(imu_rate).name:  # the preset's IMU rate differs from the assumed 200 Hz
@@ -234,7 +234,7 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
             imu=imu_rows[:, instance, :],
             ground_truth=ground_truth[:, instance, :],
             T_body_camera=T_body_camera,
-            meta={"source": "hyperdrone", "scene": scene_name, "seed": seed, "instance": instance, "condition": condition,
+            meta={"dataset": f"sim-{condition}", "source": "hyperdrone", "scene": scene_name, "seed": seed, "instance": instance, "condition": condition,
                   "sensor": params.as_dict(), "sub_frames": k, "spawn": spawns[instance], "hyperdrone": _versions(),
                   "sim": asdict(sim)},
         )

@@ -3,7 +3,7 @@
 A submission is one WebAssembly file (`wasm32-wasip1`, *reactor*: no `_start`). The harness instantiates it once per
 episode, calls `init` with a JSON config, then `step` once per camera frame, and reads a pose back after each step.
 State lives inside the module between steps. The Python runtime (`runtime.wasm`) implements this ABI for you; C, C++
-and Rust solutions implement it directly (`examples/native/cpp_minimal`).
+and Rust solutions implement it directly (`relpose/solution/examples/native/cpp_minimal`).
 
 ## Exports
 

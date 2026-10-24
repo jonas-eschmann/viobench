@@ -1,15 +1,16 @@
-"""On-disk episode format: the EuRoC/ASL directory layout plus episode.json.
+"""On-disk episode format: the EuRoC/ASL directory layout plus episode.json — the file-system Dataset provider.
 
     <episode>/episode.json                               our config + metadata (format, condition, source, frame count)
     <episode>/mav0/cam0/data.csv                         "#timestamp [ns],filename"
-    <episode>/mav0/cam0/data/<timestamp ns>.png          8-bit grayscale (or RGB) PNG
+    <episode>/mav0/cam0/data/<timestamp ns>.png          8-bit RGB (simulated) or grayscale (real) PNG
     <episode>/mav0/cam0/sensor.yaml                      Kalibr-style intrinsics and T_BS (camera in body)
     <episode>/mav0/imu0/data.csv                         "#timestamp [ns],w_x,w_y,w_z [rad s^-1],a_x,a_y,a_z [m s^-2]"
     <episode>/mav0/imu0/sensor.yaml                      noise densities, rate
     <episode>/mav0/state_groundtruth_estimate0/data.csv  "#timestamp,p_x,p_y,p_z [m],q_w,q_x,q_y,q_z,..." body in world
 
 Identical for simulated and real episodes, and readable by evo / ORB-SLAM / OpenVINS tooling. Timestamps are
-integer nanoseconds in the files and float seconds (relative to the first IMU sample) in memory.
+integer nanoseconds in the files and float seconds (relative to the first IMU sample) in memory. Frames are read on
+demand by default (`FrameSequence`), so episodes of any length cost little memory.
 """
 import json
 from pathlib import Path
@@ -18,7 +19,7 @@ import cv2
 import numpy as np
 import yaml
 
-from .episode import Episode
+from .episode import Episode, FrameSequence
 
 FORMAT = 1
 CAM_HEADER = "#timestamp [ns],filename"
@@ -97,7 +98,7 @@ def write_episode(episode, directory, origin_ns=0, png_compression=1):
         "duration_s": episode.duration,
         "origin_ns": int(origin_ns),
         "config": episode.config,
-        "meta": episode.meta,
+        "meta": {key: value for key, value in episode.meta.items() if key != "dataset"},
     }
     (directory / "episode.json").write_text(json.dumps(manifest, indent=1, sort_keys=True, default=_json_default))
     return directory
@@ -117,7 +118,15 @@ def _read_csv(path):
     return stamps, rows
 
 
-def read_episode(directory, load_frames=True):
+def _read_png(path, channels):
+    image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE if channels == 1 else cv2.IMREAD_COLOR)
+    if image is None:
+        raise OSError(f"could not read {path}")
+    return image if channels == 1 else cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+
+
+def read_episode(directory, frames="lazy", dataset=None):
+    """frames: "lazy" (decode PNGs on demand, default), "memory" (load everything), "none" (metadata only)."""
     directory = Path(directory)
     manifest = json.loads((directory / "episode.json").read_text())
     if manifest.get("format") != FORMAT:
@@ -129,16 +138,14 @@ def read_episode(directory, load_frames=True):
     frame_ns = names[:, 0].astype(np.int64)
     frame_times = (frame_ns - origin_ns) / 1e9
     channels = int(config["image"].get("channels", 1))
-    if load_frames:
-        frames = []
-        for name in names[:, 1]:
-            image = cv2.imread(str(cam / "data" / name), cv2.IMREAD_GRAYSCALE if channels == 1 else cv2.IMREAD_COLOR)
-            if image is None:
-                raise OSError(f"could not read {cam / 'data' / name}")
-            frames.append(image if channels == 1 else cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-        frames = np.stack(frames)
+    paths = [cam / "data" / name for name in names[:, 1]]
+    shape = (int(config["image"]["height"]), int(config["image"]["width"])) + (() if channels == 1 else (channels,))
+    if frames == "none":
+        frame_data = FrameSequence(lambda index: (_ for _ in ()).throw(RuntimeError("frames were not loaded")), len(paths), shape)
     else:
-        frames = np.zeros((len(frame_times), 0), dtype=np.uint8)
+        frame_data = FrameSequence(lambda index: _read_png(paths[index], channels), len(paths), shape)
+        if frames == "memory":
+            frame_data = frame_data.materialize()
 
     imu_ns, imu_rows = _read_csv(directory / "mav0" / "imu0" / "data.csv")
     imu = np.column_stack([(imu_ns - origin_ns) / 1e9, imu_rows[:, 4:7], imu_rows[:, 1:4]])  # file: gyro then accel
@@ -148,7 +155,10 @@ def read_episode(directory, load_frames=True):
 
     cam_yaml = yaml.safe_load((cam / "sensor.yaml").read_text())
     T_body_camera = np.asarray(cam_yaml["T_BS"]["data"], dtype=float).reshape(4, 4)
-    return Episode(manifest.get("name", directory.name), config, frame_times, frames, imu, ground_truth, T_body_camera, manifest.get("meta", {}))
+    meta = dict(manifest.get("meta", {}))
+    meta["dataset"] = dataset or directory.parent.name
+    meta["path"] = str(directory)
+    return Episode(manifest.get("name", directory.name), config, frame_times, frame_data, imu, ground_truth, T_body_camera, meta)
 
 
 def list_episodes(root):
@@ -157,3 +167,15 @@ def list_episodes(root):
     if (root / "episode.json").is_file():
         return [root]
     return sorted(path.parent for path in root.glob("*/episode.json"))
+
+
+def episodes(roots, frames="lazy"):
+    """The file-system Dataset provider: yields the episodes under each root (dataset name = the root's directory name)."""
+    for root in ([roots] if isinstance(roots, (str, Path)) else roots):
+        root = Path(root)
+        directories = list_episodes(root)
+        if not directories:
+            raise FileNotFoundError(f"no episodes under {root}")
+        name = root.name if not (root / "episode.json").is_file() else root.parent.name
+        for directory in directories:
+            yield read_episode(directory, frames=frames, dataset=name)

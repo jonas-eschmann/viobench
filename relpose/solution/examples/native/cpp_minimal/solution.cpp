@@ -1,6 +1,6 @@
-// Minimal native solution: a wasm32-wasip1 reactor implementing the relpose ABI (submission/native/relpose_abi.h) without
+// Minimal native solution: a wasm32-wasip1 reactor implementing the relpose ABI (relpose/solution/runtime/native/relpose_abi.h) without
 // Python. It reports the identity pose and shows where to put state and how to read the config.
-// Build:  submission/native/build.sh examples/native/cpp_minimal   ->   build/solution.wasm
+// Build:  relpose/solution/runtime/native/build.sh relpose/solution/examples/native/cpp_minimal   ->   build/solution.wasm
 #include "relpose_abi.h"
 
 #include <cmath>

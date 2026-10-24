@@ -1,4 +1,4 @@
-"""Guest-side glue between submission/python/reactor.c and the student's solution; frozen into runtime.wasm.
+"""Guest-side glue between relpose/solution/runtime/python/reactor.c and the student's solution; frozen into runtime.wasm.
 
 init() receives the config JSON and (when the wasm carries one) the zip of the student's directory, makes the
 zip importable, imports the entry point (default `solution:Solution`) and constructs it. step() wraps the raw

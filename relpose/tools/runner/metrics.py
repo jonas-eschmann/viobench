@@ -8,67 +8,9 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
+from ..geometry import invert, matrices_to_poses, matrix_to_quaternion, poses_to_matrices, quaternion_to_matrix, rotation_angles  # noqa: F401 (re-exported)
+
 MAX_ERROR_ROTATION = np.pi
-
-
-def quaternion_to_matrix(q):
-    """(..., 4) [x, y, z, w] -> (..., 3, 3)."""
-    q = np.asarray(q, dtype=float)
-    q = q / np.linalg.norm(q, axis=-1, keepdims=True)
-    x, y, z, w = np.moveaxis(q, -1, 0)
-    return np.stack([
-        np.stack([1 - 2 * (y * y + z * z), 2 * (x * y - w * z), 2 * (x * z + w * y)], -1),
-        np.stack([2 * (x * y + w * z), 1 - 2 * (x * x + z * z), 2 * (y * z - w * x)], -1),
-        np.stack([2 * (x * z - w * y), 2 * (y * z + w * x), 1 - 2 * (x * x + y * y)], -1),
-    ], -2)
-
-
-def matrix_to_quaternion(R):
-    """(..., 3, 3) -> (..., 4) [x, y, z, w] with w >= 0 (Shepperd's method, vectorised)."""
-    R = np.asarray(R, dtype=float)
-    m00, m01, m02 = R[..., 0, 0], R[..., 0, 1], R[..., 0, 2]
-    m10, m11, m12 = R[..., 1, 0], R[..., 1, 1], R[..., 1, 2]
-    m20, m21, m22 = R[..., 2, 0], R[..., 2, 1], R[..., 2, 2]
-    trace = m00 + m11 + m22
-    candidates = np.stack([
-        np.stack([m21 - m12, m02 - m20, m10 - m01, 1 + trace], -1),  # w largest
-        np.stack([1 + m00 - m11 - m22, m01 + m10, m02 + m20, m21 - m12], -1),  # x largest
-        np.stack([m01 + m10, 1 + m11 - m00 - m22, m12 + m21, m02 - m20], -1),  # y largest
-        np.stack([m02 + m20, m12 + m21, 1 + m22 - m00 - m11, m10 - m01], -1),  # z largest
-    ], -2)
-    pivots = np.stack([trace, m00, m11, m22], -1)
-    best = np.argmax(pivots, axis=-1)
-    q = np.take_along_axis(candidates, best[..., None, None], axis=-2)[..., 0, :]
-    q = q / np.linalg.norm(q, axis=-1, keepdims=True)
-    return np.where(q[..., 3:4] < 0, -q, q)
-
-
-def poses_to_matrices(poses):
-    poses = np.asarray(poses, dtype=float)
-    T = np.tile(np.eye(4), (len(poses), 1, 1))
-    T[:, :3, :3] = quaternion_to_matrix(poses[:, 3:7])
-    T[:, :3, 3] = poses[:, :3]
-    return T
-
-
-def matrices_to_poses(T):
-    T = np.asarray(T, dtype=float)
-    return np.concatenate([T[:, :3, 3], matrix_to_quaternion(T[:, :3, :3])], axis=1)
-
-
-def invert(T):
-    T = np.asarray(T, dtype=float)
-    out = np.tile(np.eye(4), T.shape[:-2] + (1, 1))
-    Rt = np.swapaxes(T[..., :3, :3], -1, -2)
-    out[..., :3, :3] = Rt
-    out[..., :3, 3] = -np.einsum("...ij,...j->...i", Rt, T[..., :3, 3])
-    return out
-
-
-def rotation_angles(R):
-    """Geodesic rotation angle of each (..., 3, 3) matrix."""
-    trace = np.einsum("...ii->...", R)
-    return np.arccos(np.clip((trace - 1.0) / 2.0, -1.0, 1.0))
 
 
 def umeyama_sim3(source, target):

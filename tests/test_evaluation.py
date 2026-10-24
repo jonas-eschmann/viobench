@@ -3,9 +3,9 @@ import json
 
 import numpy as np
 
-from relpose.packaging.bundle import bundle
-from relpose.datasets.storage import write_episode
-from relpose.evaluation.run import evaluate
+from relpose.solution.runtime.python.bundler.bundle import bundle
+from relpose.tools.datasets.storage import write_episode
+from relpose.tools.runner.run import evaluate
 from tests.test_datasets import synthetic_episode
 
 PERFECT = """
@@ -98,3 +98,34 @@ class Solution:
     assert estimate[0, 1] == 640 and estimate[0, 2] == 480 and estimate[0, 4] == 1.0  # upscaled from 64x48
     assert estimate[0, 3] == pytest.approx(episode.config["camera"]["fx"] * 10)
     assert report["summary"]["overall"]["completed"] == 1
+
+
+def test_evaluate_accepts_an_in_memory_dataset(engine, runtime_path, solution_dir, tmp_path):
+    """The ad-hoc provider path: a list of Episodes, nothing on disk (this is what --simulate feeds the runner)."""
+    import io
+
+    episode = synthetic_episode(n_frames=5, width=64, height=48)
+    episode.meta["dataset"] = "adhoc"
+    gt = episode.ground_truth_relative()
+    buffer = io.BytesIO()
+    np.save(buffer, gt)
+    wasm = tmp_path / "perfect.wasm"
+    bundle(solution_dir(PERFECT, {"gt.npy": buffer.getvalue()}, name="perfect"), wasm, runtime=runtime_path)
+    report = evaluate(wasm, [episode, episode], output_dir=tmp_path / "report", engine=engine, log=lambda *a: None)
+    assert report["summary"]["overall"]["episodes"] == 2 and list(report["summary"]["datasets"]) == ["adhoc"]
+    assert report["episodes"][0]["metrics"]["ate_rmse"] < 1e-9
+
+
+def test_streamed_frames_from_disk(tmp_path):
+    from relpose.tools.datasets.episode import FrameSequence
+    from relpose.tools.datasets.storage import episodes, read_episode
+
+    episode = synthetic_episode(n_frames=6, width=32, height=24)
+    write_episode(episode, tmp_path / "set" / episode.name)
+    lazy = read_episode(tmp_path / "set" / episode.name)
+    assert isinstance(lazy.frames, FrameSequence) and lazy.frames.shape == (6, 24, 32) and lazy.channels == 1
+    np.testing.assert_array_equal(lazy.frames[3], episode.frames[3])
+    np.testing.assert_array_equal(np.asarray(lazy.frames), episode.frames)
+    config, frames = lazy.adapt(channels=3, resolution=(64, 48))
+    assert isinstance(frames, FrameSequence) and frames.shape == (6, 48, 64, 3)
+    assert next(iter(episodes([tmp_path / "set"]))).dataset == "set"

@@ -1,6 +1,6 @@
 """Public parameter ranges of the dataset conditions (the held-out sets draw their exact values from these ranges).
 
-A condition fixes how a rendered IMU-rate sub-frame stack becomes a camera frame (relpose.datasets.camera): exposure time
+A condition fixes how a rendered IMU-rate sub-frame stack becomes a camera frame (relpose.tools.datasets.generate.camera): exposure time
 (number of sub-frames integrated), exposure scaling, noise. Students may use `sample(condition, rng)` as training
 augmentation; the hidden evaluation seeds are not published.
 """

@@ -3,7 +3,7 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-BUILD=${BUILD:-$HERE/../../../build/runtime}
+BUILD=${BUILD:-$HERE/../../../../../build/runtime}
 VENV=${VENV:-/opt/venv}
 WASMTIME=${WASMTIME:-$(command -v wasmtime)}
 TESTS=$BUILD/tests

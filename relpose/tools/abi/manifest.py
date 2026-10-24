@@ -1,7 +1,8 @@
 """The manifest: what a module declares to the harness before it runs.
 
 `{"entry": "module:Class", "channels": 1 | 3, "resolution": [320, 240] | [640, 480]}` — stored as the custom section
-`relpose.manifest`. Python solutions write it with `solution.json` next to `solution.py` (the bundler copies it into
+`relpose.manifest`. Reading is part of the contract (the runner needs it before instantiation); writing is done by the
+Python runtime's bundler or by `relpose manifest` for native modules. Python solutions write it with `solution.json` next to `solution.py` (the bundler copies it into
 the section); native modules add it with `relpose manifest solution.wasm --channels 3 --resolution 640x480`. Missing
 keys mean the defaults (grayscale, 320×240, `solution:Solution`).
 """
@@ -10,8 +11,7 @@ import json
 import zipfile
 from pathlib import Path
 
-from .. import abi
-from . import PackagingError
+from . import (BUNDLE_MANIFEST, DEFAULT_CHANNELS, MANIFEST_SECTION, SUPPORTED_CHANNELS, SUPPORTED_RESOLUTIONS, AbiError)
 from .wasm_binary import append_custom, find_custom
 
 MANIFEST_KEYS = {"entry", "channels", "resolution", "format"}
@@ -22,48 +22,48 @@ def parse_resolution(value):
     if isinstance(value, str):
         parts = value.lower().replace("×", "x").split("x")
         if len(parts) != 2:
-            raise PackagingError(f"resolution must look like 640x480, got {value!r}")
+            raise AbiError(f"resolution must look like 640x480, got {value!r}")
         value = parts
     try:
         width, height = (int(v) for v in value)
     except (TypeError, ValueError):
-        raise PackagingError(f"resolution must be [width, height], got {value!r}") from None
+        raise AbiError(f"resolution must be [width, height], got {value!r}") from None
     return width, height
 
 
 def validate_manifest(manifest):
-    channels = manifest.get("channels", abi.DEFAULT_CHANNELS)
-    if channels not in abi.SUPPORTED_CHANNELS:
-        raise PackagingError(f"manifest channels must be one of {abi.SUPPORTED_CHANNELS}, got {channels!r}")
+    channels = manifest.get("channels", DEFAULT_CHANNELS)
+    if channels not in SUPPORTED_CHANNELS:
+        raise AbiError(f"manifest channels must be one of {SUPPORTED_CHANNELS}, got {channels!r}")
     if "resolution" in manifest:
         resolution = parse_resolution(manifest["resolution"])
-        if resolution not in abi.SUPPORTED_RESOLUTIONS:
-            raise PackagingError(f"manifest resolution must be one of {['x'.join(map(str, r)) for r in abi.SUPPORTED_RESOLUTIONS]}, got {manifest['resolution']!r}")
+        if resolution not in SUPPORTED_RESOLUTIONS:
+            raise AbiError(f"manifest resolution must be one of {['x'.join(map(str, r)) for r in SUPPORTED_RESOLUTIONS]}, got {manifest['resolution']!r}")
         manifest["resolution"] = list(resolution)
     unknown = set(manifest) - MANIFEST_KEYS
     if unknown:
-        raise PackagingError(f"unknown manifest keys {sorted(unknown)} (known: {sorted(MANIFEST_KEYS)})")
+        raise AbiError(f"unknown manifest keys {sorted(unknown)} (known: {sorted(MANIFEST_KEYS)})")
     return manifest
 
 
 def read_manifest(wasm):
     """Manifest dict of a module: the relpose.manifest section, else solution.json inside an embedded bundle, else {}."""
-    section = find_custom(wasm, abi.MANIFEST_SECTION)
+    section = find_custom(wasm, MANIFEST_SECTION)
     if section is not None:
         return json.loads(section.decode("utf-8"))
-    from .embed import extract_bundle  # the bundler imports this module; keep the dependency one-way at import time
+    from .module import embedded_bundle
 
-    payload = extract_bundle(wasm)
+    payload = embedded_bundle(wasm)
     if payload is not None:
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-            if abi.BUNDLE_MANIFEST in archive.namelist():
-                return json.loads(archive.read(abi.BUNDLE_MANIFEST).decode("utf-8"))
+            if BUNDLE_MANIFEST in archive.namelist():
+                return json.loads(archive.read(BUNDLE_MANIFEST).decode("utf-8"))
     return {}
 
 
 def with_manifest(wasm, manifest):
     """The binary with its manifest section replaced."""
-    return append_custom(wasm, abi.MANIFEST_SECTION, json.dumps(validate_manifest(dict(manifest)), sort_keys=True).encode("utf-8"))
+    return append_custom(wasm, MANIFEST_SECTION, json.dumps(validate_manifest(dict(manifest)), sort_keys=True).encode("utf-8"))
 
 
 def write_manifest(wasm_path, updates):

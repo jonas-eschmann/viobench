@@ -27,7 +27,7 @@ estimate for frame `k` is final once `step` returns.
 
 ## Scoring
 
-Per episode (`relpose.evaluation.metrics`):
+Per episode (`relpose.tools.runner.metrics`):
 
 - **ATE** – RMSE of the position error over all frames, in the frame-0 coordinates, *without* any alignment (frame 0
   defines the frame; a missing/invalid estimate counts with the error of a stationary estimator, i.e. the ground-truth
@@ -38,7 +38,7 @@ Per episode (`relpose.evaluation.metrics`):
 - diagnostics: Sim(3)-aligned ATE and the fitted scale (separates "wrong scale" from "wrong shape"), coverage,
   final drift per metre travelled.
 
-Compute (`relpose.evaluation.run`):
+Compute (`relpose.tools.runner.run`):
 
 - **fuel per frame** (median and 95th percentile): Wasmtime's deterministic instruction count for your `step`
   (host calls are free, the interpreter's own work is not). It is identical on your laptop and on the server.
@@ -49,7 +49,7 @@ ATE and median fuel per frame over its episodes. A submission is a point in the 
 your submissions together form your curve. Failures (trap, exceptions on 10 consecutive frames, protocol errors)
 mark an episode failed: its ATE is the stationary-estimator error and it stays on the record.
 
-## Limits (default `Limits` in `relpose.evaluation.sandbox`)
+## Limits (default `Limits` in `relpose.tools.runner.sandbox`)
 
 | | |
 |---|---|

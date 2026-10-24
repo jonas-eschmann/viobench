@@ -12,11 +12,12 @@ import os
 import zipfile
 from pathlib import Path
 
-from .. import abi
-from . import PackagingError
+from relpose.tools import abi
+from relpose.tools.abi.manifest import parse_resolution, read_manifest, validate_manifest, with_manifest
+from relpose.tools.abi.wasm_binary import strip_custom
+
+from . import BundleError as PackagingError
 from .embed import embed_bundle, extract_bundle, strip_bundle
-from .manifest import parse_resolution, read_manifest, validate_manifest, with_manifest
-from .wasm_binary import strip_custom
 
 IGNORED_DIRECTORIES = {"__pycache__", ".git", ".hg", ".svn", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea", ".vscode", "node_modules"}
 IGNORED_SUFFIXES = {".pyc", ".pyo"}
@@ -24,7 +25,6 @@ SIZE_WARNING_BYTES = 64 << 20
 RUNTIME_VARIABLE = "RELPOSE_RUNTIME"
 ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 
-BundleError = PackagingError  # historical alias
 
 
 def default_runtime():
@@ -32,12 +32,12 @@ def default_runtime():
     candidates = []
     if os.environ.get(RUNTIME_VARIABLE):
         candidates.append(Path(os.environ[RUNTIME_VARIABLE]))
-    here = Path(__file__).resolve().parents[1]
-    candidates += [here / "runtime.wasm", here.parent / "build" / "runtime" / "dist" / "runtime.wasm"]
+    repo = Path(__file__).resolve().parents[5]  # bundler/ python/ runtime/ solution/ relpose/ <repo>
+    candidates += [repo / "build" / "runtime" / "dist" / "runtime.wasm"]
     for candidate in candidates:
         if candidate.is_file():
             return candidate
-    raise PackagingError(f"runtime.wasm not found; build it with submission/python/build.sh, pass --runtime or set {RUNTIME_VARIABLE} "
+    raise PackagingError(f"runtime.wasm not found; build it with relpose/solution/runtime/python/build.sh, pass --runtime or set {RUNTIME_VARIABLE} "
                          f"(looked at {[str(c) for c in candidates]})")
 
 

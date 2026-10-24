@@ -15,7 +15,7 @@ One directory per episode, EuRoC/ASL layout so that standard VIO tooling (evo, O
   mav0/state_groundtruth_estimate0/data.csv     "#timestamp,p_x,p_y,p_z,q_w,q_x,q_y,q_z"    body (IMU) pose in the world
 ```
 
-`relpose.datasets.read_episode(dir)` loads it into an `Episode` (frames, frame times, IMU rows `[t, a, g]`, ground truth,
+`relpose.tools.datasets.read_episode(dir)` loads it into an `Episode` (frames, frame times, IMU rows `[t, a, g]`, ground truth,
 `T_body_camera`, config); `episode.ground_truth_relative()` gives the `T_c0_ck` poses a perfect solution would output
 (ground truth interpolated to each frame's mid-exposure time, moved into the camera frame via the extrinsics, re-based
 on frame 0). `episode.steps()` yields `(t, frame, imu_window)` exactly as the harness feeds a solution;
@@ -36,7 +36,7 @@ A 10 s episode at 640 × 480 is ~60 MB (RGB PNG).
   average of the sub-frames inside the shutter interval (box shutter, linear radiance) → motion blur is physically
   consistent with the trajectory. The horizontal FOV is drawn per episode from 63.8° ± 15°; intrinsics are in the
   config. The camera is an ideal pinhole, no distortion, no rolling shutter.
-- Camera/ISP model (`relpose.datasets.camera`): exposure scaling, per-channel photon shot noise (full-well capacity;
+- Camera/ISP model (`relpose.tools.datasets.generate.camera`): exposure scaling, per-channel photon shot noise (full-well capacity;
   Gaussian approximation of the Poisson count), Gaussian read noise, digital gain, clipping, sRGB encoding, 8-bit
   quantisation.
 - Determinism: a seed fixes the scene, spawn, route, IMU noise and ISP draws *on one machine and build*
@@ -53,10 +53,10 @@ A 10 s episode at 640 × 480 is ~60 MB (RGB PNG).
 | `lowlight` | 5–20 ms | 0.02–0.1 | 0.005–0.02 | 500–3000 e⁻ | under-exposed then gained up: noise, crushed shadows |
 | `oversaturated` | 1–5 ms | 2–5 | 0.001–0.004 | 10k–40k e⁻ | large clipped areas |
 
-`relpose.datasets.conditions.sample(condition, rng)` draws a parameter set the way the generator does — use it (and
-`relpose.datasets.camera.apply`) as training augmentation, or simply call `simulate(..., condition=...)`; the same code
+`relpose.tools.datasets.generate.conditions.sample(condition, rng)` draws a parameter set the way the generator does — use it (and
+`relpose.tools.datasets.generate.camera.apply`) as training augmentation, or simply call `simulate(..., condition=...)`; the same code
 produces the hidden sets with other seeds. There is no pre-rendered training set: generate what you need on the lab
-machines (`examples/python/tiny_cnn/train.py --generate N` shows training straight from the generator).
+machines (`relpose/solution/examples/python/tiny_cnn/train.py --generate N` shows training straight from the generator).
 
 ### Published sets
 
@@ -82,7 +82,7 @@ snippets start mid-flight (`hover_seconds` = 0 — no stationary window).
 
 ## Metrics
 
-`relpose.evaluation.metrics.evaluate_trajectory(ground_truth, estimate, timestamps)` → ATE (no alignment), rotation RMSE, RPE at
+`relpose.tools.runner.metrics.evaluate_trajectory(ground_truth, estimate, timestamps)` → ATE (no alignment), rotation RMSE, RPE at
 1 s, Sim(3)-aligned ATE and scale, coverage, final drift. `relpose evaluate solution.wasm <dataset dirs>`
 writes `report.json` with per-episode metrics, fuel and wall-time statistics, plus `estimate.tum` per episode
 (`t x y z qx qy qz qw`, loadable with `evo_traj tum`).

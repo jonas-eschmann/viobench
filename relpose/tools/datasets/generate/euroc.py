@@ -13,8 +13,8 @@ import cv2
 import numpy as np
 import yaml
 
-from ..abi.config import make_config
-from .episode import Episode
+from ...abi.config import make_config
+from ..episode import Episode
 
 SOURCE_NAME = "euroc"
 

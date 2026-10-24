@@ -1,8 +1,8 @@
-"""FastAPI submission server.  Run:  uvicorn relpose.server.app:app --host 0.0.0.0 --port 8000
+"""FastAPI submission server.  Run:  uvicorn relpose.tools.server.app:app --host 0.0.0.0 --port 8000
 
 Environment: RELPOSE_SERVER_DIR (uploads, reports, sqlite; default ./server-data), RELPOSE_TOKENS (file with
 "token user" lines; default <dir>/tokens.txt), RELPOSE_MAX_UPLOAD_MIB (128), RELPOSE_DAILY_QUOTA (20).
-The evaluation itself is done by `relpose.server.worker`, which polls the queue.
+The evaluation itself is done by `relpose.tools.server.worker`, which polls the queue.
 """
 import html
 import json
@@ -12,9 +12,9 @@ import time
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from ..packaging import PackagingError
-from ..packaging.embed import runtime_descriptor
-from ..packaging.wasm_binary import iter_sections
+from ..abi import AbiError
+from ..abi.module import runtime_descriptor
+from ..abi.wasm_binary import iter_sections
 from .store import DAILY_QUOTA, MAX_UPLOAD_BYTES, Store
 
 app = FastAPI(title="relpose challenge")
@@ -51,7 +51,7 @@ async def submit(file: UploadFile = File(...), label: str = Form(""), x_token: s
         raise HTTPException(status_code=400, detail="empty module")
     try:
         descriptor = runtime_descriptor(data)
-    except PackagingError as error:
+    except AbiError as error:
         raise HTTPException(status_code=400, detail=str(error)) from None
     if descriptor is not None and descriptor.length == 0:
         raise HTTPException(status_code=400, detail="this is the bare Python runtime without solution code: run `relpose bundle`")
