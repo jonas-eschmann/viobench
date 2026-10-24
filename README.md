@@ -18,7 +18,7 @@ HyperDrone, the metrics, baselines, and the submission server.
 ## How it fits together
 
 ```
- student directory ──bundle──▶ solution.wasm = runtime.wasm + zip (custom section)
+ student directory ──bundle──▶ solution.wasm = runtime.wasm + zip (data segment) + manifest (custom section)
                                    │
  episode on disk (EuRoC layout) ───┤ eecs116.Solution: wasmtime, fuel + wall-time per step, memory cap
    frames + IMU + ground truth     ▼
@@ -28,7 +28,7 @@ HyperDrone, the metrics, baselines, and the submission server.
 ```
 
 - `runtime.wasm` (`wasm-python/`, `runtime/`): CPython 3.14 + numpy + OpenCV (incl. `dnn` for ONNX) as a wasip1
-  reactor exporting `init`/`step`; the student's directory is appended as a custom section, no toolchain needed.
+  reactor exporting `init`/`step`; the student's directory is embedded as a data segment (self-contained module), no toolchain needed.
   Frames are 320 × 240 grayscale by default; a submission opts into RGB and/or 640 × 480 through its manifest
   (`eecs116.json` / `eecs116 manifest`); episodes are stored at 640 × 480 and resampled per submission.
 - `eecs116/` (pip package): `bundle`, `manifest`, `check`, `evaluate`, `simulate`, `convert-euroc`, `leaderboard` commands; the

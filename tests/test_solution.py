@@ -237,8 +237,58 @@ def test_dev_mode_mounts_the_directory(runtime, runtime_path, solution_dir, tmp_
 
 def test_bare_runtime_without_code_is_refused(runtime, runtime_path, tmp_path):
     solution = Solution(runtime_path, runtime, log_dir=tmp_path / "logs")
+    assert solution.descriptor is not None and solution.descriptor.length == 0
     with pytest.raises(SolutionError, match="bundle"):
         solution.init(CONFIG)
+
+
+def test_embedded_bundle_survives_heap_growth(runtime, runtime_path, solution_dir, tmp_path):
+    """The zip lives above the runtime's initial memory; the heap must grow past it, never into it."""
+    blob = np.random.default_rng(3).integers(0, 256, 3 << 20, dtype=np.uint8).tobytes()
+    source = """
+import hashlib
+import numpy as np
+import eecs116_bundle as bundle
+EXPECTED = %r
+class Solution:
+    def __init__(self, config):
+        self.keep = []
+    def step(self, t, frame, imu):
+        for _ in range(8):
+            self.keep.append(np.ones(16 << 20, np.uint8))  # 128 MiB per step, retained
+        digest = hashlib.sha256(bundle.read_bytes("blob.bin")).hexdigest()
+        return [float(digest == EXPECTED), len(self.keep), 0, 0, 0, 0, 1]
+""" % __import__("hashlib").sha256(blob).hexdigest()
+    solution = make_solution(runtime, runtime_path, solution_dir(source, {"blob.bin": blob}), tmp_path, limits=Limits(memory_bytes=1 << 30))
+    solution.init(CONFIG)
+    for k in range(4):  # ~512 MiB of heap growth in total, far beyond the zip
+        result = solution.step(0.05 * (k + 1), FRAME, IMU)
+        assert result.status == abi.STATUS_OK, solution.stderr_tail()
+        assert result.pose[0] == 1.0, "bundle bytes were corrupted by heap growth"
+
+
+def test_unbundle_roundtrip(runtime_path, solution_dir, tmp_path):
+    from eecs116.bundle import extract_bundle, runtime_descriptor, strip_bundle, unbundle
+
+    directory = solution_dir(IDENTITY, {"data/w.npy": b"\x93NUMPY" + bytes(100), "pkg/__init__.py": "X = 1\n"})
+    wasm = tmp_path / "s.wasm"
+    bundle(directory, wasm, runtime=runtime_path)
+    bundled = wasm.read_bytes()
+    descriptor = runtime_descriptor(bundled)
+    assert descriptor.length == len(extract_bundle(bundled)) and descriptor.address % 65536 == 0
+    names = unbundle(wasm, tmp_path / "out")
+    assert set(names) == {"solution.py", "data/w.npy", "pkg/__init__.py", "eecs116.json"}
+    assert (tmp_path / "out" / "data" / "w.npy").read_bytes() == b"\x93NUMPY" + bytes(100)
+    # stripping gives back the clean runtime byte for byte (the manifest section aside), and bundling twice is idempotent
+    assert strip_custom_manifest(strip_bundle(bundled)) == strip_custom_manifest(runtime_path.read_bytes())
+    bundle(directory, tmp_path / "again.wasm", runtime=wasm)  # an already-bundled file as the runtime is re-stripped first
+    assert (tmp_path / "again.wasm").read_bytes() == bundled
+
+
+def strip_custom_manifest(wasm):
+    from eecs116.wasm_sections import strip_custom
+
+    return strip_custom(wasm, abi.MANIFEST_SECTION)
 
 
 def test_abi_constants_match_the_shim(runtime_path):

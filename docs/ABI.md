@@ -13,12 +13,21 @@ and Rust solutions implement it directly (`examples/cpp-minimal`).
 | `_initialize` | `() → ()` | – | emitted by wasi-libc for reactors; the harness calls it once if present |
 | `abi_version` | `() → i32` | `int32_t abi_version(void)` | must return `1` |
 | `alloc` | `(i32) → i32` | `void *alloc(uint32_t size)` | `malloc`; ≥ 8-byte aligned; the harness never frees |
-| `load_bundle` | `(i32, i32) → i32` | `int32_t load_bundle(const uint8_t *zip, uint32_t size)` | optional; only the Python runtime uses it (the bundled directory) |
 | `init` | `(i32, i32) → i32` | `int32_t init(const char *json, uint32_t size)` | once, before any `step` |
 | `step` | `(f64, i32, i32, i32, i32) → i32` | `int32_t step(double t, const uint8_t *frame, const double *imu, int32_t imu_count, double *out)` | once per frame |
 
-Call sequence per episode: `instantiate → _initialize → [load_bundle] → init → alloc × 3 → step × N → drop`.
-There is no `reset`: every episode gets a fresh instance (instantiation costs ~0.1 s, Python init ~0.1 s).
+Call sequence per episode: `instantiate → _initialize → init → alloc × 3 → step × N → drop`.
+There is no `reset`: every episode gets a fresh instance (instantiation costs ~0.1 s, Python init ~0.1 s). The host
+treats Python and native modules identically; it does not know what runs inside.
+
+## How Python code travels (`eecs116 bundle`)
+
+The student's directory is zipped and embedded into `runtime.wasm` as a **data segment** placed just above the
+runtime's initial memory (the memory minimum grows by the zip's size), and a 32-byte descriptor inside the runtime
+(`magic "EECS116BUNDLEv1", address, length`) is patched to point at it. The module is therefore self-contained: at
+`init` the embedded shim reads the descriptor, opens the zip in its own memory and imports `solution:Solution`
+from it. The bundler is pure Python section surgery; no compiler is involved, and the zip can be as large as the
+memory cap allows. `eecs116 unbundle` extracts it again.
 
 ## Manifest (optional custom section `eecs116.manifest`)
 

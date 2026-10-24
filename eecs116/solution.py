@@ -10,14 +10,14 @@ import numpy as np
 import wasmtime
 
 from . import abi
-from .bundle import BundleError, read_manifest, validate_manifest
+from .bundle import BundleError, read_manifest, runtime_descriptor, validate_manifest
 from .engine import Runtime
-from .wasm_sections import split_bundle, strip_custom
+from .wasm_sections import strip_custom
 
 
 @dataclass
 class Limits:
-    init_fuel: int = 200_000_000_000  # covers _initialize, load_bundle and init (interpreter start + imports)
+    init_fuel: int = 200_000_000_000  # covers _initialize and init (interpreter start + imports)
     step_fuel: int = 20_000_000_000  # per step; exceeding it traps and ends the episode
     memory_bytes: int = 2 << 30
     init_wall_seconds: float = 300.0  # wall-clock safety nets only (fuel is the metric)
@@ -77,8 +77,8 @@ class Solution:
             raise SolutionError(str(error)) from None
         self.channels = int(self.manifest.get("channels", abi.DEFAULT_CHANNELS))  # 1 (default) or 3: what step() receives
         self.resolution = tuple(self.manifest.get("resolution", abi.DEFAULT_RESOLUTION))  # (width, height) of the frames
-        base, self.bundle = split_bundle(wasm, abi.BUNDLE_SECTION)
-        base = strip_custom(base, abi.MANIFEST_SECTION)  # every submission on the same runtime shares one compilation
+        self.descriptor = runtime_descriptor(wasm)  # None for native modules; .length == 0 for a bare Python runtime
+        base = strip_custom(wasm, abi.MANIFEST_SECTION)  # the manifest does not change the code: identical modules share a compilation
         module = self.runtime.module(base)
         export_names = {export.name for export in module.exports}
         missing = [name for name in abi.REQUIRED_EXPORTS if name not in export_names]
@@ -119,7 +119,6 @@ class Solution:
         self._alloc = exports["alloc"]
         self._init = exports["init"]
         self._step = exports["step"]
-        self._load_bundle = exports["load_bundle"] if "load_bundle" in export_names else None
         if "abi_version" in export_names:
             version = self._guard(lambda: exports["abi_version"](self.store))
             if version != abi.ABI_VERSION:
@@ -185,15 +184,7 @@ class Solution:
         """Hands the bundle (if any) and the config JSON to the guest; raises SolutionError on failure."""
         if self.initialized:
             raise SolutionError("init() called twice")
-        if self.bundle is not None:
-            if self._load_bundle is None:
-                raise SolutionError(f"{self.path.name} carries a {abi.BUNDLE_SECTION} section but exports no load_bundle")
-            pointer = self.alloc(len(self.bundle))
-            self.write(pointer, self.bundle)
-            status = self._guard(lambda: self._load_bundle(self.store, pointer, len(self.bundle)))
-            if status != abi.STATUS_OK:
-                raise SolutionError(f"load_bundle failed: {abi.status_name(status)}\n{self.stderr_tail()}")
-        elif self._load_bundle is not None and self.dev_dir is None:
+        if self.descriptor is not None and self.descriptor.length == 0 and self.dev_dir is None:
             raise SolutionError(f"{self.path.name} is a bare runtime without solution code: run `python -m eecs116 bundle` or pass --dir")
         self.config = dict(config)
         self.config.setdefault("abi_version", abi.ABI_VERSION)

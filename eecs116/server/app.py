@@ -12,8 +12,8 @@ import time
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from .. import abi
-from ..wasm_sections import find_custom, iter_sections
+from ..bundle import BundleError, runtime_descriptor
+from ..wasm_sections import iter_sections
 from .store import DAILY_QUOTA, MAX_UPLOAD_BYTES, Store
 
 app = FastAPI(title="EECS 116/216 pose challenge")
@@ -41,9 +41,14 @@ async def submit(file: UploadFile = File(...), label: str = Form(""), x_token: s
         raise HTTPException(status_code=400, detail=f"not a WebAssembly module: {error}") from None
     if not sections:
         raise HTTPException(status_code=400, detail="empty module")
-    has_bundle = find_custom(data, abi.BUNDLE_SECTION) is not None
+    try:
+        descriptor = runtime_descriptor(data)
+    except BundleError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    if descriptor is not None and descriptor.length == 0:
+        raise HTTPException(status_code=400, detail="this is the bare Python runtime without solution code: run `python -m eecs116 bundle`")
     submission_id = store.add(user, label[:80], file.filename or "solution.wasm", data)
-    return {"id": submission_id, "user": user, "bytes": len(data), "bundle": has_bundle, "status": "queued"}
+    return {"id": submission_id, "user": user, "bytes": len(data), "kind": "python" if descriptor else "native", "status": "queued"}
 
 
 @app.get("/submissions/{submission_id}")

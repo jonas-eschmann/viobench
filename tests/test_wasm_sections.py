@@ -37,3 +37,21 @@ def test_append_find_strip_custom():
 def test_rejects_non_wasm():
     with pytest.raises(ValueError):
         list(iter_sections(b"not a module"))
+
+
+def test_memory_and_data_section_roundtrip():
+    from eecs116.wasm_sections import (DATA_SECTION_ID, MEMORY_SECTION_ID, DataSegment, Memory, encode_data_section, encode_memory_section,
+                                       parse_data_section, parse_memory_section, read_sleb128, replace_sections, section_payload, write_sleb128)
+
+    for value in (0, 1, 63, 64, -1, -64, -65, 2**31 - 1, -2**31):
+        encoded = write_sleb128(value)
+        assert read_sleb128(encoded, 0) == (value, len(encoded))
+    memory = encode_memory_section([Memory(0x01, 3, 10)])
+    data = encode_data_section([DataSegment.active(1024, b"hello"), DataSegment(1, 0, None, b"", b"passive")])
+    module = EMPTY_MODULE + bytes([MEMORY_SECTION_ID, len(memory)]) + memory + bytes([DATA_SECTION_ID, len(data)]) + data
+    assert parse_memory_section(section_payload(module, MEMORY_SECTION_ID)) == [Memory(0x01, 3, 10)]
+    segments = parse_data_section(section_payload(module, DATA_SECTION_ID))
+    assert [(s.flags, s.offset, s.data) for s in segments] == [(0, 1024, b"hello"), (1, None, b"passive")]
+    grown = replace_sections(module, {MEMORY_SECTION_ID: encode_memory_section([Memory(0x01, 5, 10)])})
+    assert parse_memory_section(section_payload(grown, MEMORY_SECTION_ID))[0].minimum == 5
+    assert section_payload(grown, DATA_SECTION_ID) == section_payload(module, DATA_SECTION_ID)

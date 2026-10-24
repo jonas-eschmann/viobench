@@ -2,7 +2,8 @@
 
 ABI_VERSION = 1
 
-BUNDLE_SECTION = "eecs116.bundle"  # wasm custom section holding the zip of the student's directory
+BUNDLE_MAGIC = b"EECS116BUNDLEv1\0"  # 16-byte head of the runtime's bundle descriptor (see runtime/reactor.c)
+BUNDLE_DESCRIPTOR_BYTES = 32  # magic[16] | address u32 | length u32 | version u32 | reserved u32
 MANIFEST_SECTION = "eecs116.manifest"  # wasm custom section with the manifest JSON (read by the harness before init)
 BUNDLE_MANIFEST = "eecs116.json"  # optional file in the directory: {"entry": "module:Class", "channels": 1 | 3}
 DEFAULT_CHANNELS = 1  # grayscale unless the manifest opts into RGB
@@ -17,7 +18,7 @@ POSE_VALUES = 7  # [x, y, z, qx, qy, qz, qw]
 F64_BYTES = 8
 
 REQUIRED_EXPORTS = ("memory", "alloc", "init", "step")
-OPTIONAL_EXPORTS = ("_initialize", "abi_version", "load_bundle")
+OPTIONAL_EXPORTS = ("_initialize", "abi_version")
 
 STATUS_OK = 0
 STATUS_NO_ESTIMATE = 1

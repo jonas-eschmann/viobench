@@ -1,10 +1,11 @@
 # The Python runtime (`runtime.wasm`)
 
 `runtime.wasm` is CPython 3.14 with numpy and OpenCV compiled to `wasm32-wasip1` as a *reactor* that implements the
-solution ABI (`docs/ABI.md`). `python -m eecs116 bundle <dir>` appends your directory (zipped) as a custom section;
-nothing is compiled. At `init` the embedded shim (`runtime/py/_eecs116.py`) installs an importer over that zip, imports
-`solution:Solution` and constructs it with the config; each `step` wraps the raw buffers in numpy arrays and calls
-`Solution.step`.
+solution ABI (`docs/ABI.md`). `python -m eecs116 bundle <dir>` embeds your directory (zipped) into the module as a
+data segment and records its address in the runtime's bundle descriptor; nothing is compiled and the result is a
+self-contained module. At `init` the embedded shim (`runtime/py/_eecs116.py`) finds the zip in its own memory,
+installs an importer over it, imports `solution:Solution` and constructs it with the config; each `step` wraps the raw
+buffers in numpy arrays and calls `Solution.step`.
 
 ## What is inside
 
