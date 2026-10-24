@@ -1,11 +1,11 @@
 import numpy as np
 import pytest
 
-from eecs116.config import make_config
-from eecs116.data.episode import Episode, interpolate_poses
-from eecs116.data.euroc_io import list_episodes, read_episode, write_episode
-from eecs116.data.isp import ISPParams, apply, integrate_exposure, linear_to_srgb, srgb_to_linear
-from eecs116.metrics import matrices_to_poses, poses_to_matrices, quaternion_to_matrix
+from relpose.abi.config import make_config
+from relpose.datasets.episode import Episode, interpolate_poses
+from relpose.datasets.storage import list_episodes, read_episode, write_episode
+from relpose.datasets.camera import SensorParams, apply, integrate_exposure, linear_to_srgb, srgb_to_linear
+from relpose.evaluation.metrics import matrices_to_poses, poses_to_matrices, quaternion_to_matrix
 
 
 def synthetic_episode(n_frames=8, rate=20.0, imu_rate=200.0, width=32, height=24):
@@ -23,7 +23,7 @@ def synthetic_episode(n_frames=8, rate=20.0, imu_rate=200.0, width=32, height=24
     imu = np.column_stack([imu_t, rng.normal(0, 0.1, (len(imu_t), 3)) + [0, 0, 9.81], rng.normal(0, 0.01, (len(imu_t), 3))])
     frame_times = (np.arange(n_frames) + 1) / rate
     frames = rng.integers(0, 256, (n_frames, height, width), dtype=np.uint8)
-    return Episode("synthetic", config, frame_times, frames, imu, ground_truth, T_body_camera, {"variant": "test"})
+    return Episode("synthetic", config, frame_times, frames, imu, ground_truth, T_body_camera, {"condition": "test"})
 
 
 def test_episode_windows_and_ground_truth():
@@ -62,7 +62,7 @@ def test_write_read_roundtrip(tmp_path):
     np.testing.assert_allclose(loaded.imu, episode.imu, rtol=1e-6, atol=1e-9)
     np.testing.assert_allclose(loaded.ground_truth, episode.ground_truth, rtol=1e-6, atol=1e-9)
     np.testing.assert_allclose(loaded.T_body_camera, episode.T_body_camera)
-    assert loaded.config == episode.config and loaded.meta == {"variant": "test"}
+    assert loaded.config == episode.config and loaded.meta == {"condition": "test"}
     assert (directory / "mav0" / "cam0" / "sensor.yaml").is_file() and (directory / "mav0" / "imu0" / "sensor.yaml").is_file()
 
 
@@ -71,12 +71,12 @@ def test_isp_identity_and_effects():
     srgb = rng.uniform(0, 1, (4, 16, 16, 3)).astype(np.float32)
     linear = integrate_exposure(srgb)
     np.testing.assert_allclose(linear_to_srgb(srgb_to_linear(srgb)), srgb, atol=1e-5)
-    clean = apply(linear, ISPParams(full_well=np.inf, read_noise=0.0), rng)
+    clean = apply(linear, SensorParams(full_well=np.inf, read_noise=0.0), rng)
     assert clean.shape == (16, 16) and clean.dtype == np.uint8
-    dark = apply(linear, ISPParams(exposure_scale=0.05, full_well=np.inf, read_noise=0.0), rng)
-    bright = apply(linear, ISPParams(exposure_scale=20.0, full_well=np.inf, read_noise=0.0), rng)
+    dark = apply(linear, SensorParams(exposure_scale=0.05, full_well=np.inf, read_noise=0.0), rng)
+    bright = apply(linear, SensorParams(exposure_scale=20.0, full_well=np.inf, read_noise=0.0), rng)
     assert dark.mean() < clean.mean() < bright.mean() and (bright == 255).mean() > 0.9
-    noisy = apply(linear, ISPParams(full_well=200.0, read_noise=0.05), rng)
+    noisy = apply(linear, SensorParams(full_well=200.0, read_noise=0.05), rng)
     assert np.abs(noisy.astype(float) - clean.astype(float)).mean() > 2.0
     # a static stack blurs to itself
     np.testing.assert_allclose(integrate_exposure(np.repeat(srgb[:1], 5, axis=0)), srgb_to_linear(srgb[0]), atol=1e-6)

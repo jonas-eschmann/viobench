@@ -3,7 +3,7 @@
 1. Train on episode directories (any mix of the published sets or your own `simulate` output):
 
    ```bash
-   python examples/python-tinynn/train.py datasets/default-train --epochs 10
+   python examples/python/tiny_cnn/train.py datasets/default-train --epochs 10
    ```
 
    writes `solution/net.onnx`, `solution/weights.npz`, `solution/meta.json` (and `net.pt`).
@@ -11,9 +11,9 @@
 2. Bundle and test:
 
    ```bash
-   python -m eecs116 bundle examples/python-tinynn/solution -o tinynn.wasm
-   python -m eecs116 check tinynn.wasm
-   python -m eecs116 evaluate tinynn.wasm datasets/default-val
+   relpose bundle examples/python/tiny_cnn/solution -o tinynn.wasm
+   relpose check tinynn.wasm
+   relpose evaluate tinynn.wasm datasets/default-val
    ```
 
 The solution runs the ONNX graph with `cv2.dnn.readNetFromONNX` (bytes from the bundle) and falls back to the numpy

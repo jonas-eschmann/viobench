@@ -1,4 +1,4 @@
-"""A bundled solution is a self-contained wasip1 reactor: a host that knows nothing about eecs116 can drive it.
+"""A bundled solution is a self-contained wasip1 reactor: a host that knows nothing about relpose can drive it.
 
 This is the whole protocol in 25 lines of plain wasmtime-py: instantiate, _initialize, init(config), step(...).
 """
@@ -8,12 +8,12 @@ import json
 import numpy as np
 import wasmtime
 
-from eecs116.bundle import bundle
-from eecs116.config import make_config
+from relpose.packaging.bundle import bundle
+from relpose.abi.config import make_config
 
 SOLUTION = """
 import numpy as np
-import eecs116_bundle as bundle
+import solution_bundle as bundle
 class Solution:
     def __init__(self, config):
         self.offset = float(bundle.read_text("offset.txt"))

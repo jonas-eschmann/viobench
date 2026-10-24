@@ -3,7 +3,7 @@ import math
 
 import numpy as np
 
-from . import abi
+from . import ABI_VERSION
 
 # Camera mounted looking along the body/IMU +x axis (forward), OpenCV camera axes: x right, y down, z forward.
 # Columns are the camera axes expressed in the body frame: cam x = -body y, cam y = -body z, cam z = +body x.
@@ -50,7 +50,7 @@ def make_config(width=320, height=240, channels=1, horizontal_fov_degrees=80.0, 
     imu_block["T_cam_imu"] = T_camera_body.reshape(-1).tolist()  # row-major 4x4: maps IMU/body coordinates into the camera frame
     imu_block["T_imu_cam"] = T_body_camera.reshape(-1).tolist()
     return {
-        "abi_version": abi.ABI_VERSION,
+        "abi_version": ABI_VERSION,
         "image": {"width": int(width), "height": int(height), "channels": int(channels), "dtype": "uint8",
                   "layout": "HW" if channels == 1 else "HWC"},
         "camera": camera,

@@ -1,4 +1,9 @@
-"""Command line: python -m eecs116 {bundle,unbundle,check,...}"""
+"""The `relpose` command line (also `python -m relpose`).
+
+packaging    bundle, unbundle, manifest        solution directory <-> solution.wasm; declare RGB / VGA
+evaluation   check, evaluate, leaderboard      run a module on synthetic frames / on episodes; aggregate reports
+datasets     simulate, convert-euroc           generate episodes with HyperDrone (GPU); cut EuRoC sequences into episodes
+"""
 import argparse
 import sys
 import threading
@@ -19,7 +24,7 @@ def run_with_large_stack(function):
             outcome["error"] = error
 
     threading.stack_size(THREAD_STACK_BYTES)
-    thread = threading.Thread(target=target, name="eecs116-guest")
+    thread = threading.Thread(target=target, name="relpose-guest")
     thread.start()
     thread.join()
     if "error" in outcome:
@@ -27,29 +32,33 @@ def run_with_large_stack(function):
     return outcome.get("result")
 
 
+# --- packaging -------------------------------------------------------------------------------------------------
+
 def command_bundle(arguments):
-    from .bundle import BundleError, bundle
+    from .packaging import PackagingError
+    from .packaging.bundle import bundle
 
     try:
         summary = bundle(arguments.directory, arguments.output, runtime=arguments.runtime, entry=arguments.entry, channels=arguments.channels,
                          resolution=arguments.resolution)
-    except BundleError as error:
+    except PackagingError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(f"wrote {summary['output']} ({summary['bytes'] / 2**20:.1f} MiB, bundle {summary['bundle_bytes'] / 1024:.0f} KiB, {len(summary['files'])} files, "
           f"entry {summary['entry']}, {'RGB' if summary['channels'] == 3 else 'grayscale'} {summary['resolution'][0]}x{summary['resolution'][1]} frames)")
     for warning in summary["warnings"]:
         print(f"warning: {warning}")
-    print(f"next: python -m eecs116 check {summary['output']}")
+    print(f"next: relpose check {summary['output']}")
     return 0
 
 
 def command_unbundle(arguments):
-    from .bundle import BundleError, unbundle
+    from .packaging import PackagingError
+    from .packaging.bundle import unbundle
 
     try:
         names = unbundle(arguments.wasm, arguments.output)
-    except BundleError as error:
+    except PackagingError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(f"extracted {len(names)} files to {arguments.output}")
@@ -57,7 +66,8 @@ def command_unbundle(arguments):
 
 
 def command_manifest(arguments):
-    from .bundle import BundleError, read_manifest, write_manifest
+    from .packaging import PackagingError
+    from .packaging.manifest import read_manifest, write_manifest
 
     try:
         updates = {}
@@ -68,74 +78,25 @@ def command_manifest(arguments):
         if arguments.resolution is not None:
             updates["resolution"] = arguments.resolution
         manifest = write_manifest(arguments.wasm, updates) if updates else read_manifest(open(arguments.wasm, "rb").read())
-    except BundleError as error:
+    except PackagingError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(manifest)
     return 0
 
 
+# --- evaluation ------------------------------------------------------------------------------------------------
+
 def command_check(arguments):
-    import numpy as np
+    from .evaluation.check import check
 
-    from .config import make_config
-    from .solution import Limits, Solution, SolutionError
-
-    rng = np.random.default_rng(0)
-
-    def run():
-        try:
-            solution = Solution(arguments.wasm, limits=Limits(), log_dir=arguments.logs, dev_dir=arguments.dir, inherit_stdio=arguments.verbose)
-        except SolutionError as error:
-            print(f"load failed: {error}")
-            return 1
-        channels = arguments.channels or solution.channels
-        width = arguments.width or solution.resolution[0]
-        height = arguments.height or solution.resolution[1]
-        config = make_config(width=width, height=height, channels=channels, num_frames=arguments.frames)
-        shape = (height, width) if channels == 1 else (height, width, channels)
-        dt = 1.0 / config["episode"]["frame_rate_hz"]
-        imu_dt = 1.0 / config["imu"]["rate_hz"]
-        rows_per_frame = int(round(dt / imu_dt))
-        print(f"solution: {'RGB' if channels == 3 else 'grayscale'} frames {shape}, manifest {solution.manifest or '{}'}")
-        try:
-            solution.init(config)
-        except SolutionError as error:
-            print(f"init failed: {error}")
-            return 1
-        print(f"init: fuel {solution.init_fuel:,} wall {solution.init_wall_seconds * 1e3:.0f} ms")
-        failures = 0
-        for k in range(arguments.frames):
-            t = (k + 1) * dt
-            base = np.linspace(0, 255, width, dtype=np.float32)[None, :] + rng.normal(0, 20, (height, width))
-            frame = np.clip(base, 0, 255).astype(np.uint8)
-            if channels > 1:
-                frame = np.repeat(frame[:, :, None], channels, axis=2)
-            times = t - dt + imu_dt * np.arange(1, rows_per_frame + 1)
-            imu = np.column_stack([times, rng.normal(0, 0.3, (rows_per_frame, 3)) + [0, 0, 9.81], rng.normal(0, 0.07, (rows_per_frame, 3))])
-            try:
-                result = solution.step(t, frame, imu)
-            except SolutionError as error:
-                print(f"step {k}: {error}")
-                return 1
-            pose = "-" if result.pose is None else np.array2string(result.pose, precision=3, suppress_small=True)
-            print(f"step {k}: {abi.status_name(result.status):12s} fuel {result.fuel:>14,} wall {result.wall_seconds * 1e3:8.2f} ms pose {pose}")
-            failures += result.status < 0
-        if not arguments.verbose:
-            out, err = solution.stdout_tail(), solution.stderr_tail()
-            if out:
-                print("--- stdout (tail) ---\n" + out)
-            if err:
-                print("--- stderr (tail) ---\n" + err)
-        print("check:", "FAILED" if failures else "ok", f"({failures} failing steps of {arguments.frames})")
-        return 1 if failures else 0
-
-    return run_with_large_stack(run)
+    return run_with_large_stack(lambda: check(arguments.wasm, dev_dir=arguments.dir, frames=arguments.frames, channels=arguments.channels,
+                                              width=arguments.width, height=arguments.height, logs=arguments.logs, verbose=arguments.verbose))
 
 
 def command_evaluate(arguments):
-    from .evaluate import evaluate
-    from .solution import Limits
+    from .evaluation.run import evaluate
+    from .evaluation.sandbox import Limits
 
     limits = Limits()
     if arguments.step_fuel:
@@ -153,55 +114,8 @@ def command_evaluate(arguments):
     return run_with_large_stack(run)
 
 
-def command_simulate(arguments):
-    from pathlib import Path
-
-    from .data.euroc_io import write_episode
-    from .data.simulate import SimConfig, hssd_scenes, procthor_scenes, simulate
-
-    sim = SimConfig(width=arguments.width, height=arguments.height, instances=arguments.instances, frame_rate_hz=arguments.frame_rate,
-                    fov_range=arguments.fov_range, hold_seconds=arguments.hover, aa_grid=arguments.aa_grid, channels=arguments.channels)
-    if arguments.scenes == "procthor-train":
-        scenes = procthor_scenes(arguments.scene_names)
-    elif arguments.scenes == "hssd-val":
-        scenes = hssd_scenes("val", arguments.scene_names)
-    elif arguments.scenes == "hssd-train":
-        scenes = hssd_scenes("train", arguments.scene_names)
-    else:
-        raise SystemExit(f"unknown scene set {arguments.scenes}")
-    output = Path(arguments.output)
-    output.mkdir(parents=True, exist_ok=True)
-    seeds = range(arguments.seed, arguments.seed + arguments.batches)
-    written = 0
-    for episode in simulate(sim, seeds, scenes=scenes, variant=arguments.variant):
-        if written >= arguments.episodes:
-            break
-        write_episode(episode, output / episode.name)
-        written += 1
-        print(f"wrote {output / episode.name} ({episode.num_frames} frames, {episode.duration:.1f}s, fov {episode.config['camera']['horizontal_fov_degrees']:.1f} deg)")
-    print(f"{written} episodes in {output}")
-    return 0 if written >= arguments.episodes else 1
-
-
-def command_convert_euroc(arguments):
-    from pathlib import Path
-
-    from .data.convert_euroc import convert
-    from .data.euroc_io import write_episode
-
-    output = Path(arguments.output)
-    output.mkdir(parents=True, exist_ok=True)
-    count = 0
-    for episode, origin_ns in convert(arguments.sequence, width=arguments.width, height=arguments.height, snippet_seconds=arguments.snippet,
-                                      max_snippets=arguments.max_snippets, start_seconds=arguments.start, stride_seconds=arguments.stride):
-        write_episode(episode, output / episode.name, origin_ns=origin_ns)
-        count += 1
-    print(f"{count} episodes in {output}")
-    return 0 if count else 1
-
-
 def command_leaderboard(arguments):
-    from .leaderboard import load_reports, markdown_table, plot, rows
+    from .evaluation.leaderboard import load_reports, markdown_table, plot, rows
 
     table = rows(load_reports(arguments.reports))
     if not table:
@@ -222,43 +136,94 @@ def command_leaderboard(arguments):
     return 0
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(prog="python -m eecs116", description="EECS 116/216 relative pose challenge tools")
-    commands = parser.add_subparsers(dest="command", required=True)
+# --- datasets --------------------------------------------------------------------------------------------------
 
-    bundle = commands.add_parser("bundle", help="embed a directory of Python code into a solution .wasm")
+def command_simulate(arguments):
+    from pathlib import Path
+
+    from .datasets.simulation import SimConfig, hssd_scenes, procthor_scenes, simulate
+    from .datasets.storage import write_episode
+
+    sim = SimConfig(width=arguments.width, height=arguments.height, instances=arguments.instances, frame_rate_hz=arguments.frame_rate,
+                    fov_range=arguments.fov_range, hold_seconds=arguments.hover, aa_grid=arguments.aa_grid, channels=arguments.channels)
+    if arguments.scenes == "procthor-train":
+        scenes = procthor_scenes(arguments.scene_names)
+    elif arguments.scenes == "hssd-val":
+        scenes = hssd_scenes("val", arguments.scene_names)
+    elif arguments.scenes == "hssd-train":
+        scenes = hssd_scenes("train", arguments.scene_names)
+    else:
+        raise SystemExit(f"unknown scene set {arguments.scenes}")
+    output = Path(arguments.output)
+    output.mkdir(parents=True, exist_ok=True)
+    seeds = range(arguments.seed, arguments.seed + arguments.batches)
+    written = 0
+    for episode in simulate(sim, seeds, scenes=scenes, condition=arguments.condition):
+        if written >= arguments.episodes:
+            break
+        write_episode(episode, output / episode.name)
+        written += 1
+        print(f"wrote {output / episode.name} ({episode.num_frames} frames, {episode.duration:.1f}s, fov {episode.config['camera']['horizontal_fov_degrees']:.1f} deg)")
+    print(f"{written} episodes in {output}")
+    return 0 if written >= arguments.episodes else 1
+
+
+def command_convert_euroc(arguments):
+    from pathlib import Path
+
+    from .datasets.euroc import convert
+    from .datasets.storage import write_episode
+
+    output = Path(arguments.output)
+    output.mkdir(parents=True, exist_ok=True)
+    count = 0
+    for episode, origin_ns in convert(arguments.sequence, width=arguments.width, height=arguments.height, snippet_seconds=arguments.snippet,
+                                      max_snippets=arguments.max_snippets, start_seconds=arguments.start, stride_seconds=arguments.stride):
+        write_episode(episode, output / episode.name, origin_ns=origin_ns)
+        count += 1
+    print(f"{count} episodes in {output}")
+    return 0 if count else 1
+
+
+# --- parser ----------------------------------------------------------------------------------------------------
+
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="relpose", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    commands = parser.add_subparsers(dest="command", required=True, metavar="command")
+
+    bundle = commands.add_parser("bundle", help="[packaging] embed a directory of Python code into a solution .wasm")
     bundle.add_argument("directory")
     bundle.add_argument("-o", "--output", required=True, help="output .wasm")
-    bundle.add_argument("--runtime", help="runtime.wasm to build on (default: $EECS116_RUNTIME or the repository build)")
-    bundle.add_argument("--entry", help=f"module:Class of the solution (default {abi.DEFAULT_ENTRY} or eecs116.json)")
-    bundle.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS, help="frames the solution wants: 1 grayscale (default) or 3 RGB (or eecs116.json)")
-    bundle.add_argument("--resolution", help="frames the solution wants: 320x240 (default) or 640x480 (or eecs116.json)")
+    bundle.add_argument("--runtime", help="runtime.wasm to build on (default: $RELPOSE_RUNTIME or build/runtime/dist/runtime.wasm)")
+    bundle.add_argument("--entry", help=f"module:Class of the solution (default {abi.DEFAULT_ENTRY} or solution.json)")
+    bundle.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS, help="frames the solution wants: 1 grayscale (default) or 3 RGB (or solution.json)")
+    bundle.add_argument("--resolution", help="frames the solution wants: 320x240 (default) or 640x480 (or solution.json)")
     bundle.set_defaults(function=command_bundle)
 
-    manifest = commands.add_parser("manifest", help="show or change the manifest of a solution .wasm (native modules declare RGB this way)")
+    unbundle = commands.add_parser("unbundle", help="[packaging] extract the embedded directory from a solution .wasm")
+    unbundle.add_argument("wasm")
+    unbundle.add_argument("-o", "--output", required=True, help="output directory")
+    unbundle.set_defaults(function=command_unbundle)
+
+    manifest = commands.add_parser("manifest", help="[packaging] show or change a module's manifest (native modules declare RGB / VGA this way)")
     manifest.add_argument("wasm")
     manifest.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS)
     manifest.add_argument("--resolution", help="320x240 or 640x480")
     manifest.add_argument("--entry")
     manifest.set_defaults(function=command_manifest)
 
-    unbundle = commands.add_parser("unbundle", help="extract the bundled directory from a solution .wasm")
-    unbundle.add_argument("wasm")
-    unbundle.add_argument("-o", "--output", required=True, help="output directory")
-    unbundle.set_defaults(function=command_unbundle)
-
-    check = commands.add_parser("check", help="instantiate a solution and run a few synthetic frames through it")
+    check = commands.add_parser("check", help="[evaluation] instantiate a module and run a few synthetic frames through it")
     check.add_argument("wasm", help="solution .wasm (or a bare runtime.wasm together with --dir)")
     check.add_argument("--dir", help="dev mode: mount this solution directory instead of a bundle")
     check.add_argument("--frames", type=int, default=5)
+    check.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS, help="override the manifest's channel choice")
     check.add_argument("--width", type=int, help="override the manifest's resolution")
     check.add_argument("--height", type=int)
-    check.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS, help="override the manifest's channel choice")
     check.add_argument("--logs", help="directory for stdout.txt/stderr.txt (default: temporary)")
     check.add_argument("-v", "--verbose", action="store_true", help="pass the guest's stdout/stderr through instead of capturing them")
     check.set_defaults(function=command_check)
 
-    evaluate = commands.add_parser("evaluate", help="run a solution over episode directories and write report.json")
+    evaluate = commands.add_parser("evaluate", help="[evaluation] run a module over episode directories and write report.json")
     evaluate.add_argument("wasm")
     evaluate.add_argument("datasets", nargs="+", help="episode directories or directories of episodes")
     evaluate.add_argument("-o", "--output", help="report directory (default: ./report-<name>)")
@@ -268,12 +233,18 @@ def main(argv=None):
     evaluate.add_argument("--memory-mib", type=int, help="guest memory cap in MiB")
     evaluate.set_defaults(function=command_evaluate)
 
-    simulate = commands.add_parser("simulate", help="generate episodes with HyperDrone (needs a GPU and pip install hyperdrone)")
+    leaderboard = commands.add_parser("leaderboard", help="[evaluation] aggregate report.json files into the ATE-vs-fuel table (and plot)")
+    leaderboard.add_argument("reports", nargs="+", help="report.json files or directories containing them")
+    leaderboard.add_argument("-o", "--output", help="write the markdown table here")
+    leaderboard.add_argument("--plot", help="write an ATE-vs-fuel PNG here (needs matplotlib)")
+    leaderboard.set_defaults(function=command_leaderboard)
+
+    simulate = commands.add_parser("simulate", help="[datasets] generate episodes with HyperDrone (needs a GPU and pip install relpose[sim])")
     simulate.add_argument("-o", "--output", required=True, help="directory that receives one sub-directory per episode")
     simulate.add_argument("--episodes", type=int, default=8, help="episodes to write (a batch of --instances flights per seed)")
     simulate.add_argument("--seed", type=int, default=0, help="first seed; seeds also pick the scene round-robin")
     simulate.add_argument("--batches", type=int, default=1_000_000, help="maximum number of seeds/batches to run")
-    simulate.add_argument("--variant", default="default", choices=["default", "blur", "lowlight", "oversaturated"])
+    simulate.add_argument("--condition", default="default", choices=["default", "blur", "lowlight", "oversaturated"])
     simulate.add_argument("--scenes", default="procthor-train", choices=["procthor-train", "hssd-train", "hssd-val"])
     simulate.add_argument("--scene-names", nargs="*", help="restrict to these scene names")
     simulate.add_argument("--width", type=int, default=640, help="stored resolution (the harness resamples to what a solution asks for)")
@@ -286,7 +257,7 @@ def main(argv=None):
     simulate.add_argument("--channels", type=int, default=3, choices=abi.SUPPORTED_CHANNELS, help="store RGB (default) or grayscale frames")
     simulate.set_defaults(function=command_simulate)
 
-    convert = commands.add_parser("convert-euroc", help="cut a EuRoC MAV sequence (ASL format directory) into challenge episodes")
+    convert = commands.add_parser("convert-euroc", help="[datasets] cut a EuRoC MAV sequence (ASL format directory) into episodes")
     convert.add_argument("sequence", help="sequence directory (containing mav0/)")
     convert.add_argument("-o", "--output", required=True)
     convert.add_argument("--snippet", type=float, default=10.0, help="episode length in seconds")
@@ -296,12 +267,6 @@ def main(argv=None):
     convert.add_argument("--width", type=int, default=640, help="EuRoC's 752x480 crops to 640x480 without scaling")
     convert.add_argument("--height", type=int, default=480)
     convert.set_defaults(function=command_convert_euroc)
-
-    leaderboard = commands.add_parser("leaderboard", help="aggregate report.json files into the ATE-vs-fuel table (and plot)")
-    leaderboard.add_argument("reports", nargs="+", help="report.json files or directories containing them")
-    leaderboard.add_argument("-o", "--output", help="write the markdown table here")
-    leaderboard.add_argument("--plot", help="write an ATE-vs-fuel PNG here (needs matplotlib)")
-    leaderboard.set_defaults(function=command_leaderboard)
 
     arguments = parser.parse_args(argv)
     return arguments.function(arguments)

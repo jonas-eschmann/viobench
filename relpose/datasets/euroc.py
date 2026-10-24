@@ -13,7 +13,7 @@ import cv2
 import numpy as np
 import yaml
 
-from ..config import make_config
+from ..abi.config import make_config
 from .episode import Episode
 
 SOURCE_NAME = "euroc"
@@ -135,7 +135,7 @@ def convert(sequence, width=640, height=480, snippet_seconds=10.0, max_snippets=
         config["camera"]["horizontal_fov_degrees"] = float(np.degrees(2 * np.arctan(width / (2 * new_K[0, 0]))))
         episode = Episode(name, config, times, np.stack(frames), imu, ground_truth, T_body_camera,
                           {"source": SOURCE_NAME, "sequence": raw["name"], "snippet": count, "start_s": float(snippet_start),
-                           "origin_ns": origin_ns, "variant": "real", "hover_seconds": hover})
+                           "origin_ns": origin_ns, "condition": "real", "hover_seconds": hover})
         episode.check_consistency()
         log(f"{name}: {len(selected)} frames {times[0]:.2f}-{times[-1]:.2f}s, {len(imu)} IMU rows")
         yield episode, origin_ns

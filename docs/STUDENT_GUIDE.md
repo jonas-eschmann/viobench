@@ -3,47 +3,52 @@
 ## 1. Setup
 
 ```bash
-python -m venv .venv && source .venv/bin/activate
-pip install "eecs116[data] @ git+https://github.com/<course>/course-eecs116-216-final-project"   # or pip install -e ".[data]" from a clone
-# runtime.wasm (48 MB) and the datasets are downloaded separately (links on the course page):
-export EECS116_RUNTIME=~/eecs116/runtime.wasm
+git clone <repo> && cd <repo>
+python -m venv .venv && source .venv/bin/activate && pip install -e ".[data]"
+submission/toolchain/build-image.sh      # Docker image with wasi-sdk + wasmtime + the CPython/numpy/OpenCV sources (once)
+submission/python/build.sh               # your Python runtime: build/runtime/dist/runtime.wasm (10-15 min, once per machine)
 ```
 
-On the lab machines (RTX 5080): `pip install "eecs116[sim,train]"` adds the HyperDrone generator (first use compiles
-for a minute) and PyTorch. There is no pre-rendered training set — you generate what you need:
+The runtime is yours to build, and to change (`submission/python/README.md`): nothing inside the `.wasm` is prescribed,
+only the ABI it exports. Writing C/C++ instead? Skip `build.sh` and read `submission/native/README.md`. The public
+datasets come as a tarball from the course page; unpack them to `build/datasets/public`.
+
+On the lab machines (RTX 5080): `pip install -e ".[data,sim,train]"` adds the HyperDrone generator (first use compiles
+for a minute) and PyTorch. There is no pre-rendered training set; you generate what you need:
 
 ```bash
-python -m eecs116 simulate -o data/train --episodes 200 --seed 1 --variant default     # ~20 s per 8 episodes (640x480), blur ~45 s
-python -m eecs116 simulate -o data/train-blur --episodes 64 --seed 500 --variant blur
+relpose simulate -o data/train --episodes 200 --seed 1 --condition default     # ~20 s per 8 episodes (640x480), blur ~45 s
+relpose simulate -o data/train-blur --episodes 64 --seed 500 --condition blur
 ```
 
-Read `docs/TASK.md` (what to estimate, how it is scored) and `docs/ABI.md`/`docs/RUNTIME.md` (what the sandbox offers).
+Read `docs/TASK.md` (what to estimate, how it is scored) and `docs/ABI.md` / `docs/RUNTIME.md` (what the sandbox offers).
 
 ## 2. Your first solution
 
 ```bash
-cp -r examples/python-deadreckoning my_solution
-python -m eecs116 check $EECS116_RUNTIME --dir my_solution          # synthetic frames, prints status/fuel per step
-python -m eecs116 evaluate $EECS116_RUNTIME --dir my_solution datasets/default-val -o report-dev
+cp -r examples/python/dead_reckoning my_solution
+relpose check build/runtime/dist/runtime.wasm --dir my_solution          # synthetic frames, prints status/fuel per step
+relpose evaluate build/runtime/dist/runtime.wasm --dir my_solution build/datasets/public/default-val -o report-dev
 ```
 
 `check` catches crashes and protocol errors; `evaluate` gives ATE/RPE and fuel per frame on real episodes
-(`report-dev/report.json`, per-episode `estimate.tum` for plotting with `evo`).
+(`report-dev/report.json`, per-episode `estimate.tum` for plotting with `evo`). `--dir` mounts your directory into the
+guest, so edits take effect immediately and tracebacks show real paths; bundling comes last.
 
 ## 3. Iterate
 
-- Data: generate training data with `python -m eecs116 simulate` (any variant, any amount); `datasets/default-val`
-  and the `*-val` sets are for validation and show the hidden variants, `real-sample` the real-data format. The hidden
-  sets use the same generator with other seeds and scenes.
-- Inspect an episode in Python: `from eecs116.data import read_episode; ep = read_episode("datasets/default-val/<name>")`,
+- Data: generate training data with `relpose simulate` (any condition, any amount); `build/datasets/public/default-val`
+  and the other `*-val` sets are for validation and show the hidden conditions, `real-sample` the real-data format. The
+  hidden sets use the same generator with other seeds and scenes.
+- Inspect an episode in Python: `from relpose.datasets import read_episode; ep = read_episode("build/datasets/public/default-val/<name>")`,
   then `ep.frames`, `ep.imu`, `ep.ground_truth_relative()`, `ep.steps()`.
-- Augmentation: `eecs116.data.variants.sample(name, rng)` + `eecs116.data.isp.apply(...)` reproduce the blur /
-  low-light / saturation pipeline on your own renders (apply them to linear frames: `srgb_to_linear(frame / 255)`).
-- Compute: watch the fuel column. Python-level loops over pixels are expensive; OpenCV calls are cheap per pixel;
-  a `cv2.dnn` forward of a small CNN costs about as much as one `goodFeaturesToTrack`.
-- Learned models: `examples/python-tinynn` shows PyTorch → ONNX → `cv2.dnn` inside the runtime, with a numpy fallback,
+- Augmentation: `relpose.datasets.conditions.sample(name, rng)` + `relpose.datasets.camera.apply(...)` reproduce the
+  blur / low-light / saturation pipeline on your own renders (apply them to linear frames: `srgb_to_linear(frame / 255)`).
+- Compute: watch the fuel column. Python-level loops over pixels are expensive; OpenCV calls are cheap per pixel; a
+  `cv2.dnn` forward of a small CNN costs about as much as one `goodFeaturesToTrack`.
+- Learned models: `examples/python/tiny_cnn` shows PyTorch → ONNX → `cv2.dnn` inside the runtime, with a numpy fallback,
   and `train.py --generate N` trains straight from the simulator.
-- Colour and resolution: frames are 320 × 240 grayscale unless `eecs116.json` next to your `solution.py` says
+- Colour and resolution: frames are 320 × 240 grayscale unless `solution.json` next to your `solution.py` says
   `{"channels": 3}` (RGB, `(H, W, 3)`) and/or `{"resolution": [640, 480]}` (VGA). Real-data episodes are grayscale
   (replicated into three channels); if a set only exists at 320 × 240 you receive an upscale
   (`config["image"]["upscaled"]`). More pixels cost fuel in everything you run on them.
@@ -51,8 +56,8 @@ python -m eecs116 evaluate $EECS116_RUNTIME --dir my_solution datasets/default-v
 ## 4. Submit
 
 ```bash
-python -m eecs116 bundle my_solution -o my_solution.wasm     # one file: runtime + your directory
-python -m eecs116 check my_solution.wasm                     # exactly what the server runs first
+relpose bundle my_solution -o my_solution.wasm     # one self-contained file: your runtime + your directory
+relpose check my_solution.wasm                     # exactly what the server runs first
 curl -F file=@my_solution.wasm -F label="klt+imu v3" -H "X-Token: $TOKEN" https://<server>/submit
 ```
 
@@ -62,14 +67,15 @@ accuracy-vs-fuel curve; your best points form your Pareto front. Quotas: 20 subm
 
 ## 5. Going native
 
-A C++ (or Rust) solution implements four exports and skips the interpreter entirely: `examples/cpp-minimal`. The
-course Docker image has the wasi-sdk toolchain and the OpenCV static libraries compiled for wasm.
+A C++ (or Rust) solution implements four exports and skips the interpreter entirely: `submission/native/` (header, CMake
+snippet, `build.sh`) and `examples/native/cpp_minimal`. The toolchain image has wasi-sdk; the Python-runtime build leaves
+OpenCV's static libraries behind if you want them.
 
 ## 6. Common problems
 
 | symptom | cause / fix |
 |---|---|
-| `ModuleNotFoundError: scipy` | not available in the runtime; numpy + OpenCV only (`docs/RUNTIME.md`) |
+| `ModuleNotFoundError: scipy` | not available in the reference runtime; numpy + OpenCV only (`docs/RUNTIME.md`), or build your own |
 | `trap OUT_OF_FUEL` | one step exceeded the fuel budget: reduce work per frame (resolution, feature count, iterations) |
 | `MemoryError` | the 2 GiB cap; avoid keeping every frame |
 | status `not_finite` | NaN in the pose: guard divisions and normalise quaternions |

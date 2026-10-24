@@ -3,7 +3,7 @@ build/
 __pycache__/
 *.pyc
 .pytest_cache/
-examples/cpp-minimal/build/
+examples/native/cpp_minimal/build/
 report-*/
 server-data/
 *.egg-info/

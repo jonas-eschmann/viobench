@@ -1,10 +1,10 @@
 """Train a tiny frame-pair + IMU network to predict the relative camera motion between consecutive frames.
 
-    python examples/python-tinynn/train.py <episode dirs or dataset roots>... --epochs 10 --out examples/python-tinynn/solution
+    python examples/python/tiny_cnn/train.py <episode dirs or dataset roots>... --epochs 10 --out examples/python/tiny_cnn/solution
 
 Writes net.pt (PyTorch), net.onnx (opset 13, loadable by cv2.dnn inside the wasm runtime), weights.npz (for the
 numpy fallback) and meta.json (normalisation constants) into the solution directory, which is then bundled with
-    python -m eecs116 bundle examples/python-tinynn/solution -o tinynn.wasm
+    relpose bundle examples/python/tiny_cnn/solution -o tinynn.wasm
 The model is a demonstration of the tooling (PyTorch -> ONNX -> cv2.dnn in wasm), not a strong estimator.
 """
 import argparse
@@ -21,8 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "solution"))
 from preintegrate import exp_so3, log_so3, preintegrate  # noqa: E402  (shared with the solution)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from eecs116.data.euroc_io import list_episodes, read_episode  # noqa: E402
-from eecs116.metrics import invert, poses_to_matrices  # noqa: E402
+from relpose.datasets.storage import list_episodes, read_episode  # noqa: E402
+from relpose.evaluation.metrics import invert, poses_to_matrices  # noqa: E402
 
 INPUT_WIDTH, INPUT_HEIGHT = 64, 48
 
@@ -68,7 +68,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("datasets", nargs="*", help="episode directories or dataset roots")
     parser.add_argument("--generate", type=int, default=0, metavar="BATCHES",
-                        help="also generate BATCHES x 8 fresh episodes with HyperDrone (GPU), variant drawn at random per batch")
+                        help="also generate BATCHES x 8 fresh episodes with HyperDrone (GPU), condition drawn at random per batch")
     parser.add_argument("--generate-seed", type=int, default=10_000)
     parser.add_argument("--out", default=str(Path(__file__).resolve().parent / "solution"))
     parser.add_argument("--epochs", type=int, default=10)
@@ -93,14 +93,14 @@ def main():
 
     for path in episodes:
         add(read_episode(path))
-    if arguments.generate:  # "infinite" data: straight from the simulator, with the public degradation variants as augmentation
-        from eecs116.data.simulate import SimConfig, simulate
-        from eecs116.data.variants import VARIANTS
+    if arguments.generate:  # "infinite" data: straight from the simulator, with the public degradation conditions as augmentation
+        from relpose.datasets.simulation import SimConfig, simulate
+        from relpose.datasets.conditions import CONDITIONS
 
         rng = np.random.default_rng(arguments.generate_seed)
         for batch in range(arguments.generate):
-            variant = str(rng.choice(sorted(VARIANTS)))
-            for episode in simulate(SimConfig(), [arguments.generate_seed + batch], variant=variant):
+            condition = str(rng.choice(sorted(CONDITIONS)))
+            for episode in simulate(SimConfig(), [arguments.generate_seed + batch], condition=condition):
                 add(episode)
     images, imus, targets = np.concatenate(images), np.concatenate(imus), np.concatenate(targets)
     imu_mean, imu_std = imus.mean(0), imus.std(0) + 1e-6

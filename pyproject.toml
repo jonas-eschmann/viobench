@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "eecs116"
+name = "relpose"
 version = "0.1.0"
-description = "EECS 116/216 relative pose-estimation challenge: bundle, check and evaluate solution .wasm files; dataset tools"
+description = "Compute-aware relative pose-estimation challenge: package, check and evaluate solution .wasm modules; episode datasets; submission server"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -22,13 +22,13 @@ server = ["fastapi", "uvicorn", "python-multipart"]
 dev = ["pytest", "opencv-python-headless>=4.9", "pyyaml>=6", "torch", "onnx"]
 
 [project.scripts]
-eecs116 = "eecs116.__main__:main"
+relpose = "relpose.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["eecs116*"]
+include = ["relpose*"]
 
 [tool.setuptools.package-data]
-"eecs116.data" = ["*.h.in"]
+"relpose.datasets" = ["*.h.in"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

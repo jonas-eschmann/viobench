@@ -3,7 +3,7 @@
 A submission is one WebAssembly file (`wasm32-wasip1`, *reactor*: no `_start`). The harness instantiates it once per
 episode, calls `init` with a JSON config, then `step` once per camera frame, and reads a pose back after each step.
 State lives inside the module between steps. The Python runtime (`runtime.wasm`) implements this ABI for you; C, C++
-and Rust solutions implement it directly (`examples/cpp-minimal`).
+and Rust solutions implement it directly (`examples/native/cpp_minimal`).
 
 ## Exports
 
@@ -20,22 +20,22 @@ Call sequence per episode: `instantiate → _initialize → init → alloc × 3 
 There is no `reset`: every episode gets a fresh instance (instantiation costs ~0.1 s, Python init ~0.1 s). The host
 treats Python and native modules identically; it does not know what runs inside.
 
-## How Python code travels (`eecs116 bundle`)
+## How Python code travels (`relpose bundle`)
 
 The student's directory is zipped and embedded into `runtime.wasm` as a **data segment** placed just above the
 runtime's initial memory (the memory minimum grows by the zip's size), and a 32-byte descriptor inside the runtime
-(`magic "EECS116BUNDLEv1", address, length`) is patched to point at it. The module is therefore self-contained: at
+(`magic "RELPOSEBUNDLEv1", address, length`) is patched to point at it. The module is therefore self-contained: at
 `init` the embedded shim reads the descriptor, opens the zip in its own memory and imports `solution:Solution`
 from it. The bundler is pure Python section surgery; no compiler is involved, and the zip can be as large as the
-memory cap allows. `eecs116 unbundle` extracts it again.
+memory cap allows. `relpose unbundle` extracts it again.
 
-## Manifest (optional custom section `eecs116.manifest`)
+## Manifest (optional custom section `relpose.manifest`)
 
 A JSON object the harness reads from the binary *before* `init`:
 `{"channels": 1 | 3, "resolution": [320, 240] | [640, 480], "entry": "module:Class"}`.
 `channels` selects what `step` receives: grayscale (`1`, the default) or RGB (`3`); `resolution` selects 320 × 240
-(default) or VGA 640 × 480. `python -m eecs116 bundle` writes the manifest from `eecs116.json` or `--channels`/`--resolution`;
-native modules add it with `python -m eecs116 manifest solution.wasm --channels 3 --resolution 640x480`. The harness
+(default) or VGA 640 × 480. `relpose bundle` writes the manifest from `solution.json` or `--channels`/`--resolution`;
+native modules add it with `relpose manifest solution.wasm --channels 3 --resolution 640x480`. The harness
 resamples every episode to the declared format (area averaging down, bilinear up, intrinsics rescaled) and the config
 reports what happened: `image.color` (real colour or replicated grayscale), `image.upscaled` (the source had fewer
 pixels), `image.source_channels`, `image.source_resolution`.
@@ -119,8 +119,8 @@ class Solution:
 ```
 
 The entry point defaults to `solution:Solution` (`solution.py` or `solution/__init__.py` at the root of the
-bundled directory) and can be changed with `eecs116.json` (`{"entry": "mypkg.estimator:Estimator"}`). Data files in
-the directory are reachable through `import eecs116_bundle as bundle` (`bundle.read_bytes(name)`, `bundle.open(name)`,
+bundled directory) and can be changed with `solution.json` (`{"entry": "mypkg.estimator:Estimator"}`). Data files in
+the directory are reachable through `import solution_bundle as bundle` (`bundle.read_bytes(name)`, `bundle.open(name)`,
 `bundle.exists(name)`, `bundle.listdir(prefix)`), `pkgutil.get_data`, or the module's `__file__` under `/bundle/`.
 Available inside the runtime: CPython 3.14 stdlib (no zlib/ssl/sqlite3/ctypes), numpy 2.3 (scalar build), OpenCV 4.12
 (`core`, `imgproc`, `features2d`, `flann`, `calib3d`, `video`, `dnn` with ONNX import). No threads, no filesystem,

@@ -2,8 +2,8 @@
 
 Use it as the template for your own: keep the class name `Solution`, the constructor signature and `step`.
 Bundle and check it with
-    python -m eecs116 bundle examples/python-minimal -o minimal.wasm
-    python -m eecs116 check minimal.wasm
+    relpose bundle examples/python/minimal -o minimal.wasm
+    relpose check minimal.wasm
 """
 import numpy as np
 

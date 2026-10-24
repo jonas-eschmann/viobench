@@ -1,4 +1,4 @@
-"""Host-side wrapper around one solution .wasm: instantiate, init, step, with fuel and wall-time metering."""
+"""Sandbox: one running instance of a solution module (Python or native alike): init, step, fuel and wall time per step."""
 import ctypes
 import json
 import tempfile
@@ -9,10 +9,12 @@ from pathlib import Path
 import numpy as np
 import wasmtime
 
-from . import abi
-from .bundle import BundleError, read_manifest, runtime_descriptor, validate_manifest
-from .engine import Runtime
-from .wasm_sections import strip_custom
+from .. import abi
+from ..packaging import PackagingError
+from ..packaging.embed import runtime_descriptor
+from ..packaging.manifest import read_manifest, validate_manifest
+from ..packaging.wasm_binary import strip_custom
+from .engine import Engine
 
 
 @dataclass
@@ -37,11 +39,11 @@ class StepResult:
         return self.status == abi.STATUS_OK
 
 
-class SolutionError(Exception):
+class SandboxError(Exception):
     """The solution broke the protocol or failed to initialize; the message carries the stderr tail."""
 
 
-class SolutionTrap(SolutionError):
+class SandboxTrap(SandboxError):
     """The guest trapped (out of fuel, wall-clock deadline, abort, memory fault, exit()); the instance is dead."""
 
     def __init__(self, trap_code, message, stderr_tail):
@@ -51,53 +53,53 @@ class SolutionTrap(SolutionError):
         self.stderr_tail = stderr_tail
 
 
-class Solution:
-    """One instance of a solution module for one episode.
+class Sandbox:
+    """One running instance of a solution module (Python or native alike) for one episode.
 
-    solution = Solution("student.wasm", runtime)
-    solution.init(config)
-    result = solution.step(t, frame, imu)   # StepResult with status, pose, fuel, wall_seconds
+    sandbox = Sandbox("student.wasm", engine)
+    sandbox.init(config)
+    result = sandbox.step(t, frame, imu)   # StepResult with status, pose, fuel, wall_seconds
     Fresh instance per episode: nothing is reset between episodes, and a trap kills the instance for good.
     """
 
-    def __init__(self, wasm_path, runtime=None, limits=None, log_dir=None, dev_dir=None, inherit_stdio=False):
+    def __init__(self, wasm_path, engine=None, limits=None, log_dir=None, dev_dir=None, inherit_stdio=False):
         self.path = Path(wasm_path)
         self.limits = limits or Limits()
-        self.runtime = runtime or Runtime()
+        self.engine = engine or Engine()
         self.dev_dir = Path(dev_dir) if dev_dir else None
         self.dead = False
         self.initialized = False
         wasm = self.path.read_bytes()
         try:
             self.manifest = read_manifest(wasm)
-            if self.dev_dir is not None and (self.dev_dir / abi.BUNDLE_MANIFEST).is_file():  # dev mode: the directory's eecs116.json
+            if self.dev_dir is not None and (self.dev_dir / abi.BUNDLE_MANIFEST).is_file():  # dev mode: the directory's solution.json
                 self.manifest = {**self.manifest, **json.loads((self.dev_dir / abi.BUNDLE_MANIFEST).read_text())}
             validate_manifest(self.manifest)
-        except (BundleError, ValueError) as error:
-            raise SolutionError(str(error)) from None
+        except (PackagingError, ValueError) as error:
+            raise SandboxError(str(error)) from None
         self.channels = int(self.manifest.get("channels", abi.DEFAULT_CHANNELS))  # 1 (default) or 3: what step() receives
         self.resolution = tuple(self.manifest.get("resolution", abi.DEFAULT_RESOLUTION))  # (width, height) of the frames
         self.descriptor = runtime_descriptor(wasm)  # None for native modules; .length == 0 for a bare Python runtime
         base = strip_custom(wasm, abi.MANIFEST_SECTION)  # the manifest does not change the code: identical modules share a compilation
-        module = self.runtime.module(base)
+        module = self.engine.module(base)
         export_names = {export.name for export in module.exports}
         missing = [name for name in abi.REQUIRED_EXPORTS if name not in export_names]
         if missing:
-            raise SolutionError(f"{self.path.name} is not a solution module: missing exports {missing} (has {sorted(export_names)})")
+            raise SandboxError(f"{self.path.name} is not a solution module: missing exports {missing} (has {sorted(export_names)})")
 
         if log_dir is None:
-            self._temporary = tempfile.TemporaryDirectory(prefix="eecs116-")
+            self._temporary = tempfile.TemporaryDirectory(prefix="relpose-")
             log_dir = self._temporary.name
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         self.stdout_path = self.log_dir / "stdout.txt"
         self.stderr_path = self.log_dir / "stderr.txt"
 
-        self.store = wasmtime.Store(self.runtime.engine)
+        self.store = wasmtime.Store(self.engine.wasmtime)
         self.store.set_limits(memory_size=self.limits.memory_bytes)
         wasi = wasmtime.WasiConfig()
         wasi.argv = ["solution"]
-        environment = [("EECS116", "1")]
+        environment = [("RELPOSE", "1")]
         if self.dev_dir is not None:
             wasi.preopen_dir(str(self.dev_dir), "/solution", fs_mutable=False)
             environment.append((abi.SOLUTION_DIR_VARIABLE, "/solution"))
@@ -109,7 +111,7 @@ class Solution:
             wasi.stdout_file = str(self.stdout_path)
             wasi.stderr_file = str(self.stderr_path)
         self.store.set_wasi(wasi)
-        linker = wasmtime.Linker(self.runtime.engine)
+        linker = wasmtime.Linker(self.engine.wasmtime)
         linker.define_wasi()
 
         self._arm(self.limits.init_fuel, self.limits.init_wall_seconds)
@@ -122,35 +124,35 @@ class Solution:
         if "abi_version" in export_names:
             version = self._guard(lambda: exports["abi_version"](self.store))
             if version != abi.ABI_VERSION:
-                raise SolutionError(f"{self.path.name} implements ABI version {version}, the harness speaks {abi.ABI_VERSION}")
+                raise SandboxError(f"{self.path.name} implements ABI version {version}, the harness speaks {abi.ABI_VERSION}")
         if "_initialize" in export_names:
             self._guard(lambda: exports["_initialize"](self.store))
 
     # --- plumbing -------------------------------------------------------------------------------------------
 
     def _arm(self, fuel, wall_seconds):
-        if self.runtime.fuel:
+        if self.engine.fuel:
             self.store.set_fuel(fuel)
-        if self.runtime.epochs:
-            self.store.set_epoch_deadline(self.runtime.ticks(wall_seconds))
+        if self.engine.epochs:
+            self.store.set_epoch_deadline(self.engine.ticks(wall_seconds))
 
     def _consumed(self, fuel):
-        return fuel - self.store.get_fuel() if self.runtime.fuel else 0
+        return fuel - self.store.get_fuel() if self.engine.fuel else 0
 
     def _guard(self, call):
         try:
             return call()
         except wasmtime.Trap as trap:
             self.dead = True
-            raise SolutionTrap(trap.trap_code, trap.message, self.stderr_tail()) from None
+            raise SandboxTrap(trap.trap_code, trap.message, self.stderr_tail()) from None
         except wasmtime.ExitTrap as trap:
             self.dead = True
-            raise SolutionTrap("exit", f"the guest called exit({trap.code})", self.stderr_tail()) from None
+            raise SandboxTrap("exit", f"the guest called exit({trap.code})", self.stderr_tail()) from None
 
     def alloc(self, size):
         pointer = self._guard(lambda: self._alloc(self.store, int(size))) & 0xFFFFFFFF
         if pointer == 0:
-            raise SolutionError(f"the guest could not allocate {size} bytes")
+            raise SandboxError(f"the guest could not allocate {size} bytes")
         return pointer
 
     def write(self, pointer, array):
@@ -158,7 +160,7 @@ class Solution:
         array = np.ascontiguousarray(np.frombuffer(array, np.uint8) if isinstance(array, (bytes, bytearray)) else array)
         size = array.nbytes
         if pointer + size > self.memory.data_len(self.store):
-            raise SolutionError(f"write of {size} bytes at {pointer} exceeds guest memory")
+            raise SandboxError(f"write of {size} bytes at {pointer} exceeds guest memory")
         base = ctypes.cast(self.memory.data_ptr(self.store), ctypes.c_void_p).value  # re-fetched: memory may have moved
         ctypes.memmove(base + pointer, array.ctypes.data, size)
 
@@ -181,16 +183,16 @@ class Solution:
     # --- protocol -------------------------------------------------------------------------------------------
 
     def init(self, config):
-        """Hands the bundle (if any) and the config JSON to the guest; raises SolutionError on failure."""
+        """Hands the bundle (if any) and the config JSON to the guest; raises SandboxError on failure."""
         if self.initialized:
-            raise SolutionError("init() called twice")
+            raise SandboxError("init() called twice")
         if self.descriptor is not None and self.descriptor.length == 0 and self.dev_dir is None:
-            raise SolutionError(f"{self.path.name} is a bare runtime without solution code: run `python -m eecs116 bundle` or pass --dir")
+            raise SandboxError(f"{self.path.name} is a bare Python runtime without solution code: run `relpose bundle` or pass --dir")
         self.config = dict(config)
         self.config.setdefault("abi_version", abi.ABI_VERSION)
         image = self.config["image"]
         if int(image.get("channels", 1)) != self.channels:  # the array layout the guest reshapes to must match the declaration
-            raise SolutionError(f"config promises {image.get('channels', 1)} channel(s) but the solution declares {self.channels}; "
+            raise SandboxError(f"config promises {image.get('channels', 1)} channel(s) but the solution declares {self.channels}; "
                                 "adapt the episode with Episode.adapt() first")
         # the resolution is informational to the guest (it reads width/height from the config): evaluate adapts episodes
         # to self.resolution, check builds its config from it, direct API users may pass any size
@@ -202,7 +204,7 @@ class Solution:
         self.init_wall_seconds = time.perf_counter() - started
         self.init_fuel = self._consumed(self.limits.init_fuel)
         if status != abi.STATUS_OK:
-            raise SolutionError(f"init failed: {abi.status_name(status)}\n--- stderr tail ---\n{self.stderr_tail()}")
+            raise SandboxError(f"init failed: {abi.status_name(status)}\n--- stderr tail ---\n{self.stderr_tail()}")
         image = self.config["image"]
         self.height, self.width = int(image["height"]), int(image["width"])
         self.channels = int(image.get("channels", 1))
@@ -215,12 +217,12 @@ class Solution:
 
     def step(self, t, frame, imu):
         if not self.initialized:
-            raise SolutionError("step() before init()")
+            raise SandboxError("step() before init()")
         if self.dead:
-            raise SolutionError("the instance trapped earlier; create a new Solution")
+            raise SandboxError("the instance trapped earlier; create a new Sandbox")
         frame = np.ascontiguousarray(frame, dtype=np.uint8)
         if frame.nbytes != self.frame_bytes:
-            raise SolutionError(f"frame has {frame.nbytes} bytes, the config promises {self.height}x{self.width}x{self.channels}")
+            raise SandboxError(f"frame has {frame.nbytes} bytes, the config promises {self.height}x{self.width}x{self.channels}")
         imu = np.ascontiguousarray(imu, dtype=np.float64).reshape(-1, abi.IMU_ROW_VALUES)
         if len(imu) > self.imu_capacity:
             self.imu_capacity = max(len(imu), 2 * self.imu_capacity)

@@ -1,9 +1,9 @@
 # The Python runtime (`runtime.wasm`)
 
 `runtime.wasm` is CPython 3.14 with numpy and OpenCV compiled to `wasm32-wasip1` as a *reactor* that implements the
-solution ABI (`docs/ABI.md`). `python -m eecs116 bundle <dir>` embeds your directory (zipped) into the module as a
+solution ABI (`docs/ABI.md`). `relpose bundle <dir>` embeds your directory (zipped) into the module as a
 data segment and records its address in the runtime's bundle descriptor; nothing is compiled and the result is a
-self-contained module. At `init` the embedded shim (`runtime/py/_eecs116.py`) finds the zip in its own memory,
+self-contained module. At `init` the embedded shim (`submission/python/guest/relpose_guest.py`) finds the zip in its own memory,
 installs an importer over it, imports `solution:Solution` and constructs it with the config; each `step` wraps the raw
 buffers in numpy arrays and calls `Solution.step`.
 
@@ -39,16 +39,16 @@ buffers in numpy arrays and calls `Solution.step`.
 my_solution/
   solution.py          class Solution (or a package solution/__init__.py)
   helpers/...          any modules and packages; relative imports work; __file__ is /bundle/<path>
-  net.onnx, w.npz      data files: `import eecs116_bundle as bundle; bundle.read_bytes("net.onnx")`, `np.load(bundle.open("w.npz"))`
-  eecs116.json         optional: {"entry": "mypkg.estimator:Estimator", "channels": 3}   (channels: 1 grayscale default, 3 RGB)
+  net.onnx, w.npz      data files: `import solution_bundle as bundle; bundle.read_bytes("net.onnx")`, `np.load(bundle.open("w.npz"))`
+  solution.json         optional: {"entry": "mypkg.estimator:Estimator", "channels": 3}   (channels: 1 grayscale default, 3 RGB)
 ```
 
 Zips are stored uncompressed (there is no zlib in the guest), so `np.savez` rather than `np.savez_compressed`.
-`python -m eecs116 unbundle solution.wasm -o dir` extracts a bundle again.
+`relpose unbundle solution.wasm -o dir` extracts a bundle again.
 
 ## Developing without rebundling
 
-`python -m eecs116 check runtime.wasm --dir my_solution` mounts the directory into the guest (read-only) instead of a
+`relpose check runtime.wasm --dir my_solution` mounts the directory into the guest (read-only) instead of a
 bundle, so edits are picked up immediately and tracebacks show real file paths. `evaluate ... --dir my_solution`
 works the same way with `runtime.wasm`.
 
@@ -62,12 +62,13 @@ CNN through `cv2.dnn` ~12 M; 1 s of wall time corresponds to roughly 2 × 10¹�
 
 ## Native solutions
 
-C, C++ and Rust modules implement the same exports directly (`examples/cpp-minimal`); the bundle mechanism is only
+C, C++ and Rust modules implement the same exports directly (`examples/native/cpp_minimal`); the bundle mechanism is only
 needed by the Python runtime. The harness treats both identically.
 
-## Building the runtime (course staff)
+## Building the runtime (you)
 
-`./build_docker_image.sh` once, then `./build_wasm_python.sh` (`wasm-python/build.sh` in the toolchain container,
-10–15 min): produces `build/wasm-python/dist/python.wasm` (command-line Python for experiments: `wasm-python/python.sh`)
-and `runtime.wasm` (the reactor). Patches, module lists and the frozen-stdlib mechanism are documented in
-`wasm-python/README.md`. `tests/` exercises the runtime through the harness (`pytest`).
+`submission/toolchain/build-image.sh` once, then `submission/python/build.sh` (runs `submission/python/cpython/build-wasm.sh`
+in the toolchain container, 10–15 min): produces `build/runtime/dist/runtime.wasm` (the reactor `relpose bundle` embeds
+your directory into) and `python.wasm` (a command-line Python for experiments: `submission/python/cpython/python.sh`).
+Patches, module lists and the frozen-stdlib mechanism are documented in `submission/python/README.md`; change them
+freely, the contract is only the ABI. `tests/` exercises the result through the harness (`pytest`).

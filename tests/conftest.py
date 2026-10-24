@@ -4,22 +4,22 @@ from pathlib import Path
 import pytest
 
 REPO = Path(__file__).resolve().parent.parent
-RUNTIME = Path(os.environ.get("EECS116_RUNTIME", REPO / "build" / "wasm-python" / "dist" / "runtime.wasm"))
+RUNTIME = Path(os.environ.get("RELPOSE_RUNTIME", REPO / "build" / "runtime" / "dist" / "runtime.wasm"))
 
 
 @pytest.fixture(scope="session")
 def runtime_path():
     if not RUNTIME.is_file():
-        pytest.skip(f"runtime.wasm not built ({RUNTIME}); run build_wasm_python.sh")
+        pytest.skip(f"runtime.wasm not built ({RUNTIME}); run submission/python/build.sh")
     return RUNTIME
 
 
 @pytest.fixture(scope="session")
-def runtime():
-    """One compiled engine for the whole session (compiling the 40 MiB module takes seconds)."""
-    from eecs116 import Runtime
+def engine():
+    """One wasmtime engine (with its compile cache) for the whole session."""
+    from relpose import Engine
 
-    return Runtime()
+    return Engine()
 
 
 @pytest.fixture

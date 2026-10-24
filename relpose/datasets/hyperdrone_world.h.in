@@ -1,10 +1,10 @@
-// HyperDrone World specification of the challenge's data generator; rendered from spec_header.h.in by
-// eecs116.data.simulate (the placeholders become numbers) and handed to hyperdrone.Config(spec_header=...).
+// HyperDrone World specification of the challenge's data generator; rendered from hyperdrone_world.h.in by
+// relpose.datasets.simulation (the placeholders become numbers) and handed to hyperdrone.Config(hyperdrone_world=...).
 // The content hash of the rendered file is part of the JIT key: every distinct configuration compiles once.
 //
 // Preset x500_fpv_imu (200 Hz IMU in the dynamics state chain, FPV camera), visual-inertial localization task
 // (autopilot flies a random waypoint route), rendering every IMU step so the data pipeline can integrate any shutter
-// time itself (eecs116.data.isp), a hover at the start of each episode, randomised horizontal FOV.
+// time itself (relpose.datasets.camera), a hover at the start of each episode, randomised horizontal FOV.
 #pragma once
 #include <rl_tools/rl/environments/hyperdrone/presets.h>
 #include <rl_tools/rl/environments/hyperdrone/operations_cpu.h>

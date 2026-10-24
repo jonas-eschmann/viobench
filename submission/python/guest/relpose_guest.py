@@ -1,8 +1,8 @@
-"""Guest-side glue between runtime/reactor.c and the student's solution; frozen into runtime.wasm.
+"""Guest-side glue between submission/python/reactor.c and the student's solution; frozen into runtime.wasm.
 
 init() receives the config JSON and (when the wasm carries one) the zip of the student's directory, makes the
 zip importable, imports the entry point (default `solution:Solution`) and constructs it. step() wraps the raw
-buffers in numpy arrays, calls Solution.step and writes the pose back. Status codes mirror eecs116/abi.py.
+buffers in numpy arrays, calls Solution.step and writes the pose back. Status codes mirror relpose/abi.py.
 """
 import importlib
 import importlib.abc
@@ -18,10 +18,10 @@ import zipfile
 import numpy as np
 
 BUNDLE_ROOT = "/bundle"  # virtual location used for __file__ of bundled modules
-BUNDLE_MODULE = "eecs116_bundle"  # `import eecs116_bundle` gives students their data files
-MANIFEST_NAME = "eecs116.json"
+BUNDLE_MODULE = "solution_bundle"  # `import solution_bundle` gives students their data files
+MANIFEST_NAME = "solution.json"
 DEFAULT_ENTRY = "solution:Solution"
-SOLUTION_DIR_VARIABLE = "EECS116_SOLUTION_DIR"  # dev mode: the host preopened the directory instead of bundling it
+SOLUTION_DIR_VARIABLE = "RELPOSE_SOLUTION_DIR"  # dev mode: the host preopened the directory instead of bundling it
 IMU_ROW_VALUES = 7
 POSE_VALUES = 7
 

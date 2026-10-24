@@ -1,14 +1,14 @@
 # Submission server
 
-Two processes share one directory (`EECS116_SERVER_DIR`, default `./server-data`): the web app accepts uploads into
+Two processes share one directory (`RELPOSE_SERVER_DIR`, default `./server-data`): the web app accepts uploads into
 an SQLite queue, the worker evaluates them one at a time on the hidden datasets and the app serves the leaderboard.
 
 ```bash
 pip install -e ".[server,data]"
 mkdir -p server-data && printf "s3cr3t-token-1 alice\ns3cr3t-token-2 bob\n" > server-data/tokens.txt
-EECS116_DATASETS=/data/hidden/default:/data/hidden/blur:/data/hidden/lowlight:/data/hidden/oversaturated:/data/hidden/real \
-    python -m eecs116.server.worker &
-uvicorn eecs116.server.app:app --host 0.0.0.0 --port 8000
+RELPOSE_DATASETS=/data/hidden/default:/data/hidden/blur:/data/hidden/lowlight:/data/hidden/oversaturated:/data/hidden/real \
+    python -m relpose.server.worker &
+uvicorn relpose.server.app:app --host 0.0.0.0 --port 8000
 ```
 
 Students:
@@ -25,5 +25,5 @@ front highlighted; the hidden datasets never leave the server (students see metr
 
 Hardening checklist for a public deployment: run the worker as a dedicated user in a container without network and
 with a memory limit (the wasm guest is sandboxed by wasmtime and capped by `Limits`, the host Python process is not),
-put the app behind TLS, rotate tokens, keep `EECS116_DAILY_QUOTA` modest, and back up `submissions.sqlite`
+put the app behind TLS, rotate tokens, keep `RELPOSE_DAILY_QUOTA` modest, and back up `submissions.sqlite`
 plus `reports/`.

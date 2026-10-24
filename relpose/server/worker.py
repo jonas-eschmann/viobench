@@ -1,6 +1,6 @@
-"""Evaluation worker: polls the queue, runs `python -m eecs116 evaluate` on the hidden datasets, stores the summary.
+"""Evaluation worker: polls the queue, runs `relpose evaluate` on the hidden datasets, stores the summary.
 
-    EECS116_DATASETS=/data/hidden/default:/data/hidden/blur:... python -m eecs116.server.worker
+    RELPOSE_DATASETS=/data/hidden/default:/data/hidden/blur:... relpose.server.worker
 
 Runs each evaluation in a subprocess (own process = own memory, killed on timeout). Run the worker as an unprivileged
 user in a container without network: the guest is sandboxed by wasmtime, but the evaluation host process is not.
@@ -15,14 +15,14 @@ from pathlib import Path
 from .store import Store
 
 POLL_SECONDS = 3.0
-TIMEOUT_SECONDS = float(os.environ.get("EECS116_EVAL_TIMEOUT", "7200"))
+TIMEOUT_SECONDS = float(os.environ.get("RELPOSE_EVAL_TIMEOUT", "7200"))
 
 
 def datasets_from_environment():
-    value = os.environ.get("EECS116_DATASETS", "")
+    value = os.environ.get("RELPOSE_DATASETS", "")
     paths = [Path(p) for p in value.split(os.pathsep) if p]
     if not paths:
-        sys.exit("EECS116_DATASETS must list the dataset directories (os.pathsep separated)")
+        sys.exit("RELPOSE_DATASETS must list the dataset directories (os.pathsep separated)")
     for path in paths:
         if not path.is_dir():
             sys.exit(f"dataset directory {path} does not exist")
@@ -33,7 +33,7 @@ def evaluate_submission(store, submission, datasets, log=print):
     wasm = store.upload_path(submission["id"])
     report_dir = store.report_dir(submission["id"])
     report_dir.mkdir(parents=True, exist_ok=True)
-    command = [sys.executable, "-m", "eecs116", "evaluate", str(wasm), *map(str, datasets), "-o", str(report_dir)]
+    command = [sys.executable, "-m", "relpose", "evaluate", str(wasm), *map(str, datasets), "-o", str(report_dir)]
     log(f"submission {submission['id']} by {submission['user']}: {' '.join(command)}")
     with open(report_dir / "worker.txt", "w") as output:
         try:

@@ -6,9 +6,9 @@ import sqlite3
 import time
 from pathlib import Path
 
-DEFAULT_DIR = Path(os.environ.get("EECS116_SERVER_DIR", "server-data"))
-MAX_UPLOAD_BYTES = int(os.environ.get("EECS116_MAX_UPLOAD_MIB", "128")) << 20
-DAILY_QUOTA = int(os.environ.get("EECS116_DAILY_QUOTA", "20"))
+DEFAULT_DIR = Path(os.environ.get("RELPOSE_SERVER_DIR", "server-data"))
+MAX_UPLOAD_BYTES = int(os.environ.get("RELPOSE_MAX_UPLOAD_MIB", "128")) << 20
+DAILY_QUOTA = int(os.environ.get("RELPOSE_DAILY_QUOTA", "20"))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS submissions (
@@ -46,8 +46,8 @@ class Store:
         return connection
 
     def tokens(self):
-        """{token: user} from $EECS116_TOKENS (lines "token user") or <dir>/tokens.txt."""
-        path = Path(os.environ.get("EECS116_TOKENS", self.directory / "tokens.txt"))
+        """{token: user} from $RELPOSE_TOKENS (lines "token user") or <dir>/tokens.txt."""
+        path = Path(os.environ.get("RELPOSE_TOKENS", self.directory / "tokens.txt"))
         if not path.is_file():
             return {}
         mapping = {}

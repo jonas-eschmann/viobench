@@ -1,6 +1,6 @@
 """On-disk episode format: the EuRoC/ASL directory layout plus episode.json.
 
-    <episode>/episode.json                               our config + metadata (format, variant, source, frame count)
+    <episode>/episode.json                               our config + metadata (format, condition, source, frame count)
     <episode>/mav0/cam0/data.csv                         "#timestamp [ns],filename"
     <episode>/mav0/cam0/data/<timestamp ns>.png          8-bit grayscale (or RGB) PNG
     <episode>/mav0/cam0/sensor.yaml                      Kalibr-style intrinsics and T_BS (camera in body)

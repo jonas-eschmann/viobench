@@ -26,8 +26,8 @@ def make_config(fuel=True, epochs=True, opt_level="speed", cache=True):
     return config
 
 
-class Runtime:
-    """One Engine with its epoch ticker plus a per-process cache of compiled modules keyed by the binary's hash.
+class Engine:
+    """One wasmtime engine with its epoch ticker plus a per-process cache of compiled modules keyed by the binary's hash.
 
     Hand the *stripped* runtime binary (bundle section removed) to module() so every student submission built on
     the same runtime.wasm shares one compilation.
@@ -35,7 +35,7 @@ class Runtime:
 
     def __init__(self, fuel=True, epochs=True, opt_level="speed", cache=True):
         self.config = make_config(fuel=fuel, epochs=epochs, opt_level=opt_level, cache=cache)
-        self.engine = wasmtime.Engine(self.config)
+        self.wasmtime = wasmtime.Engine(self.config)
         self.fuel = fuel
         self.epochs = epochs
         self._modules = {}
@@ -44,7 +44,7 @@ class Runtime:
             self._start_ticker()
 
     def _start_ticker(self):
-        engine = self.engine
+        engine = self.wasmtime
 
         def tick():
             while True:
@@ -62,6 +62,6 @@ class Runtime:
         key = hashlib.sha256(wasm).hexdigest()
         module = self._modules.get(key)
         if module is None:
-            module = wasmtime.Module(self.engine, wasm)
+            module = wasmtime.Module(self.wasmtime, wasm)
             self._modules[key] = module
         return module

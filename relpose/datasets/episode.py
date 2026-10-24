@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 
 from .. import abi
-from ..metrics import invert, matrices_to_poses, poses_to_matrices, quaternion_to_matrix
+from ..evaluation.metrics import invert, matrices_to_poses, poses_to_matrices, quaternion_to_matrix
 
 
 def slerp(q0, q1, fraction):

@@ -7,7 +7,7 @@ SRC=${SRC:-/opt/src}
 SDK=${WASI_SDK_PATH:-/opt/wasi-sdk}
 VENV=${VENV:-/opt/venv}
 WASMTIME=${WASMTIME:-$(command -v wasmtime)}
-BUILD=${BUILD:-$HERE/../build/wasm-python}
+BUILD=${BUILD:-$HERE/../../../build/runtime}
 CPUS=$(getconf _NPROCESSORS_ONLN)
 JOBS=$(( CPUS < 5 ? CPUS : 5 ))
 export PATH=$VENV/bin:$(dirname "$WASMTIME"):$PATH
@@ -109,10 +109,10 @@ EOF
 
 # frozen modules get __file__ under sys._stdlib_dir, so numpy's bytecode is named after /usr/local/lib/python3.14/numpy as well
 LIB=$BUILD/prefix/usr/local/lib/python3.14
-# runtime/py holds the frozen guest-side shim (_eecs116) of the solution runtime
-"$BUILD_PYTHON" "$HERE/scripts/freeze.py" "$BUILD/frozen" "$LIB:/usr/local/lib/python3.14:" "$LIB/site-packages/numpy:/usr/local/lib/python3.14/numpy:numpy" "$HERE/../runtime/py:/usr/local/lib/python3.14:"
+# submission/python/guest holds the frozen guest-side shim (relpose_guest) of the solution runtime
+"$BUILD_PYTHON" "$HERE/scripts/freeze.py" "$BUILD/frozen" "$LIB:/usr/local/lib/python3.14:" "$LIB/site-packages/numpy:/usr/local/lib/python3.14/numpy:numpy" "$HERE/../guest:/usr/local/lib/python3.14:"
 python "$HERE/scripts/link.py" "$BUILD" "$SDK" "$BUILD/dist/python.wasm" "$NUMPY/archives/modules.json" "$BUILD/opencv-archives/modules.json" --frozen "$BUILD/frozen"
 "$WASMTIME" compile "$BUILD/dist/python.wasm" -o "$BUILD/dist/python.cwasm"
-"$WASMTIME" run --allow-precompiled "$BUILD/dist/python.cwasm" - < "$HERE/examples/smoke_vo.py"
+"$WASMTIME" run --allow-precompiled "$BUILD/dist/python.cwasm" - < "$HERE/smoke_vo.py"
 # runtime.wasm: the same interpreter as a reactor exporting the solution ABI (docs/ABI.md); students bundle their code into it
-python "$HERE/scripts/link.py" "$BUILD" "$SDK" "$BUILD/dist/runtime.wasm" "$NUMPY/archives/modules.json" "$BUILD/opencv-archives/modules.json" --frozen "$BUILD/frozen" --reactor "$HERE/../runtime/reactor.c"
+python "$HERE/scripts/link.py" "$BUILD" "$SDK" "$BUILD/dist/runtime.wasm" "$NUMPY/archives/modules.json" "$BUILD/opencv-archives/modules.json" --frozen "$BUILD/frozen" --reactor "$HERE/../reactor.c"

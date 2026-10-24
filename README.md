@@ -1,76 +1,51 @@
-# EECS 116/216 final project: compute-aware relative pose estimation
+# relpose — compute-aware relative pose estimation (EECS 116/216 final project)
 
-Students estimate the pose of a flying camera relative to the first frame from camera frames + IMU, inside a
-WebAssembly sandbox that meters compute deterministically, and are placed on an accuracy-vs-compute curve. This
-repository is the whole infrastructure: the sandboxed Python runtime, the bundler/harness, the data pipeline on
-HyperDrone, the metrics, baselines, and the submission server.
+Students estimate the pose of a flying camera relative to its first frame from camera frames + IMU. A submission is
+one WebAssembly module; we are unopinionated about what runs inside it. The evaluator meters compute deterministically
+(Wasmtime fuel) and places every submission on an accuracy-vs-compute curve.
 
-| | |
+```
+ examples/ ──submission/ (Python runtime + relpose bundle | native toolchain)──▶ solution.wasm
+                                                                                     │
+ datasets/ recipes ──relpose simulate (HyperDrone, GPU) / relpose convert-euroc──▶ episodes on disk
+                                                                                     ▼
+                                              relpose evaluate (wasmtime sandbox) ──▶ report.json ──▶ relpose leaderboard
+                                              relpose.server: upload → the same evaluate on hidden episodes → leaderboard
+```
+
+| directory | role |
 |---|---|
-| Task, scoring, limits | [`docs/TASK.md`](docs/TASK.md) |
-| Student walkthrough | [`docs/STUDENT_GUIDE.md`](docs/STUDENT_GUIDE.md) |
-| Solution ABI (exports, buffers, status codes, config JSON) | [`docs/ABI.md`](docs/ABI.md) |
-| What the Python runtime offers / forbids | [`docs/RUNTIME.md`](docs/RUNTIME.md) |
-| Datasets: format, generator, variants, real data | [`docs/DATA.md`](docs/DATA.md) |
-| Building the wasm runtime | [`wasm-python/README.md`](wasm-python/README.md) |
-| Submission server | [`eecs116/server/README.md`](eecs116/server/README.md) |
+| [`docs/`](docs/) | the task and scoring ([TASK](docs/TASK.md)), guides for [students](docs/STUDENT_GUIDE.md) and [instructors](docs/INSTRUCTOR_GUIDE.md), the contracts: [ABI](docs/ABI.md), [runtime](docs/RUNTIME.md), [data](docs/DATA.md) |
+| [`submission/`](submission/) | how a solution `.wasm` is made, by you: one toolchain image, a reference Python flavour (CPython + numpy + OpenCV runtime that `relpose bundle` embeds your directory into) and a reference native flavour (C/C++/Rust against `relpose_abi.h`) |
+| [`relpose/`](relpose/) | the host toolkit, `pip install -e .`: `abi` (the contract), `packaging` (directory ↔ `.wasm`), `evaluation` (`.wasm` → numbers), `datasets` (episodes: storage, generation, real data), `server` (submissions) |
+| [`examples/`](examples/) | complete solutions in both flavours: identity, IMU dead reckoning, KLT + essential matrix + IMU, a tiny CNN via `cv2.dnn`, a C++ reactor |
+| [`datasets/`](datasets/) | the recipes that produce the published and hidden episode sets (the data itself lives in `build/datasets/`) |
+| [`tests/`](tests/) | pytest suite mirroring the package; drives a real `runtime.wasm` through the harness |
 
-## How it fits together
-
-```
- student directory ──bundle──▶ solution.wasm = runtime.wasm + zip (data segment) + manifest (custom section)
-                                   │
- episode on disk (EuRoC layout) ───┤ eecs116.Solution: wasmtime, fuel + wall-time per step, memory cap
-   frames + IMU + ground truth     ▼
-                              report.json: ATE / RPE / rotation, fuel per frame (median, p95), logs
-                                   │
- HyperDrone (GPU) ──simulate──▶ default / blur / lowlight / oversaturated episodes      EuRoC ──convert-euroc──▶ real episodes
-```
-
-- `runtime.wasm` (`wasm-python/`, `runtime/`): CPython 3.14 + numpy + OpenCV (incl. `dnn` for ONNX) as a wasip1
-  reactor exporting `init`/`step`; the student's directory is embedded as a data segment (self-contained module), no toolchain needed.
-  Frames are 320 × 240 grayscale by default; a submission opts into RGB and/or 640 × 480 through its manifest
-  (`eecs116.json` / `eecs116 manifest`); episodes are stored at 640 × 480 and resampled per submission.
-- `eecs116/` (pip package): `bundle`, `manifest`, `check`, `evaluate`, `simulate`, `convert-euroc`, `leaderboard` commands; the
-  `Solution` wrapper (wasmtime 50, fuel metering), `metrics`, the `data` package (episode container, ASL-layout I/O,
-  camera/ISP model, HyperDrone generator), the FastAPI `server`.
-- `examples/`: `python-minimal` (identity), `python-deadreckoning` (IMU only), `python-orb` (KLT + essential matrix +
-  IMU scale), `python-tinynn` (PyTorch → ONNX → `cv2.dnn`), `cpp-minimal` (native reactor).
-- `tests/`: pytest suite driving `runtime.wasm` through the harness (protocol, traps, bundling, ONNX, metrics, data I/O).
-
-## Quick start (staff)
+## Quick start
 
 ```bash
-./build_docker_image.sh && ./build_wasm_python.sh            # toolchain image, then runtime.wasm (10-15 min, once)
-python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,data,sim]"
-pytest                                                      # 39 tests against build/wasm-python/dist/runtime.wasm
-python -m eecs116 simulate -o build/datasets/public/default-val --episodes 16 --seed 2000      # GPU
-python -m eecs116 convert-euroc build/datasets/raw/euroc/V1_01_easy -o build/datasets/public/real-sample --max-snippets 3
-python -m eecs116 bundle examples/python-orb -o orb.wasm && python -m eecs116 check orb.wasm
-python -m eecs116 evaluate orb.wasm build/datasets/public/default-val -o report-orb
-python -m eecs116 leaderboard report-* --plot leaderboard.png
+python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,data]"
+submission/toolchain/build-image.sh && submission/python/build.sh      # Docker; 10-15 min once → build/runtime/dist/runtime.wasm
+pytest                                                                 # ~50 tests through the harness
+relpose bundle examples/python/klt_imu -o klt.wasm && relpose check klt.wasm
+relpose evaluate klt.wasm build/datasets/public/default-val -o report-klt
+relpose leaderboard report-* --plot leaderboard.png
 ```
 
-Baselines on the public validation sets (10 s episodes, stored at 640 × 480, consumed at 320 × 240 @ 20 Hz; median ATE over episodes in metres,
-median fuel per frame; `python -m eecs116 leaderboard` output):
+`relpose --help` lists the commands by role: packaging (`bundle`, `unbundle`, `manifest`), evaluation (`check`,
+`evaluate`, `leaderboard`), datasets (`simulate`, `convert-euroc`). Evaluation needs only wasmtime: no Docker, no GPU.
+
+## Baselines
+
+Public validation sets (10 s episodes, stored at 640 × 480, consumed at 320 × 240 grayscale @ 20 Hz; median ATE over
+episodes in metres, median fuel per frame):
 
 | solution | default | blur | lowlight | oversaturated | real (EuRoC V1_01) | fuel/frame |
 |---|---|---|---|---|---|---|
-| `python-deadreckoning` (IMU only) | 18.8 | 8.2 | 14.1 | 18.5 | 30.8 | 3.6 M |
-| `python-orb` (KLT + essential matrix + IMU) | 4.3 | 4.1 | 4.1 | 4.2 | 4.8 | 140–600 M (noise in low light → many corners) |
-| `python-tinynn` (CNN via `cv2.dnn`, trained on 8 episodes) | 1.2 | 1.2 | 1.4 | 2.3 | 3.8 | 12 M |
+| `examples/python/dead_reckoning` (IMU only) | 18.8 | 8.2 | 14.1 | 18.5 | 30.8 | 3.6 M |
+| `examples/python/klt_imu` (KLT + essential matrix + IMU) | 4.3 | 4.1 | 4.1 | 4.2 | 4.8 | 140–600 M |
+| `examples/python/tiny_cnn` (CNN via `cv2.dnn`, trained on 8 episodes) | 1.2 | 1.2 | 1.4 | 2.3 | 3.8 | 12 M |
 
-All three consume 320 × 240 grayscale frames (the default); a submission opts into RGB / VGA through its manifest.
-
-## Layout
-
-```
-Dockerfile, build_*.sh      toolchain image (wasi-sdk 34, wasmtime 50, CPython/numpy/OpenCV sources) and build entry points
-wasm-python/                CPython + numpy + OpenCV → wasm32-wasip1 (patches, freeze/link scripts)
-runtime/                    reactor.c (ABI exports) and the frozen guest-side shim _eecs116.py
-eecs116/                    host package: harness, bundler, metrics, data pipeline, server
-examples/                   baselines and templates
-docs/                       task, ABI, runtime, data, student guide
-tests/                      pytest
-build/                      (ignored) wasm artefacts, datasets
-```
+A submission opts into RGB and/or 640 × 480 through its manifest (`solution.json` or `relpose manifest`); the harness
+resamples every episode per submission.

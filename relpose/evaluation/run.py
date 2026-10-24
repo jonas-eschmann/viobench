@@ -1,4 +1,4 @@
-"""Run a solution .wasm over episodes on disk, meter it, score it, and write a report."""
+"""`relpose evaluate`: run a solution .wasm over episodes on disk, meter it, score it, and write a report."""
 import json
 import platform
 import time
@@ -7,11 +7,11 @@ from pathlib import Path
 
 import numpy as np
 
-from . import abi
-from .data.euroc_io import list_episodes, read_episode
-from .engine import WASMTIME_VERSION, Runtime
+from .. import abi
+from ..datasets.storage import list_episodes, read_episode
+from .engine import WASMTIME_VERSION, Engine
 from .metrics import evaluate_trajectory
-from .solution import Limits, Solution, SolutionError, SolutionTrap
+from .sandbox import Limits, Sandbox, SandboxError, SandboxTrap
 
 MAX_CONSECUTIVE_FAILURES = 10
 
@@ -43,7 +43,7 @@ def null_pose_estimates(n):
     return np.full((n, abi.POSE_VALUES), np.nan)
 
 
-def run_episode(wasm_path, episode, runtime, limits, log_dir, dataset_name="", dev_dir=None, progress=None):
+def run_episode(wasm_path, episode, engine, limits, log_dir, dataset_name="", dev_dir=None, progress=None):
     estimates = null_pose_estimates(episode.num_frames)
     fuel = np.zeros(episode.num_frames)
     wall = np.zeros(episode.num_frames)
@@ -52,15 +52,15 @@ def run_episode(wasm_path, episode, runtime, limits, log_dir, dataset_name="", d
     completed = False
     fuel_init = 0
     wall_init = 0.0
-    solution = None
+    sandbox = None
     try:
-        solution = Solution(wasm_path, runtime, limits=limits, log_dir=log_dir, dev_dir=dev_dir)
-        config, frames = episode.adapt(solution.channels, solution.resolution)
-        solution.init(config)
-        fuel_init, wall_init = solution.init_fuel, solution.init_wall_seconds
+        sandbox = Sandbox(wasm_path, engine, limits=limits, log_dir=log_dir, dev_dir=dev_dir)
+        config, frames = episode.adapt(sandbox.channels, sandbox.resolution)
+        sandbox.init(config)
+        fuel_init, wall_init = sandbox.init_fuel, sandbox.init_wall_seconds
         consecutive = 0
         for index, (t, frame, imu) in enumerate(episode.steps(frames)):
-            result = solution.step(t, frame, imu)
+            result = sandbox.step(t, frame, imu)
             name = abi.status_name(result.status)
             statuses[name] = statuses.get(name, 0) + 1
             fuel[index], wall[index] = result.fuel, result.wall_seconds
@@ -74,9 +74,9 @@ def run_episode(wasm_path, episode, runtime, limits, log_dir, dataset_name="", d
                 progress(index, episode.num_frames, result)
         else:
             completed = True
-    except SolutionTrap as trap:
+    except SandboxTrap as trap:
         failure = f"trap {trap.trap_code}: {trap.trap_message}"
-    except SolutionError as error:
+    except SandboxError as error:
         failure = str(error).splitlines()[0]
     fed = int(np.count_nonzero(fuel)) if not completed else episode.num_frames
     fed = max(fed, 1)
@@ -99,7 +99,7 @@ def run_episode(wasm_path, episode, runtime, limits, log_dir, dataset_name="", d
         wall_per_frame_median_ms=float(np.median(per_frame_wall) * 1e3),
         wall_per_frame_p95_ms=float(np.percentile(per_frame_wall, 95) * 1e3),
         metrics=metrics.as_dict(),
-        stderr_tail=solution.stderr_tail(20) if solution is not None else "",
+        stderr_tail=sandbox.stderr_tail(20) if sandbox is not None else "",
     ), estimates
 
 
@@ -123,11 +123,11 @@ def summarize(reports):
     return {"overall": summary(reports), "datasets": {name: summary([r for r in reports if r.dataset == name]) for name in datasets}}
 
 
-def evaluate(wasm_path, dataset_roots, output_dir=None, limits=None, runtime=None, dev_dir=None, max_episodes=None,
+def evaluate(wasm_path, dataset_roots, output_dir=None, limits=None, engine=None, dev_dir=None, max_episodes=None,
              save_estimates=True, progress=None, log=print):
     """dataset_roots: episode directories or directories of episodes. Returns the report dict (also written as report.json)."""
     wasm_path = Path(wasm_path)
-    runtime = runtime or Runtime()
+    engine = engine or Engine()
     limits = limits or Limits()
     output_dir = Path(output_dir) if output_dir else Path.cwd() / f"report-{wasm_path.stem}"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -144,7 +144,7 @@ def evaluate(wasm_path, dataset_roots, output_dir=None, limits=None, runtime=Non
         for episode_dir in episodes:
             episode = read_episode(episode_dir)
             log_dir = output_dir / "logs" / dataset_name / episode.name
-            report, estimates = run_episode(wasm_path, episode, runtime, limits, log_dir, dataset_name=dataset_name, dev_dir=dev_dir, progress=progress)
+            report, estimates = run_episode(wasm_path, episode, engine, limits, log_dir, dataset_name=dataset_name, dev_dir=dev_dir, progress=progress)
             reports.append(report)
             if save_estimates:
                 np.savetxt(log_dir / "estimate.tum", np.column_stack([episode.frame_times, estimates]), fmt="%.9g",

@@ -1,7 +1,8 @@
-// Minimal native solution implementing the ABI (docs/ABI.md) without Python: a wasm32-wasip1 reactor.
-// It reports the identity pose and shows where to put state and how to read the config.
-// Build (inside the toolchain image, see README.md):
-//   cmake -S . -B build -DCMAKE_TOOLCHAIN_FILE=/opt/wasi-sdk/share/cmake/wasi-sdk-p1.cmake && cmake --build build
+// Minimal native solution: a wasm32-wasip1 reactor implementing the relpose ABI (submission/native/relpose_abi.h) without
+// Python. It reports the identity pose and shows where to put state and how to read the config.
+// Build:  submission/native/build.sh examples/native/cpp_minimal   ->   build/solution.wasm
+#include "relpose_abi.h"
+
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -10,14 +11,8 @@
 #include <string>
 #include <vector>
 
-#define EXPORT(name) __attribute__((export_name(#name)))
-
 namespace {
 
-constexpr int32_t STATUS_OK = 0;
-constexpr int32_t STATUS_NO_ESTIMATE = 1;
-constexpr int32_t STATUS_EXCEPTION = -1;
-constexpr int32_t STATUS_PROTOCOL = -2;
 
 struct Config {
     int width = 0, height = 0, channels = 1;
@@ -50,12 +45,12 @@ State state;
 
 }  // namespace
 
-EXPORT(abi_version) int32_t abi_version() { return 1; }
+int32_t abi_version() { return RELPOSE_ABI_VERSION; }
 
-EXPORT(alloc) void* eecs116_alloc(uint32_t size) { return std::malloc(size ? size : 1); }
+void* alloc(uint32_t size) { return std::malloc(size ? size : 1); }
 
-EXPORT(init) int32_t init(const char* json, uint32_t length) {
-    if (state.initialized) return STATUS_PROTOCOL;
+int32_t init(const char* json, uint32_t length) {
+    if (state.initialized) return RELPOSE_STATUS_PROTOCOL;
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // a reactor never exits: unbuffered prints reach the host log
     std::setvbuf(stderr, nullptr, _IONBF, 0);
     std::string text(json, length);
@@ -70,17 +65,17 @@ EXPORT(init) int32_t init(const char* json, uint32_t length) {
     find_number(text, "rate_hz", state.config.imu_rate_hz);
     if (state.config.width <= 0 || state.config.height <= 0) {
         std::fprintf(stderr, "config without image size\n");
-        return STATUS_EXCEPTION;
+        return RELPOSE_STATUS_EXCEPTION;
     }
     state.previous_frame.resize(static_cast<size_t>(state.config.width) * state.config.height * state.config.channels);
     std::printf("init: %dx%dx%d fx=%.1f cx=%.1f imu %.0f Hz\n", state.config.width, state.config.height, state.config.channels, state.config.fx, state.config.cx, state.config.imu_rate_hz);
     state.initialized = true;
-    return STATUS_OK;
+    return RELPOSE_STATUS_OK;
 }
 
 // frame: height*width*channels uint8; imu: imu_count rows [t, ax, ay, az, gx, gy, gz]; out: [x, y, z, qx, qy, qz, qw]
-EXPORT(step) int32_t step(double t, const uint8_t* frame, const double* imu, int32_t imu_count, double* out) {
-    if (!state.initialized || imu_count < 0) return STATUS_PROTOCOL;
+int32_t step(double t, const uint8_t* frame, const double* imu, int32_t imu_count, double* out) {
+    if (!state.initialized || imu_count < 0) return RELPOSE_STATUS_PROTOCOL;
     state.frames++;
     double mean = 0;
     for (size_t i = 0; i < state.previous_frame.size(); i++) mean += frame[i];
@@ -95,5 +90,5 @@ EXPORT(step) int32_t step(double t, const uint8_t* frame, const double* imu, int
     // identity pose: replace with your estimate of the current camera frame in the first camera frame
     for (int i = 0; i < 3; i++) out[i] = state.position[i];
     for (int i = 0; i < 4; i++) out[3 + i] = state.quaternion[i];
-    return STATUS_OK;
+    return RELPOSE_STATUS_OK;
 }

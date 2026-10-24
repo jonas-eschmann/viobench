@@ -1,4 +1,4 @@
-# Toolchain for wasm-python/build.sh: wasi-sdk 34, Wasmtime 50, Cython, ninja, pytest and the pristine CPython 3.14.4, numpy 2.3.4 and OpenCV 4.12.0 sources (build.sh defaults point here)
+# Toolchain for submission/python/cpython/build-wasm.sh: wasi-sdk 34, Wasmtime 50, Cython, ninja, pytest and the pristine CPython 3.14.4, numpy 2.3.4 and OpenCV 4.12.0 sources (build.sh defaults point here)
 FROM --platform=linux/amd64 ubuntu:26.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends build-essential ca-certificates cmake curl git python3 python3-venv xz-utils && rm -rf /var/lib/apt/lists/*
@@ -15,5 +15,5 @@ RUN git clone --depth 1 --branch 4.12.0 https://github.com/opencv/opencv /opt/sr
 
 ENV PATH=/opt/venv/bin:$PATH
 
-# host side of the solution runtime (eecs116 package): wasmtime-py drives runtime.wasm in the build's smoke test
+# host side of the solution runtime (relpose package): wasmtime-py drives runtime.wasm in the build's smoke test
 RUN /opt/venv/bin/pip install --no-cache-dir wasmtime==50.0.1 numpy==2.3.4

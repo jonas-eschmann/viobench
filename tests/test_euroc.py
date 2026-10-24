@@ -1,9 +1,9 @@
 """The EuRoC converter on a synthetic ASL-layout sequence (our writer produces the same layout)."""
 import numpy as np
 
-from eecs116.data.convert_euroc import convert, rectification
-from eecs116.data.euroc_io import write_episode
-from tests.test_data import synthetic_episode
+from relpose.datasets.euroc import convert, rectification
+from relpose.datasets.storage import write_episode
+from tests.test_datasets import synthetic_episode
 
 
 def test_rectification_keeps_center_and_scales():

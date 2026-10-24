@@ -8,7 +8,7 @@ compute they spend per frame, so the leaderboard is a curve, not a number.
 
 | | |
 |---|---|
-| Frames | `uint8`, 320 × 240 grayscale by default. Your submission may opt into RGB (`{"channels": 3}`) and/or VGA (`{"resolution": [640, 480]}`) in `eecs116.json` (see `docs/ABI.md`): sets are stored at 640 × 480 and resampled to what you declare; real-data sets are grayscale (replicated into three channels, `config["image"]["color"]` says so) and if a set only exists at 320 × 240 you get a bilinear upscale (`config["image"]["upscaled"]`). Pinhole camera without distortion, intrinsics in the config (`fx, fy, cx, cy`; the horizontal field of view varies between roughly 48° and 80° across episodes), global shutter, timestamp = mid-exposure |
+| Frames | `uint8`, 320 × 240 grayscale by default. Your submission may opt into RGB (`{"channels": 3}`) and/or VGA (`{"resolution": [640, 480]}`) in `solution.json` (see `docs/ABI.md`): sets are stored at 640 × 480 and resampled to what you declare; real-data sets are grayscale (replicated into three channels, `config["image"]["color"]` says so) and if a set only exists at 320 × 240 you get a bilinear upscale (`config["image"]["upscaled"]`). Pinhole camera without distortion, intrinsics in the config (`fx, fy, cx, cy`; the horizontal field of view varies between roughly 48° and 80° across episodes), global shutter, timestamp = mid-exposure |
 | Frame rate | 20 Hz (default; `config["episode"]["frame_rate_hz"]`) |
 | IMU | 200 Hz, in the body/IMU frame: specific force in m/s² (gravity included: a resting IMU reads ≈ 9.81 along the direction opposite to gravity), angular rate in rad/s. In simulation the body frame is x forward, y left, z up and the IMU sits at the body origin; in real data it is whatever the sensor calibration says (`T_cam_imu` is exact, the initial orientation w.r.t. gravity is not given). Noise and bias magnitudes are listed in the config (`imu.*_noise_std` per sample, `*_bias_init_max`, `*_random_walk`). |
 | Extrinsics | `imu.T_cam_imu` (4 × 4, row-major): body/IMU coordinates → camera coordinates (OpenCV: x right, y down, z forward). `imu.T_imu_cam` is the inverse. |
@@ -27,7 +27,7 @@ estimate for frame `k` is final once `step` returns.
 
 ## Scoring
 
-Per episode (`eecs116.metrics`):
+Per episode (`relpose.evaluation.metrics`):
 
 - **ATE** – RMSE of the position error over all frames, in the frame-0 coordinates, *without* any alignment (frame 0
   defines the frame; a missing/invalid estimate counts with the error of a stationary estimator, i.e. the ground-truth
@@ -38,7 +38,7 @@ Per episode (`eecs116.metrics`):
 - diagnostics: Sim(3)-aligned ATE and the fitted scale (separates "wrong scale" from "wrong shape"), coverage,
   final drift per metre travelled.
 
-Compute (`eecs116.evaluate`):
+Compute (`relpose.evaluation.run`):
 
 - **fuel per frame** (median and 95th percentile): Wasmtime's deterministic instruction count for your `step`
   (host calls are free, the interpreter's own work is not). It is identical on your laptop and on the server.
@@ -49,7 +49,7 @@ ATE and median fuel per frame over its episodes. A submission is a point in the 
 your submissions together form your curve. Failures (trap, exceptions on 10 consecutive frames, protocol errors)
 mark an episode failed: its ATE is the stationary-estimator error and it stays on the record.
 
-## Limits (default `Limits` in `eecs116.solution`)
+## Limits (default `Limits` in `relpose.evaluation.sandbox`)
 
 | | |
 |---|---|

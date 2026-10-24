@@ -4,9 +4,9 @@ import io
 import numpy as np
 import pytest
 
-from eecs116 import Limits, Solution, abi
-from eecs116.bundle import bundle
-from eecs116.config import make_config
+from relpose import Limits, Sandbox, abi
+from relpose.packaging.bundle import bundle
+from relpose.abi.config import make_config
 
 torch = pytest.importorskip("torch")
 
@@ -14,7 +14,7 @@ CONFIG = make_config(width=64, height=48, channels=1, num_frames=10)
 
 SOLUTION = """
 import numpy as np, cv2
-import eecs116_bundle as bundle
+import solution_bundle as bundle
 class Solution:
     def __init__(self, config):
         self.net = cv2.dnn.readNetFromONNX(np.frombuffer(bundle.read_bytes("net.onnx"), np.uint8))
@@ -44,7 +44,7 @@ class TinyNet(torch.nn.Module):
         return self.head(torch.cat([x, imu], dim=1))
 
 
-def test_onnx_in_wasm_matches_pytorch(runtime, runtime_path, solution_dir, tmp_path):
+def test_onnx_in_wasm_matches_pytorch(engine, runtime_path, solution_dir, tmp_path):
     torch.manual_seed(0)
     net = TinyNet().eval()
     with torch.no_grad():  # give BatchNorm non-trivial statistics
@@ -64,9 +64,9 @@ def test_onnx_in_wasm_matches_pytorch(runtime, runtime_path, solution_dir, tmp_p
     directory = solution_dir(SOLUTION, {"net.onnx": onnx_buffer.getvalue(), "imu.npy": imu_buffer.getvalue()})
     wasm = tmp_path / "dnn.wasm"
     bundle(directory, wasm, runtime=runtime_path)
-    solution = Solution(wasm, runtime, limits=Limits(), log_dir=tmp_path / "logs")
-    solution.init(CONFIG)
-    result = solution.step(0.05, frame, np.zeros((0, 7)))
-    assert result.status == abi.STATUS_OK, solution.stderr_tail()
+    sandbox = Sandbox(wasm, engine, limits=Limits(), log_dir=tmp_path / "logs")
+    sandbox.init(CONFIG)
+    result = sandbox.step(0.05, frame, np.zeros((0, 7)))
+    assert result.status == abi.STATUS_OK, sandbox.stderr_tail()
     np.testing.assert_allclose(result.pose[:3], expected, rtol=1e-4, atol=1e-5)
     print(f"dnn step fuel {result.fuel:,} wall {result.wall_seconds * 1e3:.1f} ms")

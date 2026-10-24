@@ -1,0 +1,28 @@
+# Native solutions (C, C++, Rust)
+
+A solution is any `wasm32-wasip1` reactor that exports the ABI in `relpose_abi.h` (`abi_version`, `alloc`, `init`,
+`step`, plus `memory`). No Python runtime is involved; the module is typically tens of kilobytes and a step costs a
+few thousand fuel units of overhead instead of the interpreter's.
+
+```bash
+submission/toolchain/build-image.sh                           # once: the image with wasi-sdk 34
+submission/native/build.sh examples/native/cpp_minimal        # cmake inside the image → examples/native/cpp_minimal/build/solution.wasm
+relpose check examples/native/cpp_minimal/build/solution.wasm
+relpose manifest examples/native/cpp_minimal/build/solution.wasm --channels 3 --resolution 640x480   # optional opt-ins
+```
+
+Your own project: copy `examples/native/cpp_minimal`, keep `#include "relpose_abi.h"` and the two CMake lines
+(`include(${RELPOSE_NATIVE_DIR}/relpose_reactor.cmake)`, `relpose_solution(<target>)`).
+
+Rules of the sandbox (`docs/RUNTIME.md` lists the Python-specific ones): `exit()`, `abort()` and uncaught C++ exceptions
+trap and end the episode, return a negative status instead; stdout/stderr are captured into the evaluation log (make
+them unbuffered, a reactor never exits); the frame and IMU buffers are reused next step.
+
+**OpenCV from C++**: the Python-runtime build leaves OpenCV's static libraries and headers in `build/runtime/opencv-build`
+(`lib/libopencv_*.a`, `3rdparty/lib/*.a`, `install/include` after `cmake --install`). Compile with
+`-fwasm-exceptions -mllvm -wasm-use-legacy-eh=false`, link in a separate step with `-fwasm-exceptions -lc++ -lc++abi -lunwind`;
+OpenCV needs the `eh` libc++ variant, which `-fwasm-exceptions` selects.
+
+**Rust**: `crate-type = ["cdylib"]`, target `wasm32-wasip1`, `#[no_mangle] pub extern "C" fn step(t: f64, frame: *const u8,
+imu: *const f64, n: i32, out: *mut f64) -> i32` and friends; there is no `_initialize` then, the harness only calls it
+when present.

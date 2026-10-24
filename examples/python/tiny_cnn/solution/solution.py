@@ -10,7 +10,7 @@ import json
 import cv2
 import numpy as np
 
-import eecs116_bundle as bundle
+import solution_bundle as bundle
 from preintegrate import exp_so3, preintegrate
 from tinynn import TinyNet
 

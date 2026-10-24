@@ -1,12 +1,12 @@
 """Episode generator on HyperDrone: random autopilot flights through ProcTHOR/HSSD scenes, rendered at IMU rate.
 
-    from eecs116.data.simulate import SimConfig, simulate
-    for episode in simulate(SimConfig(), seeds=range(4), variant="default"):
+    from relpose.datasets.simulation import SimConfig, simulate
+    for episode in simulate(SimConfig(), seeds=range(4), condition="default"):
         ...
 
 Needs `pip install hyperdrone` and a GPU (the environment module is JIT-compiled per configuration on first use;
-the rendered spec header's hash is the key). Frames are RGB uint8 after the camera/ISP model (eecs116.data.isp)
-with per-episode parameters drawn from the variant's public ranges (eecs116.data.variants); solutions receive
+the rendered spec header's hash is the key). Frames are RGB uint8 after the camera/ISP model (relpose.datasets.camera)
+with per-episode parameters drawn from the condition's public ranges (relpose.datasets.conditions); solutions receive
 grayscale unless they opt into RGB (Episode.as_channels).
 """
 import hashlib
@@ -20,14 +20,14 @@ from pathlib import Path
 import numpy as np
 
 from .. import abi
-from ..config import make_config, pinhole_intrinsics
-from ..metrics import matrix_to_quaternion, quaternion_to_matrix
+from ..abi.config import make_config, pinhole_intrinsics
+from ..evaluation.metrics import matrix_to_quaternion, quaternion_to_matrix
+from .camera import apply, luminance, srgb_to_linear
+from .conditions import sample as sample_condition
 from .episode import Episode
-from .isp import apply, luminance, srgb_to_linear
-from .variants import sample as sample_variant
 
-TEMPLATE = Path(__file__).with_name("spec_header.h.in")
-CACHE_VARIABLE = "EECS116_CACHE"
+TEMPLATE = Path(__file__).with_name("hyperdrone_world.h.in")
+CACHE_VARIABLE = "RELPOSE_CACHE"
 NOMINAL_FOV_DEGREES = 63.78166175396324  # preset camera, horizontal
 
 
@@ -49,9 +49,9 @@ class SimConfig:
         for key, value in values.items():
             text = text.replace(f"@{key}@", str(value))
         assert "@" not in text, "unrendered placeholder in spec header template"
-        cache = Path(os.environ.get(CACHE_VARIABLE, Path.home() / ".cache" / "eecs116"))
+        cache = Path(os.environ.get(CACHE_VARIABLE, Path.home() / ".cache" / "relpose"))
         cache.mkdir(parents=True, exist_ok=True)
-        path = cache / f"spec-{hashlib.sha256(text.encode()).hexdigest()[:12]}.h"
+        path = cache / f"hyperdrone_world-{hashlib.sha256(text.encode()).hexdigest()[:12]}.h"
         if not path.exists() or path.read_text() != text:
             path.write_text(text)
         return path
@@ -115,7 +115,7 @@ def _block(vector, layout, name):
     return vector[:, offset:offset + size]
 
 
-def simulate(sim, seeds, scenes=None, variant="default", scene_names=None, log=print):
+def simulate(sim, seeds, scenes=None, condition="default", scene_names=None, log=print):
     """Yields Episodes: for each seed one batch of `sim.instances` flights in one scene (round-robin over scenes).
 
     scenes: {name: reference} (default: ProcTHOR Train200). Terminated flights (collisions) are skipped.
@@ -135,17 +135,17 @@ def simulate(sim, seeds, scenes=None, variant="default", scene_names=None, log=p
                 env.close()
             if header is None:
                 header = sim.render_header(200.0)
-            env = hyperdrone.HyperDrone([reference], config=hyperdrone.Config(num_worlds=1, spec_header=str(header)), seed=int(seed))
+            env = hyperdrone.HyperDrone([reference], config=hyperdrone.Config(num_worlds=1, hyperdrone_world=str(header)), seed=int(seed))
             current_scene = scene_name
             imu_rate = float(round(1.0 / float(env.dt)))
             if header.name != sim.render_header(imu_rate).name:  # the preset's IMU rate differs from the assumed 200 Hz
                 raise RuntimeError(f"IMU rate {imu_rate} Hz: re-render the spec header for it")
-        yield from _run_batch(env, sim, int(seed), scene_name, variant, log)
+        yield from _run_batch(env, sim, int(seed), scene_name, condition, log)
     if env is not None:
         env.close()
 
 
-def _run_batch(env, sim, seed, scene_name, variant, log):
+def _run_batch(env, sim, seed, scene_name, condition, log):
     import time
 
     imu_rate = float(round(1.0 / float(env.dt)))  # env.dt is float32 (0.00499999989)
@@ -155,8 +155,8 @@ def _run_batch(env, sim, seed, scene_name, variant, log):
     total = env.total_instances
     layout = env.observation_layout_privileged
     layout_imu = env.observation_layout_imu
-    rng = np.random.default_rng([seed, abs(hash(variant)) % (2**32)])
-    isp = [sample_variant(variant, rng, imu_rate_hz=imu_rate) for _ in range(total)]
+    rng = np.random.default_rng([seed, abs(hash(condition)) % (2**32)])
+    isp = [sample_condition(condition, rng, imu_rate_hz=imu_rate) for _ in range(total)]
     sub_frames = max(k for _, k in isp)  # ring buffer length
 
     env.reset(np.ones(total, dtype=bool))
@@ -221,7 +221,7 @@ def _run_batch(env, sim, seed, scene_name, variant, log):
         intrinsics = pinhole_intrinsics(sim.width, sim.height, fov)
         config = make_config(width=sim.width, height=sim.height, channels=sim.channels, frame_rate_hz=sim.frame_rate_hz,
                              num_frames=len(frame_times), hover_seconds=sim.hold_seconds, T_body_camera=T_body_camera,
-                             intrinsics=intrinsics, episode_name=f"{variant}-{scene_name}-{seed:05d}-{instance:02d}")
+                             intrinsics=intrinsics, episode_name=f"{condition}-{scene_name}-{seed:05d}-{instance:02d}")
         config["camera"]["horizontal_fov_degrees"] = fov
         config["episode"]["exposure_seconds"] = k * dt
         # frame k integrates the renders at steps c-k+1..c (c = closing step): mid-exposure is (c - (k-1)/2) dt
@@ -234,8 +234,8 @@ def _run_batch(env, sim, seed, scene_name, variant, log):
             imu=imu_rows[:, instance, :],
             ground_truth=ground_truth[:, instance, :],
             T_body_camera=T_body_camera,
-            meta={"source": "hyperdrone", "scene": scene_name, "seed": seed, "instance": instance, "variant": variant,
-                  "isp": params.as_dict(), "sub_frames": k, "spawn": spawns[instance], "hyperdrone": _versions(),
+            meta={"source": "hyperdrone", "scene": scene_name, "seed": seed, "instance": instance, "condition": condition,
+                  "sensor": params.as_dict(), "sub_frames": k, "spawn": spawns[instance], "hyperdrone": _versions(),
                   "sim": asdict(sim)},
         )
         yield episode

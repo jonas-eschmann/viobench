@@ -3,7 +3,7 @@
 HyperDrone outputs clean sRGB frames at the IMU rate; this module turns a stack of consecutive renders into one
 sensor frame: box-shutter integration over the exposure (motion blur), exposure scaling (low light /
 oversaturation), photon shot noise, read noise, clipping, sRGB encoding and 8-bit quantisation. The same code serves
-the held-out variants and students' training augmentation (eecs116.data.variants has the public parameter ranges).
+the held-out conditions and students' training augmentation (relpose.datasets.conditions has the public parameter ranges).
 """
 from dataclasses import asdict, dataclass
 
@@ -11,7 +11,7 @@ import numpy as np
 
 
 @dataclass
-class ISPParams:
+class SensorParams:
     exposure_scale: float = 1.0  # multiplies linear radiance; 1 = nominal exposure of the rendered scene
     full_well: float = 20000.0  # electrons at saturation; shot noise std = sqrt(signal * full_well) / full_well; inf disables
     read_noise: float = 0.002  # std of additive Gaussian noise in linear units (1 = saturation)
