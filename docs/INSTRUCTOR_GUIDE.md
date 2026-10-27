@@ -18,7 +18,10 @@ pytest                                          # needs a runtime.wasm: relpose/
 the hidden ones into `build/datasets/hidden/` (other seeds, HSSD validation scenes, other EuRoC sequences). Both are
 plain lists of `relpose simulate` / `relpose convert-euroc` calls; adjust counts and seeds there.
 
-- Simulated sets: ~20 s per batch of 8 episodes at 640 × 480 (default condition), ~45 s for `blur`; ~60 MB per episode.
+- Simulated sets: one-minute episodes by default (`--duration`); about 2 min per batch of 8 at 640 × 480 (default
+  condition), ~4 min for `blur`; ~360 MB per episode. Each distinct duration or route length JIT-compiles the
+  environment once. Frames are spooled to `$RELPOSE_SPOOL` (default: the system temp directory) while a batch renders:
+  point it at a fast local disk with a few GB free.
 - Real sets: download EuRoC from the ETH Research Collection (record 20.500.11850/690084; `relpose/tools/datasets/generate/recipes/README.md` has the
   API URLs, the archives are 5–12 GiB each), unzip a sequence, run `relpose convert-euroc`.
 - Sets are defined by their files, not by seeds (HyperDrone is not bit-reproducible across machines). Keep the
@@ -35,7 +38,9 @@ uvicorn relpose.tools.server.app:app --host 0.0.0.0 --port 8000  # upload API + 
 ```
 
 Environment: `RELPOSE_SERVER_DIR` (uploads, reports, sqlite; default `./server-data`), `RELPOSE_TOKENS`,
-`RELPOSE_MAX_UPLOAD_MIB` (128), `RELPOSE_DAILY_QUOTA` (20), `RELPOSE_EVAL_TIMEOUT` (7200 s). Students use
+`RELPOSE_MAX_UPLOAD_MIB` (128), `RELPOSE_DAILY_QUOTA` (20), `RELPOSE_EVAL_TIMEOUT` (14400 s). One submission runs
+the ~50 one-minute hidden episodes (60 000 frames): a solution at 50 ms/frame takes about 50 minutes, so lower the
+quota or the episode counts in `generate_hidden.sh` if the queue backs up. Students use
 `curl -F file=@x.wasm -F label=v1 -H "X-Token: ..." /submit`, `/submissions/<id>` (status, summary), `/submissions/<id>/logs`
 (their stderr tails), `/leaderboard` (HTML, Pareto front in bold), `/leaderboard.json`.
 

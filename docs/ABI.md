@@ -93,13 +93,15 @@ In Python, `sys.exit()` is caught like any exception (status `-1`); `os._exit()`
           "gravity": [0.0, 0.0, -9.81],
           "T_cam_imu": [16 numbers, row-major 4x4: IMU/body coordinates -> camera coordinates],
           "T_imu_cam": [16 numbers, its inverse]},
-  "episode": {"name": "...", "frame_rate_hz": 20.0, "num_frames": 400, "hover_seconds": 1.0},
+  "episode": {"name": "...", "frame_rate_hz": 20.0, "num_frames": 1200, "hover_seconds": 1.0},
   "pose": {"frame": "camera0", "order": "xyz_qxyzw", "timestamp": "mid_exposure"}
 }
 ```
 
 Camera convention is OpenCV's: x right, y down, z forward (optical axis). The body/IMU frame is the drone's: x
 forward, y left, z up (FLU). Intrinsics vary per episode within the announced ranges — read them from the config.
+`episode.num_frames` and `frame_rate_hz` are per episode as well: sets differ in length (the shipped ones are about a
+minute), so size buffers and schedules from the config rather than from an assumed frame count.
 
 ## Resource accounting
 

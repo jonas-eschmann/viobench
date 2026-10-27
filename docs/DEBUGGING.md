@@ -64,7 +64,7 @@ gdb --args build-host/debug ../build/feed                   # or lldb; VS Code: 
 
 `relpose feed --simulate -o build/feed --condition lowlight` feeds a fresh HyperDrone episode instead. A feed is
 `config.json` (the bytes `init` receives), `frames.u8` (N×H×W×C), `frame_times.f64`, `imu.f64` (M×7), `gt.f64`
-(N×7 relative ground truth) and `shape.txt` (`N H W C M`); about 15 MB for a 10 s grayscale episode at 320×240.
+(N×7 relative ground truth) and `shape.txt` (`N H W C M`); about 90 MB for a one-minute grayscale episode at 320×240.
 
 With the VS Code CMake Tools extension pointed at your solution directory (`.vscode/settings.json`), the host
 configure is the default one, so its *Debug* button launches `debug` under gdb; pass the feed directory as the

@@ -28,6 +28,7 @@ def rows(reports):
                 "dataset": dataset,
                 "episodes": summary["episodes"],
                 "completed": summary["completed"],
+                "seconds": summary.get("duration_s_median", float("nan")),  # older reports have no duration
                 "ate_m": summary["ate_rmse_median"],
                 "rpe_m_per_s": summary["rpe_translation_rmse_median"],
                 "rot_deg": float(np.degrees(summary["rotation_rmse_median"])) if summary["rotation_rmse_median"] == summary["rotation_rmse_median"] else float("nan"),
@@ -50,10 +51,10 @@ def pareto_front(points):
 
 
 def markdown_table(table):
-    header = "| submission | dataset | episodes | ATE [m] | RPE [m/s] | rot [deg] | fuel/frame | fuel p95 | ms/frame |\n|---|---|---|---|---|---|---|---|---|\n"
+    header = "| submission | dataset | episodes | s/episode | ATE [m] | RPE [m/s] | rot [deg] | fuel/frame | fuel p95 | ms/frame |\n|---|---|---|---|---|---|---|---|---|---|\n"
     lines = []
     for row in sorted(table, key=lambda r: (r["dataset"], r["ate_m"])):
-        lines.append(f"| {row['submission']} | {row['dataset']} | {row['completed']}/{row['episodes']} | {row['ate_m']:.3f} | {row['rpe_m_per_s']:.3f} | "
+        lines.append(f"| {row['submission']} | {row['dataset']} | {row['completed']}/{row['episodes']} | {row['seconds']:.0f} | {row['ate_m']:.3f} | {row['rpe_m_per_s']:.3f} | "
                      f"{row['rot_deg']:.1f} | {row['fuel_per_frame']:,.0f} | {row['fuel_p95']:,.0f} | {row['ms_per_frame']:.1f} |")
     return header + "\n".join(lines) + "\n"
 

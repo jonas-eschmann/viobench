@@ -24,6 +24,7 @@ class EpisodeReport:
     name: str
     dataset: str
     frames: int
+    duration_s: float  # first to last frame; episodes of one set share it, sets may differ
     completed: bool  # all frames were fed (no trap / abandonment)
     failure: str | None  # trap or protocol error text
     statuses: dict  # status name -> count
@@ -90,6 +91,7 @@ def run_episode(wasm_path, episode, engine, limits, log_dir, dev_dir=None, progr
         name=episode.name,
         dataset=episode.dataset,
         frames=episode.num_frames,
+        duration_s=float(episode.duration),
         completed=completed,
         failure=failure,
         statuses=statuses,
@@ -113,6 +115,7 @@ def summarize(reports):
         return {
             "episodes": len(group),
             "completed": len(completed),
+            "duration_s_median": float(np.median([r.duration_s for r in group])) if group else float("nan"),
             "ate_rmse_median": float(np.median([r.metrics["ate_rmse"] for r in group])) if group else float("nan"),
             "rpe_translation_rmse_median": float(np.nanmedian([r.metrics["rpe_translation_rmse"] for r in group])) if group else float("nan"),
             "rotation_rmse_median": float(np.nanmedian([r.metrics["rotation_rmse"] for r in group])) if group else float("nan"),

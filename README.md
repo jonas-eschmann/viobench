@@ -42,8 +42,9 @@ Docker, no GPU. Debugging happens outside the sandbox, in your own process: `doc
 
 ## Baselines
 
-Public validation sets (10 s episodes, stored at 640 × 480, consumed at 320 × 240 grayscale @ 20 Hz; median ATE over
-episodes in metres, median fuel per frame):
+Public validation sets (one-minute episodes, stored at 640 × 480, consumed at 320 × 240 grayscale @ 20 Hz; median ATE
+over episodes in metres, median fuel per frame). The numbers below were measured on the earlier 10 s sets and are
+being re-measured on the one-minute sets (ATE grows with the length, dead reckoning's most of all):
 
 | solution | default | blur | lowlight | oversaturated | real (EuRoC V1_01) | fuel/frame |
 |---|---|---|---|---|---|---|

@@ -2,7 +2,7 @@
 
 A *Dataset* is simply an iterable of `Episode`s. Two providers implement it:
 - `storage.episodes(roots)`            episode directories on disk (HyperDrone-generated or EuRoC-converted), frames streamed
-- `generate.simulation.simulate(...)`  fresh episodes from HyperDrone, never written to disk (GPU; `pip install relpose[sim]`)
+- `generate.simulation.simulate(...)`  fresh episodes from HyperDrone, frames spooled to a temporary directory (GPU; `pip install relpose[sim]`)
 The runner and the training example consume either; the server uses the first.
 """
 from .episode import Episode

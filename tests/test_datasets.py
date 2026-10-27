@@ -1,8 +1,11 @@
+import gc
+import os
+
 import numpy as np
 import pytest
 
 from relpose.tools.abi.config import make_config
-from relpose.tools.datasets.episode import Episode, interpolate_poses
+from relpose.tools.datasets.episode import Episode, FrameSequence, interpolate_poses
 from relpose.tools.datasets.storage import list_episodes, read_episode, write_episode
 from relpose.tools.datasets.generate.camera import SensorParams, apply, integrate_exposure, linear_to_srgb, srgb_to_linear
 from relpose.tools.runner.metrics import matrices_to_poses, poses_to_matrices, quaternion_to_matrix
@@ -64,6 +67,152 @@ def test_write_read_roundtrip(tmp_path):
     np.testing.assert_allclose(loaded.T_body_camera, episode.T_body_camera)
     assert loaded.config == episode.config and loaded.meta["condition"] == "test" and loaded.meta["dataset"] == tmp_path.name
     assert (directory / "mav0" / "cam0" / "sensor.yaml").is_file() and (directory / "mav0" / "imu0" / "sensor.yaml").is_file()
+
+
+@pytest.mark.parametrize("channels", [1, 3])
+def test_write_episode_copies_existing_pngs(tmp_path, channels):
+    episode = synthetic_episode(n_frames=4, width=16, height=12)
+    if channels == 3:
+        episode.config, episode.frames = episode.adapt(channels=3)
+        episode.frames[..., 1] //= 2
+        episode.frames[..., 2] //= 4
+    source = read_episode(write_episode(episode, tmp_path / "src"))
+    assert isinstance(source.frames, FrameSequence) and len(source.frames.paths) == 4
+    copy = write_episode(source, tmp_path / "dst")
+    copied = read_episode(copy)
+    for original, duplicate in zip(source.frames.paths, copied.frames.paths):
+        assert original.read_bytes() == duplicate.read_bytes()
+        assert not original.samefile(duplicate), "persistent datasets must have independent images"
+    np.testing.assert_array_equal(np.asarray(read_episode(copy).frames), episode.frames)
+    modified = read_episode(copy, frames="memory")
+    modified.frames[:] = 0
+    write_episode(modified, copy)
+    np.testing.assert_array_equal(np.asarray(source.frames), episode.frames)
+    assert not np.asarray(read_episode(copy).frames).any()
+    write_episode(source, copy)
+    np.testing.assert_array_equal(np.asarray(read_episode(copy).frames), episode.frames)
+
+
+@pytest.mark.parametrize("origin_ns", [0, 1_400_000_000_000_000_000])
+def test_write_episode_back_to_same_directory(tmp_path, origin_ns):
+    episode = synthetic_episode(n_frames=4, width=16, height=12)
+    directory = write_episode(episode, tmp_path / "episode", origin_ns=origin_ns)
+    loaded = read_episode(directory)
+    original_pngs = [path.read_bytes() for path in loaded.frames.paths]
+    loaded.meta["condition"] = "corrected"
+    write_episode(loaded, directory / ".." / directory.name, origin_ns=origin_ns)
+    assert [path.read_bytes() for path in loaded.frames.paths] == original_pngs
+    saved = read_episode(directory)
+    assert saved.meta["condition"] == "corrected"
+    np.testing.assert_array_equal(np.asarray(saved.frames), episode.frames)
+
+
+@pytest.mark.parametrize("frames", ["lazy", "memory"])
+def test_write_episode_detaches_existing_hardlinks(tmp_path, frames):
+    episode = synthetic_episode(n_frames=4, width=16, height=12)
+    source = read_episode(write_episode(episode, tmp_path / "src"))
+    destination = write_episode(source, tmp_path / "dst")
+    paths = read_episode(destination).frames.paths
+    for original, duplicate in zip(source.frames.paths, paths):
+        duplicate.unlink()
+        os.link(original, duplicate)  # an export made by an older writer, or a still-live simulator spool
+    rewritten = read_episode(tmp_path / "src", frames=frames)
+    if frames == "memory":
+        rewritten.frames[:] = 0
+    write_episode(rewritten, destination)
+    assert all(not original.samefile(duplicate) for original, duplicate in zip(source.frames.paths, paths))
+    np.testing.assert_array_equal(np.asarray(source.frames), episode.frames)
+    np.testing.assert_array_equal(np.asarray(read_episode(destination).frames), np.asarray(rewritten.frames))
+
+
+@pytest.mark.parametrize("channels", [1, 3])
+@pytest.mark.parametrize("cross_volume", [False, True])
+def test_write_episode_exports_spool_and_survives_cleanup(tmp_path, monkeypatch, channels, cross_volume):
+    import errno
+
+    from relpose.tools.datasets.generate.simulation import Spool, spooled_frames
+
+    episode = synthetic_episode(n_frames=4, width=16, height=12)
+    episode.config, episode.frames = episode.adapt(channels=channels)
+    expected = episode.frames.copy()
+    spool = Spool(tmp_path / "spool")
+    spool_path = spool.path
+    stored = read_episode(write_episode(episode, spool.path / "episode"))
+    episode.frames = spooled_frames(stored.frames.paths, channels, expected.shape[1:], spool)
+    _, mapped = episode.adapt(channels=3 if channels == 1 else 1)
+    assert mapped.paths is None and not mapped.link_paths
+    del mapped, spool
+
+    if cross_volume:
+        def cannot_link(source, target):
+            raise OSError(errno.EXDEV, "cross-device link")
+
+        monkeypatch.setattr(os, "link", cannot_link)
+    destination = write_episode(episode, tmp_path / "dst")
+    paths = read_episode(destination).frames.paths
+    assert all(original.samefile(duplicate) == (not cross_volume) for original, duplicate in zip(stored.frames.paths, paths))
+    write_episode(episode, destination)  # exporting again replaces existing links safely
+    np.testing.assert_array_equal(np.asarray(episode.frames), expected)
+    del episode
+    gc.collect()
+    assert not spool_path.exists()
+    np.testing.assert_array_equal(np.asarray(read_episode(destination).frames), expected)
+
+
+@pytest.mark.parametrize("frames", ["lazy", "memory"])
+def test_failed_image_write_preserves_destination(tmp_path, monkeypatch, frames):
+    from pathlib import Path
+
+    from relpose.tools.datasets import storage
+
+    episode = synthetic_episode(n_frames=4, width=16, height=12)
+    source = read_episode(write_episode(episode, tmp_path / "src"), frames=frames)
+    episode.frames[:] = 0
+    destination = write_episode(episode, tmp_path / "dst")
+    paths = read_episode(destination).frames.paths
+    original_pngs = [path.read_bytes() for path in paths]
+
+    def fail_copy(source, target):
+        Path(target).write_bytes(b"partial PNG")
+        raise OSError("copy failed")
+
+    def fail_encode(target, *args):
+        Path(target).write_bytes(b"partial PNG")
+        return False
+
+    monkeypatch.setattr(storage.shutil, "copyfile", fail_copy)
+    monkeypatch.setattr(storage.cv2, "imwrite", fail_encode)
+    with pytest.raises(OSError):
+        write_episode(source, destination)
+    assert [path.read_bytes() for path in paths] == original_pngs
+    assert not list((destination / "mav0" / "cam0" / "data").glob(".relpose-write-*"))
+
+
+def test_simulation_spool_lives_as_long_as_its_frames(tmp_path):
+    from relpose.tools.datasets.generate.simulation import Spool, spooled_frames
+
+    spool = Spool(tmp_path / "spool")
+    path = spool.path
+    assert path.is_dir() and path.parent == tmp_path / "spool"
+    frames = spooled_frames([], 1, (2, 2), spool)
+    del spool
+    gc.collect()
+    assert path.is_dir(), "the frame sequence keeps the spool alive"
+    del frames
+    gc.collect()
+    assert not path.exists(), "the last reference removes the directory"
+
+
+def test_sim_config_scales_with_duration(tmp_path, monkeypatch):
+    from relpose.tools.datasets.generate.simulation import SimConfig
+
+    monkeypatch.setenv("RELPOSE_CACHE", str(tmp_path))
+    minute = SimConfig()
+    assert minute.duration_seconds == 60.0 and minute.step_count(200.0) == 12000 and minute.num_waypoints == 48
+    assert SimConfig(duration_seconds=10).num_waypoints == 8 and SimConfig(duration_seconds=10, waypoints=5).num_waypoints == 5
+    header = minute.render_header(200.0).read_text()
+    assert "NUM_WAYPOINTS = 48;" in header and "INITIALIZATION_HOLD_STEPS = 200;" in header and "@" not in header
+    assert SimConfig(duration_seconds=30).render_header(200.0) != minute.render_header(200.0)  # a different route length is a different JIT key
 
 
 def test_isp_identity_and_effects():

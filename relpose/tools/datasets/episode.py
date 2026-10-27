@@ -12,16 +12,22 @@ from ..geometry import interpolate_poses, invert, matrices_to_poses, poses_to_ma
 class FrameSequence:
     """Frames decoded on demand: behaves like a read-only (N, H, W[, C]) uint8 array for len/indexing/iteration/shape.
 
-    A 60 s RGB episode at 640x480 is a gigabyte materialised; the runner only ever needs one frame at a time.
+    A one-minute RGB episode at 640x480 is a gigabyte materialised; the runner only ever needs one frame at a time.
     `map(transform)` returns a sequence that applies transform per frame (used by Episode.adapt); `np.asarray(seq)`
-    or `seq.materialize()` loads everything.
+    or `seq.materialize()` loads everything. `paths` (optional) names the PNG file behind each frame, so that
+    `storage.write_episode` can copy the files without decoding and re-encoding them; a mapped sequence has none.
+    `link_paths` opts immutable simulator spool files into hard linking; persistent dataset files are copied.
     """
 
-    def __init__(self, loader, count, frame_shape, dtype=np.uint8):
+    def __init__(self, loader, count, frame_shape, dtype=np.uint8, paths=None, link_paths=False):
         self._loader = loader
         self._count = int(count)
         self.frame_shape = tuple(int(s) for s in frame_shape)
         self.dtype = np.dtype(dtype)
+        self.paths = None if paths is None else list(paths)
+        self.link_paths = link_paths
+        assert self.paths is None or len(self.paths) == self._count, "one path per frame"
+        assert not link_paths or self.paths is not None, "linking requires frame paths"
 
     @property
     def shape(self):

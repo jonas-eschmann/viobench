@@ -13,6 +13,9 @@ integer nanoseconds in the files and float seconds (relative to the first IMU sa
 demand by default (`FrameSequence`), so episodes of any length cost little memory.
 """
 import json
+import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import cv2
@@ -42,12 +45,29 @@ def write_episode(episode, directory, origin_ns=0, png_compression=1):
 
     frame_ns = _nanoseconds(episode.frame_times, origin_ns)
     lines = [CAM_HEADER]
-    for stamp, frame in zip(frame_ns, episode.frames):
-        name = f"{stamp}.png"
-        image = frame if frame.ndim == 2 or frame.shape[2] == 1 else cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        if not cv2.imwrite(str(cam / "data" / name), image, [cv2.IMWRITE_PNG_COMPRESSION, png_compression]):
-            raise OSError(f"could not write {cam / 'data' / name}")
-        lines.append(f"{stamp},{name}")
+    # Reuse encoded PNGs; only the simulator's immutable spool may share files with the destination.
+    sources = getattr(episode.frames, "paths", None)
+    if sources is not None and not all(str(path).lower().endswith(".png") for path in sources):
+        sources = None
+    # Replace directory entries instead of truncating files: an existing PNG may still have other hard links.
+    with tempfile.TemporaryDirectory(prefix=".relpose-write-", dir=cam / "data") as temporary:
+        for index, stamp in enumerate(frame_ns):
+            name = f"{stamp}.png"
+            target = cam / "data" / name
+            staged = Path(temporary) / name
+            if sources is not None:
+                source = Path(sources[index])
+                if target.exists() and source.resolve() == target.resolve():
+                    lines.append(f"{stamp},{name}")
+                    continue  # saving a lazy episode back to its own directory keeps its PNGs
+                _copy_png(source, staged, link=getattr(episode.frames, "link_paths", False))
+            else:
+                frame = episode.frames[index]
+                image = frame if frame.ndim == 2 or frame.shape[2] == 1 else cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+                if not cv2.imwrite(str(staged), image, [cv2.IMWRITE_PNG_COMPRESSION, png_compression]):
+                    raise OSError(f"could not write {target}")
+            staged.replace(target)
+            lines.append(f"{stamp},{name}")
     (cam / "data.csv").write_text("\n".join(lines) + "\n")
 
     imu_ns = _nanoseconds(episode.imu[:, 0], origin_ns)
@@ -104,6 +124,17 @@ def write_episode(episode, directory, origin_ns=0, png_compression=1):
     return directory
 
 
+def _copy_png(source, target, link=False):
+    """Copy to a new path, allowing hard links only for immutable spool files on the same volume."""
+    if link:
+        try:
+            os.link(source, target)
+            return
+        except OSError:
+            pass  # e.g. the spool and destination are on different volumes
+    shutil.copyfile(source, target)
+
+
 def _json_default(value):
     if isinstance(value, np.ndarray):
         return value.tolist()
@@ -118,7 +149,8 @@ def _read_csv(path):
     return stamps, rows
 
 
-def _read_png(path, channels):
+def read_png(path, channels):
+    """One frame as the episode format stores it: (H, W) uint8 for 1 channel, (H, W, 3) RGB for 3."""
     image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE if channels == 1 else cv2.IMREAD_COLOR)
     if image is None:
         raise OSError(f"could not read {path}")
@@ -143,7 +175,7 @@ def read_episode(directory, frames="lazy", dataset=None):
     if frames == "none":
         frame_data = FrameSequence(lambda index: (_ for _ in ()).throw(RuntimeError("frames were not loaded")), len(paths), shape)
     else:
-        frame_data = FrameSequence(lambda index: _read_png(paths[index], channels), len(paths), shape)
+        frame_data = FrameSequence(lambda index: read_png(paths[index], channels), len(paths), shape, paths=paths)
         if frames == "memory":
             frame_data = frame_data.materialize()
 

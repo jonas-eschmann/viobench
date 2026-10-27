@@ -14,7 +14,7 @@ compute they spend per frame, so the leaderboard is a curve, not a number.
 | Extrinsics | `imu.T_cam_imu` (4 × 4, row-major): body/IMU coordinates → camera coordinates (OpenCV: x right, y down, z forward). `imu.T_imu_cam` is the inverse. |
 | Timing | `step(t, frame, imu)`: `t` is the frame timestamp, `imu` holds all IMU rows with `t_previous_frame < t_row ≤ t` (the first call also delivers the rows before the first frame). Everything is one clock. |
 | Start | Episodes of the simulated sets begin with ≥ 1 s of hover (`config["episode"]["hover_seconds"]`) before the drone starts flying its route; real-data snippets may start mid-flight (`hover_seconds` is 0 then). |
-| Duration | 10 s (200 frames) per episode in the simulated sets; real-data snippets are cut to the same length |
+| Duration | One continuous flight per episode. The length is in the config (`config["episode"]["num_frames"]`, `frame_rate_hz`) and may differ between sets, so never hard-code it; the shipped sets are about a minute long (1 200 frames, 12 000 IMU samples), and real-data snippets are cut to the same length as the simulated episodes |
 
 ## Output
 

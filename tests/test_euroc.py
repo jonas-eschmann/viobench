@@ -1,4 +1,6 @@
 """The EuRoC converter on a synthetic ASL-layout sequence (our writer produces the same layout)."""
+import inspect
+
 import numpy as np
 
 from relpose.tools.datasets.generate.euroc import convert, rectification
@@ -15,6 +17,10 @@ def test_rectification_keeps_center_and_scales():
     assert abs(map_x[int(round(K[1, 2])), int(round(K[0, 2]))] - 367.2) < 1.5
     assert abs(map_y[int(round(K[1, 2])), int(round(K[0, 2]))] - 248.4) < 1.5
     assert abs(K[0, 0] - 458.0 / 2) < 1e-9  # 640-wide crop scaled to 320
+
+
+def test_default_snippet_is_one_minute():
+    assert inspect.signature(convert).parameters["snippet_seconds"].default == 60.0
 
 
 def test_convert_synthetic_sequence(tmp_path):

@@ -5,30 +5,40 @@
         ...
 
 Needs `pip install hyperdrone` and a GPU (the environment module is JIT-compiled per configuration on first use;
-the rendered spec header's hash is the key). Frames are RGB uint8 after the camera/ISP model (relpose.tools.datasets.generate.camera)
-with per-episode parameters drawn from the condition's public ranges (relpose.tools.datasets.generate.conditions); solutions receive
-grayscale unless they opt into RGB (Episode.as_channels).
+the rendered spec header's hash is the key, so every distinct resolution, duration or route length compiles once).
+Frames are RGB uint8 after the camera/ISP model (relpose.tools.datasets.generate.camera) with per-episode parameters
+drawn from the condition's public ranges (relpose.tools.datasets.generate.conditions); solutions receive grayscale
+unless they opt into RGB (Episode.as_channels). The episode length is `SimConfig.duration_seconds` (default one
+minute); developed frames are spooled to a temporary directory while a batch renders, so memory does not grow with it.
 """
 import hashlib
 import json
 import os
+import shutil
+import tempfile
+import weakref
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
+import cv2
 import numpy as np
 
 from ... import abi
 from ...abi.config import make_config, pinhole_intrinsics
 from ...geometry import matrix_to_quaternion, quaternion_to_matrix
-from ..episode import Episode
+from ..episode import Episode, FrameSequence
+from ..storage import read_png
 from .camera import apply, luminance, srgb_to_linear
 from .conditions import sample as sample_condition
 
 TEMPLATE = Path(__file__).with_name("hyperdrone_world.h.in")
 CACHE_VARIABLE = "RELPOSE_CACHE"
+SPOOL_VARIABLE = "RELPOSE_SPOOL"
 NOMINAL_FOV_DEGREES = 63.78166175396324  # preset camera, horizontal
+WAYPOINTS_PER_SECOND = 0.8  # route length per second of flight unless SimConfig.waypoints is given (the 10 s sets flew 8)
+MIN_WAYPOINTS = 8
 
 
 @dataclass(frozen=True)
@@ -37,15 +47,26 @@ class SimConfig:
     height: int = 480
     instances: int = 8  # episodes rendered in parallel (one reset = one batch); part of the JIT key
     frame_rate_hz: float = 20.0
+    duration_seconds: float = 60.0  # flight time per episode; frames = duration x frame rate (HyperDrone's own step limit is informational)
+    waypoints: int | None = None  # route length; None scales it with the duration (num_waypoints), the route cycles when exhausted
     fov_range: float = 15.0  # horizontal FOV = nominal (63.8 deg) + U(-fov_range, fov_range) degrees per episode
     hold_seconds: float = 1.0  # hover before the route starts
     aa_grid: int = 1
     channels: int = 3  # stored frames; the harness converts to what a solution asks for (grayscale by default)
+    spool: str | None = None  # directory for the frames while a batch renders (default: $RELPOSE_SPOOL or the system temp dir)
+
+    @property
+    def num_waypoints(self):
+        return int(self.waypoints) if self.waypoints else max(MIN_WAYPOINTS, int(round(self.duration_seconds * WAYPOINTS_PER_SECOND)))
+
+    def step_count(self, imu_rate_hz):
+        return int(round(self.duration_seconds * imu_rate_hz))
 
     def render_header(self, imu_rate_hz):
         text = TEMPLATE.read_text()
         values = {"INSTANCES": self.instances, "WIDTH": self.width, "HEIGHT": self.height, "AA_GRID": self.aa_grid,
-                  "FOV_RANGE": repr(float(self.fov_range)), "HOLD_STEPS": int(round(self.hold_seconds * imu_rate_hz))}
+                  "FOV_RANGE": repr(float(self.fov_range)), "HOLD_STEPS": int(round(self.hold_seconds * imu_rate_hz)),
+                  "WAYPOINTS": self.num_waypoints}
         for key, value in values.items():
             text = text.replace(f"@{key}@", str(value))
         assert "@" not in text, "unrendered placeholder in spec header template"
@@ -107,7 +128,31 @@ def hssd_scenes(split="val", names=None):
 # a user-spec World exposes unnamed observation blocks: privileged = [position 3 | rotation matrix 9 | linear velocity 3 |
 # angular velocity 3 | waypoint 3], IMU = [accelerometer 3 | gyroscope 3 | frame_age | new_frame]
 BLOCKS = {"position": (0, 3), "orientation_rotation_matrix": (3, 9), "linear_velocity": (12, 3), "angular_velocity": (15, 3),
-          "accelerometer": (0, 3), "gyroscope": (3, 3)}
+          "waypoint": (18, 3), "accelerometer": (0, 3), "gyroscope": (3, 3)}
+
+
+class Spool:
+    """A temporary directory for one batch's frames, removed when the last reference to it is gone (weakref.finalize).
+
+    Developed frames go to disk as PNGs instead of RAM (a batch of 8 one-minute episodes at 640 x 480 would be ~9 GB).
+    The yielded Episodes' FrameSequences hold the Spool, so `relpose simulate` (writes an episode, moves on) and
+    `relpose feed --simulate` (keeps one episode, drops the generator) both see their frames for as long as they need them.
+    """
+
+    def __init__(self, root=None, prefix="relpose-sim-"):
+        root = root or os.environ.get(SPOOL_VARIABLE) or None
+        if root:
+            Path(root).mkdir(parents=True, exist_ok=True)
+        self.path = Path(tempfile.mkdtemp(prefix=prefix, dir=root))
+        self._finalizer = weakref.finalize(self, shutil.rmtree, str(self.path), ignore_errors=True)
+
+    def remove(self):
+        self._finalizer()
+
+
+def spooled_frames(paths, channels, frame_shape, spool):
+    """FrameSequence over PNGs in a Spool; the loader keeps the spool alive."""
+    return FrameSequence(lambda index, _spool=spool: read_png(paths[index], channels), len(paths), frame_shape, paths=paths, link_paths=True)
 
 
 def _block(vector, layout, name):
@@ -150,7 +195,7 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
 
     imu_rate = float(round(1.0 / float(env.dt)))  # env.dt is float32 (0.00499999989)
     dt = 1.0 / imu_rate
-    steps = int(env.episode_step_limit)
+    steps = sim.step_count(imu_rate)  # not env.episode_step_limit: the preset's 10 s limit is informational, nothing ends a flight at it
     frame_every = int(round(1.0 / (sim.frame_rate_hz * dt)))
     total = env.total_instances
     layout = env.observation_layout_privileged
@@ -166,22 +211,33 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
     ground_truth = [np.column_stack([np.zeros(total), _block(state, layout, "position"),
                                      matrix_to_quaternion(_block(state, layout, "orientation_rotation_matrix").reshape(-1, 3, 3))])]
     imu_rows = []
-    frames = [[] for _ in range(total)]
+    spool = Spool(sim.spool, prefix=f"relpose-sim-{seed:05d}-")
+    frame_paths = [[] for _ in range(total)]
     frame_times = []
     sub_frames = min(sub_frames, frame_every)  # a shutter longer than the frame interval would overlap the previous frame
     ring = deque(maxlen=sub_frames)
     terminated = np.zeros(total, dtype=bool)
+    waypoint = _block(state, layout, "waypoint").copy()
+    waypoints_reached = np.zeros(total, dtype=int)  # diagnostic: how far along the route each flight got (calibrates WAYPOINTS_PER_SECOND)
     instance_rngs = [np.random.default_rng(rng.integers(2**63)) for _ in range(total)]
-    pool = ThreadPoolExecutor(max_workers=min(total, os.cpu_count() or 1))  # numpy releases the GIL on large arrays
+    pool = ThreadPoolExecutor(max_workers=min(total, os.cpu_count() or 1))  # numpy and OpenCV release the GIL on large arrays
+    for instance in range(total):
+        (spool.path / f"{instance:02d}").mkdir()
 
     def to_linear(rendered):
         convert = (lambda x: luminance(srgb_to_linear(x))) if sim.channels == 1 else srgb_to_linear
         return np.stack(list(pool.map(convert, rendered)))
 
-    def develop(instance):
+    def develop(instance, index):
+        """ISP for one instance's frame, written straight to the spool (PNG, BGR like storage.write_episode); returns the path."""
         params, k = isp[instance]
         stack = [linear[instance] for linear in list(ring)[-k:]]
-        return apply(np.mean(stack, axis=0) if len(stack) > 1 else stack[-1], params, instance_rngs[instance], grayscale=False)
+        frame = apply(np.mean(stack, axis=0) if len(stack) > 1 else stack[-1], params, instance_rngs[instance], grayscale=False)
+        path = spool.path / f"{instance:02d}" / f"{index:05d}.png"
+        image = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
+        if not cv2.imwrite(str(path), image, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
+            raise OSError(f"could not write {path}")
+        return path
 
     started = time.perf_counter()
     for step in range(steps):
@@ -191,8 +247,9 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
             rendered = env.frames()  # (total, H, W, 3) sRGB float32 in [0, 1], camera at the pre-step state (time step*dt)
             ring.append(to_linear(rendered))
         if step % frame_every == frame_every - 1:
-            for instance, frame in enumerate(pool.map(develop, range(total))):
-                frames[instance].append(frame)
+            index = len(frame_times)
+            for instance, path in enumerate(pool.map(lambda i: develop(i, index), range(total))):
+                frame_paths[instance].append(path)
             frame_times.append(step * dt)  # provisional: the per-instance mid-exposure correction is applied below
         env.step()
         sample = env.observe_imu()  # the sample produced by this step, stamped at its end
@@ -201,15 +258,19 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
         ground_truth.append(np.column_stack([np.full(total, (step + 1) * dt), _block(state, layout, "position"),
                                              matrix_to_quaternion(_block(state, layout, "orientation_rotation_matrix").reshape(-1, 3, 3))]))
         terminated |= env.terminated()
+        current = _block(state, layout, "waypoint")
+        waypoints_reached += np.any(current != waypoint, axis=1)
+        waypoint = current.copy()
     elapsed = time.perf_counter() - started
     pool.shutdown()
     fovs = [float((p["cameras"].get("front") or next(iter(p["cameras"].values())))["fov"]) for p in parameters]
-    log(f"seed {seed} scene {scene_name}: {steps} steps x {total} instances in {elapsed:.1f}s ({steps * total / elapsed:.0f} steps/s), "
-        f"{int(terminated.sum())} terminated, fov {np.round(fovs, 1).tolist()}")
+    log(f"seed {seed} scene {scene_name}: {steps} steps ({sim.duration_seconds:g} s) x {total} instances in {elapsed:.1f}s ({steps * total / elapsed:.0f} steps/s), "
+        f"{int(terminated.sum())} terminated, waypoints reached {waypoints_reached.tolist()} of {sim.num_waypoints}, fov {np.round(fovs, 1).tolist()}")
 
     imu_rows = np.stack(imu_rows)  # (steps, total, 7)
     ground_truth = np.stack(ground_truth)  # (steps + 1, total, 8)
     frame_times = np.asarray(frame_times)
+    frame_shape = (sim.height, sim.width) + (() if sim.channels == 1 else (sim.channels,))
     for instance in range(total):
         if terminated[instance]:
             continue
@@ -230,7 +291,7 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
             name=config["episode"]["name"],
             config=config,
             frame_times=times,
-            frames=np.stack(frames[instance]),
+            frames=spooled_frames(frame_paths[instance], sim.channels, frame_shape, spool),
             imu=imu_rows[:, instance, :],
             ground_truth=ground_truth[:, instance, :],
             T_body_camera=T_body_camera,
@@ -263,16 +324,20 @@ def add_simulation_arguments(parser):
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--instances", type=int, default=8, help="flights per batch")
     parser.add_argument("--frame-rate", type=float, default=20.0)
+    parser.add_argument("--duration", type=float, default=60.0, help="seconds of flight per episode (frames = duration x frame rate)")
+    parser.add_argument("--waypoints", type=int, help="route length (default: scales with --duration, 48 for a minute)")
     parser.add_argument("--fov-range", type=float, default=15.0, help="horizontal FOV = 63.8 + U(-range, range) degrees")
     parser.add_argument("--hover", type=float, default=1.0, help="seconds of hover at the start of each episode")
     parser.add_argument("--aa-grid", type=int, default=1)
     parser.add_argument("--render-channels", dest="render_channels", type=int, default=3, choices=(1, 3), help="render RGB (default) or grayscale")
+    parser.add_argument("--spool", help="directory for the frames while a batch renders (default: $RELPOSE_SPOOL or the system temp dir)")
 
 
 def dataset_from_arguments(arguments):
     """The ad-hoc Dataset provider configured from add_simulation_arguments() options."""
     sim = SimConfig(width=arguments.width, height=arguments.height, instances=arguments.instances, frame_rate_hz=arguments.frame_rate,
-                    fov_range=arguments.fov_range, hold_seconds=arguments.hover, aa_grid=arguments.aa_grid, channels=arguments.render_channels)
+                    duration_seconds=arguments.duration, waypoints=arguments.waypoints, fov_range=arguments.fov_range,
+                    hold_seconds=arguments.hover, aa_grid=arguments.aa_grid, channels=arguments.render_channels, spool=arguments.spool)
     scenes = {"procthor-train": lambda: procthor_scenes(arguments.scene_names), "hssd-val": lambda: hssd_scenes("val", arguments.scene_names),
               "hssd-train": lambda: hssd_scenes("train", arguments.scene_names)}[arguments.scenes]()
     return simulate(sim, range(arguments.seed, arguments.seed + arguments.batches), scenes=scenes, condition=arguments.condition)

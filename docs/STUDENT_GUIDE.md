@@ -17,8 +17,9 @@ On the lab machines (RTX 5080): `pip install -e ".[data,sim,train]"` adds the Hy
 for a minute) and PyTorch. There is no pre-rendered training set; you generate what you need:
 
 ```bash
-relpose simulate -o data/train --episodes 200 --seed 1 --condition default     # ~20 s per 8 episodes (640x480), blur ~45 s
+relpose simulate -o data/train --episodes 200 --seed 1 --condition default     # ~2 min per 8 one-minute episodes (640x480), blur ~4 min
 relpose simulate -o data/train-blur --episodes 64 --seed 500 --condition blur
+relpose simulate -o data/train-short --episodes 64 --seed 900 --duration 15     # any length; the frame count is in the config
 ```
 
 Read `docs/TASK.md` (what to estimate, how it is scored) and `docs/ABI.md` / `docs/RUNTIME.md` (what the sandbox offers).
@@ -50,6 +51,9 @@ with a debugger run it outside the sandbox: `relpose debug my_solution build/dat
   then `ep.frames`, `ep.imu`, `ep.ground_truth_relative()`, `ep.steps()`.
 - Augmentation: `relpose.tools.datasets.generate.conditions.sample(name, rng)` + `relpose.tools.datasets.generate.camera.apply(...)` reproduce the
   blur / low-light / saturation pipeline on your own renders (apply them to linear frames: `srgb_to_linear(frame / 255)`).
+- Length: episodes are continuous flights of about a minute, but nothing fixes that: read
+  `config["episode"]["num_frames"]` and `frame_rate_hz`, keep per-frame cost flat (do not accumulate every frame or
+  grow a map without bound), and expect drift to show over a minute where it hid over ten seconds.
 - Compute: watch the fuel column. Python-level loops over pixels are expensive; OpenCV calls are cheap per pixel; a
   `cv2.dnn` forward of a small CNN costs about as much as one `goodFeaturesToTrack`.
 - Learned models: `relpose/solution/examples/python/tiny_cnn` shows PyTorch → ONNX → `cv2.dnn` inside the runtime, with a numpy fallback,

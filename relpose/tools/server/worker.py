@@ -15,7 +15,7 @@ from pathlib import Path
 from .store import Store
 
 POLL_SECONDS = 3.0
-TIMEOUT_SECONDS = float(os.environ.get("RELPOSE_EVAL_TIMEOUT", "7200"))
+TIMEOUT_SECONDS = float(os.environ.get("RELPOSE_EVAL_TIMEOUT", "14400"))  # ~50 one-minute episodes per submission
 
 
 def datasets_from_environment():

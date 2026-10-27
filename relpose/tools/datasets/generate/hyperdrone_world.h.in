@@ -4,7 +4,9 @@
 //
 // Preset x500_fpv_imu (200 Hz IMU in the dynamics state chain, FPV camera), visual-inertial localization task
 // (autopilot flies a random waypoint route), rendering every IMU step so the data pipeline can integrate any shutter
-// time itself (relpose.tools.datasets.generate.camera), a hover at the start of each episode, randomised horizontal FOV.
+// time itself (relpose.tools.datasets.generate.camera), a hover at the start of each episode, randomised horizontal FOV,
+// and a route length that the generator scales with the episode duration (the preset's EPISODE_STEP_LIMIT is not
+// enforced anywhere; the generator steps for as long as it wants).
 #pragma once
 #include <rl_tools/rl/environments/hyperdrone/presets.h>
 #include <rl_tools/rl/environments/hyperdrone/operations_cpu.h>
@@ -41,6 +43,7 @@ namespace hyperdrone_user {
 
     struct TASK_SPEC: hyperdrone::tasks::visual_inertial_localization::Specification<BASE_WORLD> {
         static constexpr TI FRAME_STRIDE = 1;  // render at the IMU rate; frames are subsampled in Python
+        static constexpr TI NUM_WAYPOINTS = @WAYPOINTS@;  // route length (the route cycles when exhausted); scaled with the duration
         static constexpr TI INITIALIZATION_HOLD_STEPS = @HOLD_STEPS@;  // hover before the route starts
     };
     using WORLD = hyperdrone::tasks::visual_inertial_localization::World<TASK_SPEC>;

@@ -305,7 +305,7 @@ def main(argv=None):
     convert = commands.add_parser("convert-euroc", help="[datasets] cut a EuRoC MAV sequence (ASL format directory) into episodes")
     convert.add_argument("sequence", help="sequence directory (containing mav0/)")
     convert.add_argument("-o", "--output", required=True)
-    convert.add_argument("--snippet", type=float, default=10.0, help="episode length in seconds")
+    convert.add_argument("--snippet", type=float, default=60.0, help="episode length in seconds (default: one minute, like the simulated sets)")
     convert.add_argument("--stride", type=float, help="seconds between snippet starts (default: --snippet, no overlap)")
     convert.add_argument("--start", type=float, default=0.0, help="skip this many seconds at the beginning")
     convert.add_argument("--max-snippets", type=int)
