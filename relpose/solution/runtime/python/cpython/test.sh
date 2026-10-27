@@ -4,8 +4,9 @@ set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
 BUILD=${BUILD:-$HERE/../../../../../build/runtime}
-VENV=${VENV:-/opt/venv}
-WASMTIME=${WASMTIME:-$(command -v wasmtime)}
+TOOLCHAIN=${TOOLCHAIN:-$HERE/../../../../../build/toolchain}
+VENV=${VENV:-$TOOLCHAIN/venv}
+WASMTIME=${WASMTIME:-$TOOLCHAIN/wasmtime/wasmtime}
 TESTS=$BUILD/tests
 SUITES=("$@")
 if [ ${#SUITES[@]} -eq 0 ]; then

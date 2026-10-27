@@ -1,0 +1,3 @@
+# bash and git apply need LF even in checkouts made with Windows git (WSL builds)
+*.sh text eol=lf
+*.patch text eol=lf

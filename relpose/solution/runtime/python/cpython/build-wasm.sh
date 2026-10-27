@@ -3,16 +3,23 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-SRC=${SRC:-/opt/src}
-SDK=${WASI_SDK_PATH:-/opt/wasi-sdk}
-VENV=${VENV:-/opt/venv}
-WASMTIME=${WASMTIME:-$(command -v wasmtime)}
+# relpose/solution/toolchain/download_dependencies.sh puts these into build/toolchain
+TOOLCHAIN=${TOOLCHAIN:-$HERE/../../../../../build/toolchain}
+SRC=${SRC:-$TOOLCHAIN/src}
+SDK=${WASI_SDK_PATH:-$TOOLCHAIN/wasi-sdk}
+VENV=${VENV:-$TOOLCHAIN/venv}
+WASMTIME=${WASMTIME:-$TOOLCHAIN/wasmtime/wasmtime}
 BUILD=${BUILD:-$HERE/../../../../../build/runtime}
 CPUS=$(getconf _NPROCESSORS_ONLN)
 JOBS=$(( CPUS < 5 ? CPUS : 5 ))
 export PATH=$VENV/bin:$(dirname "$WASMTIME"):$PATH
 mkdir -p "$BUILD/logs" "$BUILD/dist" "$BUILD/src"
 BUILD=$(cd "$BUILD" && pwd)
+case "$BUILD:$SDK:$VENV" in
+    *" "*) echo "CPython's build cannot handle spaces in paths: move the repository (or point BUILD/TOOLCHAIN) somewhere without them" >&2; exit 1 ;;
+esac
+# the source copies are unpacked tarballs, not repositories: keep git (the patches below, numpy's version script) from finding the relpose checkout around them
+export GIT_CEILING_DIRECTORIES=$BUILD/src
 
 # CPython builds in-tree and numpy/OpenCV get patched, so the build works on copies of the pristine sources
 for project in cpython numpy opencv; do
@@ -27,13 +34,25 @@ for project in numpy opencv; do
 done
 
 CPYTHON=$BUILD/src/cpython
+# configured trees remember absolute paths: one from the former Docker toolchain (/work) or a moved checkout cannot be reused
+if [ -f "$CPYTHON/cross-build/wasm32-wasip1/Makefile" ] && ! grep -qF "abs_srcdir=	$CPYTHON/" "$CPYTHON/cross-build/wasm32-wasip1/Makefile"; then
+    echo "$BUILD was configured at another path (e.g. inside the former Docker toolchain): delete it and build again" >&2
+    exit 1
+fi
 if [ ! -f "$CPYTHON/cross-build/wasm32-wasip1/python.wasm" ]; then
-    (cd "$CPYTHON" && WASI_SDK_PATH=$SDK taskset -c 0-$((JOBS - 1)) python3 Tools/wasm/wasi build --quiet --logdir "$BUILD/logs")
+    PIN=""  # macOS has no taskset
+    if command -v taskset > /dev/null; then
+        PIN="taskset -c 0-$((JOBS - 1))"
+    fi
+    (cd "$CPYTHON" && WASI_SDK_PATH=$SDK $PIN python3 Tools/wasm/wasi build --quiet --logdir "$BUILD/logs")
 fi
 BUILD_PYTHON=$CPYTHON/cross-build/$(python3 -c "import sysconfig; print(sysconfig.get_config_var('BUILD_GNU_TYPE'))")/python
+if [ ! -f "$BUILD_PYTHON" ]; then
+    BUILD_PYTHON=$BUILD_PYTHON.exe  # case-insensitive file systems (macOS): python would clash with the Python/ directory
+fi
 make -C "$CPYTHON/cross-build/wasm32-wasip1" inclinstall libinstall DESTDIR="$BUILD/prefix" > "$BUILD/logs/install.log" 2>&1
 mkdir -p "$BUILD/prefix/usr/local/lib/python3.14/lib-dynload"
-make -s -C "$CPYTHON/cross-build/wasm32-wasip1" -n -W Programs/python.o python.wasm | grep -E '^\S*clang.*-o python.wasm' > "$BUILD/python-link-command.txt"
+make -s -C "$CPYTHON/cross-build/wasm32-wasip1" -n -W Programs/python.o python.wasm | grep -E '^[^[:space:]]*clang.*-o python.wasm' > "$BUILD/python-link-command.txt"
 
 NUMPY=$BUILD/numpy-cross
 mkdir -p "$NUMPY/sysconfig"

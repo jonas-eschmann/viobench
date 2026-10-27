@@ -9,7 +9,7 @@ runtime build: evaluation runs any `.wasm` under wasmtime.
 git clone <repo> && cd <repo>
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev,data,sim,server]"        # [sim] needs an NVIDIA GPU + CUDA for HyperDrone (first use compiles ~1 min)
-pytest                                          # needs a runtime.wasm: relpose/solution/toolchain/build-image.sh && relpose/solution/runtime/python/build.sh
+pytest                                          # needs a runtime.wasm: relpose/solution/runtime/python/build.sh
 ```
 
 ## 2. Episode sets (`relpose/tools/datasets/generate/recipes`)

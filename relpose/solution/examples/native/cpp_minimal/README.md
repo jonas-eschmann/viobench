@@ -5,7 +5,7 @@ The solution ABI implemented directly as a `wasm32-wasip1` reactor: `#include "r
 thousand fuel units of overhead instead of the interpreter's.
 
 ```bash
-relpose/solution/runtime/native/build.sh relpose/solution/examples/native/cpp_minimal         # cmake inside the toolchain image → build/solution.wasm
+relpose/solution/runtime/native/build.sh relpose/solution/examples/native/cpp_minimal         # cmake with wasi-sdk (downloaded into build/toolchain) → build/solution.wasm
 relpose check relpose/solution/examples/native/cpp_minimal/build/solution.wasm
 relpose manifest relpose/solution/examples/native/cpp_minimal/build/solution.wasm --channels 3   # optional: ask for RGB (or --resolution 640x480)
 ```

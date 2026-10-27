@@ -67,8 +67,8 @@ needed by the Python runtime. The harness treats both identically.
 
 ## Building the runtime (you)
 
-`relpose/solution/toolchain/build-image.sh` once, then `relpose/solution/runtime/python/build.sh` (runs `relpose/solution/runtime/python/cpython/build-wasm.sh`
-in the toolchain container, 10–15 min): produces `build/runtime/dist/runtime.wasm` (the reactor `relpose bundle` embeds
+`relpose/solution/runtime/python/build.sh` (downloads the toolchain into `build/toolchain` with `relpose/solution/toolchain/download_dependencies.sh`,
+then runs `relpose/solution/runtime/python/cpython/build-wasm.sh`, 10–15 min): produces `build/runtime/dist/runtime.wasm` (the reactor `relpose bundle` embeds
 your directory into) and `python.wasm` (a command-line Python for experiments: `relpose/solution/runtime/python/cpython/python.sh`).
 Patches, module lists and the frozen-stdlib mechanism are documented in `relpose/solution/runtime/python/README.md`; change them
 freely, the contract is only the ABI. `tests/` exercises the result through the harness (`pytest`).

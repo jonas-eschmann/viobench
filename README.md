@@ -28,7 +28,7 @@ one WebAssembly module; we are unopinionated about what runs inside it. The eval
 
 ```bash
 python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,data]"
-relpose/solution/toolchain/build-image.sh && relpose/solution/runtime/python/build.sh   # Docker; 10-15 min once → build/runtime/dist/runtime.wasm
+relpose/solution/runtime/python/build.sh   # downloads the toolchain into build/toolchain; 10-15 min once → build/runtime/dist/runtime.wasm
 pytest
 relpose bundle relpose/solution/examples/python/klt_imu -o klt.wasm && relpose check klt.wasm
 relpose evaluate klt.wasm build/datasets/public/default-val -o report-klt         # episodes on disk

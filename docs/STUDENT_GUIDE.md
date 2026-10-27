@@ -2,11 +2,15 @@
 
 ## 1. Setup
 
+Linux or macOS; on Windows use WSL2 and clone into the WSL filesystem (not under `/mnt/c`), in a path without spaces. You need git,
+curl, CMake, a C compiler, make and Python 3.10–3.14 with `venv` (Ubuntu/WSL: `sudo apt install build-essential cmake curl git
+python3-venv xz-utils`; macOS: `xcode-select --install`, `brew install cmake` and a Python from Homebrew or python.org, the
+Command Line Tools' python3 is too old). The first `build.sh` downloads everything else into `build/toolchain`.
+
 ```bash
 git clone <repo> && cd <repo>
 python -m venv .venv && source .venv/bin/activate && pip install -e ".[data]"
-relpose/solution/toolchain/build-image.sh      # Docker image with wasi-sdk + wasmtime + the CPython/numpy/OpenCV sources (once)
-relpose/solution/runtime/python/build.sh               # your Python runtime: build/runtime/dist/runtime.wasm (10-15 min, once per machine)
+relpose/solution/runtime/python/build.sh       # your Python runtime: build/runtime/dist/runtime.wasm (10-15 min, once per machine)
 ```
 
 The runtime is yours to build, and to change (`relpose/solution/runtime/python/README.md`): nothing inside the `.wasm` is prescribed,
@@ -78,7 +82,7 @@ accuracy-vs-fuel curve; your best points form your Pareto front. Quotas: 20 subm
 ## 5. Going native
 
 A C++ (or Rust) solution implements four exports and skips the interpreter entirely: `relpose/solution/runtime/native/` (header, CMake
-snippet, `build.sh`) and `relpose/solution/examples/native/cpp_minimal`. The toolchain image has wasi-sdk; the Python-runtime build leaves
+snippet, `build.sh`) and `relpose/solution/examples/native/cpp_minimal`. `build.sh` uses the wasi-sdk in `build/toolchain`; the Python-runtime build leaves
 OpenCV's static libraries behind if you want them. Configured with your host compiler, the same `CMakeLists.txt` builds a
 `debug` executable that replays an episode (`relpose feed`) through your code under gdb (`docs/DEBUGGING.md`).
 
@@ -86,6 +90,7 @@ OpenCV's static libraries behind if you want them. Configured with your host com
 
 | symptom | cause / fix |
 |---|---|
+| `… was configured at another path`, `CMakeCache.txt directory … is different` | a build directory from the former Docker toolchain (or a moved checkout): delete it once (`build/runtime`, `<solution>/build`) |
 | `ModuleNotFoundError: scipy` | not available in the reference runtime; numpy + OpenCV only (`docs/RUNTIME.md`), or build your own |
 | `trap OUT_OF_FUEL` | one step exceeded the fuel budget: reduce work per frame (resolution, feature count, iterations) |
 | `MemoryError` | the 2 GiB cap; avoid keeping every frame |

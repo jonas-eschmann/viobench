@@ -5,8 +5,7 @@ A solution is any `wasm32-wasip1` reactor that exports the ABI in `relpose_abi.h
 few thousand fuel units of overhead instead of the interpreter's.
 
 ```bash
-relpose/solution/toolchain/build-image.sh                           # once: the image with wasi-sdk 34
-relpose/solution/runtime/native/build.sh relpose/solution/examples/native/cpp_minimal        # cmake inside the image → relpose/solution/examples/native/cpp_minimal/build/solution.wasm
+relpose/solution/runtime/native/build.sh relpose/solution/examples/native/cpp_minimal        # downloads wasi-sdk 34 into build/toolchain (once), cmake → relpose/solution/examples/native/cpp_minimal/build/solution.wasm
 relpose check relpose/solution/examples/native/cpp_minimal/build/solution.wasm
 relpose manifest relpose/solution/examples/native/cpp_minimal/build/solution.wasm --channels 3 --resolution 640x480   # optional opt-ins
 ```
