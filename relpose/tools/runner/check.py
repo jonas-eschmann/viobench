@@ -2,11 +2,14 @@
 import numpy as np
 
 from .. import abi
-from ..abi.config import make_config
+from ..abi.config import default_guest_config
 from .sandbox import Limits, Sandbox, SandboxError
 
+FRAME_RATE_HZ = 20.0  # the nominal rates of every set (docs/ABI.md); solutions go by the timestamps
+IMU_RATE_HZ = 200.0
 
-def check(wasm, dev_dir=None, frames=5, channels=None, width=None, height=None, logs=None, verbose=False, seed=0, log=print):
+
+def check(wasm, dev_dir=None, frames=5, logs=None, verbose=False, seed=0, log=print):
     """Returns 0 when every step succeeded, 1 otherwise. Prints one line per step."""
     rng = np.random.default_rng(seed)
     try:
@@ -14,15 +17,13 @@ def check(wasm, dev_dir=None, frames=5, channels=None, width=None, height=None, 
     except SandboxError as error:
         log(f"load failed: {error}")
         return 1
-    channels = channels or sandbox.channels
-    width = width or sandbox.resolution[0]
-    height = height or sandbox.resolution[1]
-    config = make_config(width=width, height=height, channels=channels, num_frames=frames)
-    shape = (height, width) if channels == 1 else (height, width, channels)
-    dt = 1.0 / config["episode"]["frame_rate_hz"]
-    imu_dt = 1.0 / config["imu"]["rate_hz"]
+    width, height = sandbox.resolution
+    config = default_guest_config(width=width, height=height)
+    shape = (height, width, abi.CHANNELS)
+    dt = 1.0 / FRAME_RATE_HZ
+    imu_dt = 1.0 / IMU_RATE_HZ
     rows_per_frame = int(round(dt / imu_dt))
-    log(f"module: {'RGB' if channels == 3 else 'grayscale'} frames {shape}, manifest {sandbox.manifest or '{}'}")
+    log(f"module: frames {shape}, manifest {sandbox.manifest or '{}'}")
     try:
         sandbox.init(config)
     except SandboxError as error:
@@ -34,8 +35,7 @@ def check(wasm, dev_dir=None, frames=5, channels=None, width=None, height=None, 
         t = (k + 1) * dt
         base = np.linspace(0, 255, width, dtype=np.float32)[None, :] + rng.normal(0, 20, (height, width))
         frame = np.clip(base, 0, 255).astype(np.uint8)
-        if channels > 1:
-            frame = np.repeat(frame[:, :, None], channels, axis=2)
+        frame = np.repeat(frame[:, :, None], abi.CHANNELS, axis=2)
         times = t - dt + imu_dt * np.arange(1, rows_per_frame + 1)
         imu = np.column_stack([times, rng.normal(0, 0.3, (rows_per_frame, 3)) + [0, 0, 9.81], rng.normal(0, 0.07, (rows_per_frame, 3))])
         try:

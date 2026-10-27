@@ -25,11 +25,11 @@ def test_direct_run_matches_the_sandbox(engine, runtime_path, tmp_path):
     from relpose.solution.runtime.python.bundler.bundle import bundle
     from relpose.tools.runner.run import evaluate
 
-    episode = synthetic_episode(n_frames=30, width=64, height=48)  # 1.5 s: dead reckoning calibrates on the first second, then estimates
+    episode = synthetic_episode(n_frames=30, width=320, height=240)  # 1.5 s: dead reckoning calibrates on the first 0.5 s, then estimates
     dataset = tmp_path / "set"
     write_episode(episode, dataset / episode.name)
     solution = direct.PythonSolution(EXAMPLES / "python" / "dead_reckoning")
-    assert solution.channels == 1 and solution.resolution == (320, 240)
+    assert solution.resolution == (320, 240)
     [(_, estimates, metrics)] = direct.run(solution, [dataset], output_dir=tmp_path / "direct", log=lambda *a: None)
     assert estimates.shape == (30, 7) and np.isfinite(estimates[-1]).all() and 0 < metrics.coverage < 1
     written = np.loadtxt(tmp_path / "direct" / "set" / episode.name / "estimate.tum")
@@ -43,16 +43,16 @@ def test_direct_run_matches_the_sandbox(engine, runtime_path, tmp_path):
 
 
 def test_direct_manifest_and_host_solution_bundle(solution_dir, tmp_path):
-    """solution.json picks entry/channels/resolution; data files next to the code come through `solution_bundle`."""
+    """solution.json picks entry/resolution; data files next to the code come through `solution_bundle`."""
     directory = solution_dir(
         "",
         {
-            "solution.json": json.dumps({"entry": "estimator:Est", "channels": 3, "resolution": "640x480"}),
+            "solution.json": json.dumps({"entry": "estimator:Est", "resolution": "640x480"}),
             "estimator.py": (
                 "import numpy as np\nimport solution_bundle as bundle\n"
                 "class Est:\n"
                 "    def __init__(self, config):\n"
-                "        assert config['image']['channels'] == 3 and config['image']['width'] == 640\n"
+                "        assert config['width'] == 640 and 'channels' not in config\n"
                 "        self.offset = np.load(bundle.open('data/offset.npy'))\n"
                 "        assert bundle.exists('data/offset.npy') and bundle.listdir('data') == ['offset.npy'] and bundle.read_text('note.txt') == 'hi'\n"
                 "    def step(self, t, frame, imu):\n"
@@ -61,7 +61,7 @@ def test_direct_manifest_and_host_solution_bundle(solution_dir, tmp_path):
             ),
             "note.txt": "hi",
         },
-        name="rgb",
+        name="vga",
     )
     import io
 
@@ -70,15 +70,15 @@ def test_direct_manifest_and_host_solution_bundle(solution_dir, tmp_path):
     (directory / "data").mkdir()
     (directory / "data" / "offset.npy").write_bytes(buffer.getvalue())
     solution = direct.PythonSolution(directory)
-    assert solution.channels == 3 and solution.resolution == (640, 480)
-    episode = synthetic_episode(n_frames=3, width=32, height=24)  # grayscale 32x24: adapted (upscaled, gray->RGB) like the sandbox does
+    assert solution.resolution == (640, 480)
+    episode = synthetic_episode(n_frames=3, width=640, height=480)  # grayscale: delivered as RGB like the sandbox does
     steps = list(direct.trace(solution, episode))
     assert len(steps) == 3 and steps[0].frame.shape == (480, 640, 3)
     np.testing.assert_allclose(steps[-1].pose[:3], [1.0, 2.0, 3.0])
 
 
 def test_direct_cli(tmp_path, capsys):
-    episode = synthetic_episode(n_frames=4, width=32, height=24)
+    episode = synthetic_episode(n_frames=4, width=320, height=240)
     write_episode(episode, tmp_path / "set" / episode.name)
     assert cli(["debug", str(EXAMPLES / "python" / "minimal"), str(tmp_path / "set"), "-o", str(tmp_path / "out")]) == 0
     assert "ATE" in capsys.readouterr().out
@@ -86,16 +86,16 @@ def test_direct_cli(tmp_path, capsys):
 
 
 def test_feed_and_score(tmp_path, capsys):
-    episode = synthetic_episode(n_frames=6, width=64, height=48)
+    episode = synthetic_episode(n_frames=6, width=640, height=480, lead_in=1.0)
     write_episode(episode, tmp_path / "set" / episode.name)
-    feed = write_feed(episode, tmp_path / "feed", channels=1, resolution=(320, 240))
-    assert (feed / "shape.txt").read_text().split() == ["6", "240", "320", "1", str(len(episode.imu))]
-    frames = np.fromfile(feed / "frames.u8", dtype=np.uint8).reshape(6, 240, 320, 1)
+    feed = write_feed(episode, tmp_path / "feed", resolution=(320, 240))
+    assert (feed / "shape.txt").read_text().split() == ["6", "240", "320", "3", "60"]  # IMU: six windows of one frame interval
+    frames = np.fromfile(feed / "frames.u8", dtype=np.uint8).reshape(6, 240, 320, 3)
     assert frames.std() > 0
     config = json.loads((feed / "config.json").read_text())
-    assert config["image"]["width"] == 320 and config["image"]["channels"] == 1
+    assert config["width"] == 320 and "channels" not in config
     imu = np.fromfile(feed / "imu.f64").reshape(-1, 7)
-    np.testing.assert_allclose(imu, episode.imu)
+    np.testing.assert_allclose(imu, episode.delivered_imu())
     gt = np.fromfile(feed / "gt.f64").reshape(6, 7)
     np.testing.assert_allclose(gt, episode.ground_truth_relative())
     # a perfect pose file scores zero; one with a missing frame has coverage < 1
@@ -121,7 +121,7 @@ def test_native_host_debug_build(tmp_path):
     assert "debug" in configure.stdout
     compile_ = subprocess.run(["cmake", "--build", str(build)], capture_output=True, text=True)
     assert compile_.returncode == 0, compile_.stderr
-    episode = synthetic_episode(n_frames=5, width=64, height=48)
+    episode = synthetic_episode(n_frames=5, width=320, height=240)
     write_episode(episode, tmp_path / "set" / episode.name)
     feed = write_feed(episode, tmp_path / "feed")
     tum = tmp_path / "estimate.tum"

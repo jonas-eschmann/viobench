@@ -105,7 +105,7 @@ def validate(directory, files, entry):
     return warnings
 
 
-def make_zip(directory, files, entry, channels=abi.DEFAULT_CHANNELS, resolution=abi.DEFAULT_RESOLUTION):
+def make_zip(directory, files, entry, resolution=abi.DEFAULT_RESOLUTION):
     """Uncompressed (the guest has no zlib), deterministic zip with the manifest at the end. Returns (bytes, manifest)."""
     directory = Path(directory)
     manifest = {}
@@ -121,7 +121,7 @@ def make_zip(directory, files, entry, channels=abi.DEFAULT_CHANNELS, resolution=
             info.compress_type = zipfile.ZIP_STORED
             info.external_attr = 0o644 << 16
             archive.writestr(info, data)
-        manifest.update({"format": 1, "entry": entry, "channels": int(channels), "resolution": list(parse_resolution(resolution))})
+        manifest.update({"entry": entry, "resolution": list(parse_resolution(resolution))})
         validate_manifest(manifest)
         info = zipfile.ZipInfo(abi.BUNDLE_MANIFEST, date_time=ZIP_EPOCH)
         info.external_attr = 0o644 << 16
@@ -129,22 +129,20 @@ def make_zip(directory, files, entry, channels=abi.DEFAULT_CHANNELS, resolution=
     return buffer.getvalue(), manifest
 
 
-def bundle(directory, output, runtime=None, entry=None, channels=None, resolution=None):
-    """Writes output (.wasm) and returns a summary dict. entry/channels/resolution default to solution.json in the directory."""
+def bundle(directory, output, runtime=None, entry=None, resolution=None):
+    """Writes output (.wasm) and returns a summary dict. entry/resolution default to solution.json in the directory."""
     directory = Path(directory)
     files = collect_files(directory)
     manifest_path = directory / abi.BUNDLE_MANIFEST
     existing = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
     if entry is None:
         entry = existing.get("entry", abi.DEFAULT_ENTRY)
-    if channels is None:
-        channels = existing.get("channels", abi.DEFAULT_CHANNELS)
     if resolution is None:
         resolution = existing.get("resolution", abi.DEFAULT_RESOLUTION)
     warnings = validate(directory, files, entry)
     runtime_path = Path(runtime) if runtime else default_runtime()
     runtime_bytes = strip_custom(runtime_path.read_bytes(), abi.MANIFEST_SECTION)
-    payload, manifest = make_zip(directory, files, entry, channels, resolution)
+    payload, manifest = make_zip(directory, files, entry, resolution)
     result = with_manifest(embed_bundle(runtime_bytes, payload), manifest)
     if extract_bundle(result) != payload or read_manifest(result) != manifest:
         raise PackagingError("internal error: the embedded bundle does not round-trip")
@@ -156,7 +154,6 @@ def bundle(directory, output, runtime=None, entry=None, channels=None, resolutio
         "files": [file.as_posix() for file in files],
         "bundle_bytes": len(payload),
         "entry": entry,
-        "channels": int(channels),
         "resolution": manifest["resolution"],
         "runtime": str(runtime_path),
         "runtime_sha256": hashlib.sha256(strip_bundle(runtime_bytes)).hexdigest(),

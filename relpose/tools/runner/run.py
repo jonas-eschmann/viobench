@@ -60,7 +60,7 @@ def run_episode(wasm_path, episode, engine, limits, log_dir, dev_dir=None, progr
     sandbox = None
     try:
         sandbox = Sandbox(wasm_path, engine, limits=limits, log_dir=log_dir, dev_dir=dev_dir)
-        config, frames = episode.adapt(sandbox.channels, sandbox.resolution)
+        config, frames = episode.adapt(sandbox.resolution)
         sandbox.init(config)
         fuel_init, wall_init = sandbox.init_fuel, sandbox.init_wall_seconds
         consecutive = 0

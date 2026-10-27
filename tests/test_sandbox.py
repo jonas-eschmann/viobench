@@ -7,10 +7,11 @@ from wasmtime import TrapCode
 
 from relpose import Limits, Sandbox, SandboxError, SandboxTrap, abi
 from relpose.solution.runtime.python.bundler.bundle import bundle
-from relpose.tools.abi.config import make_config
+from relpose.tools.abi.config import default_guest_config
 
-CONFIG = make_config(width=64, height=48, channels=1, num_frames=10)
-FRAME = (np.arange(48 * 64, dtype=np.uint32).reshape(48, 64) % 251).astype(np.uint8)
+CONFIG = default_guest_config()  # 320x240, the default declaration
+GRAY = (np.arange(240 * 320, dtype=np.uint32).reshape(240, 320) % 251).astype(np.uint8)
+FRAME = np.stack([GRAY, GRAY // 2, GRAY // 3], axis=2)  # RGB with distinct channels
 IMU = np.column_stack([np.linspace(0.005, 0.05, 10), np.tile([0.1, 0.0, 9.81, 0.0, 0.0, 0.01], (10, 1))])
 
 IDENTITY = """
@@ -50,17 +51,17 @@ def test_frame_and_imu_arrive_intact(engine, runtime_path, solution_dir, tmp_pat
 import numpy as np
 class Solution:
     def __init__(self, config):
-        assert config["image"]["width"] == 64 and config["camera"]["model"] == "pinhole"
+        assert set(config) == {"abi_version", "width", "height", "fx", "fy", "cx", "cy", "T_cam_imu"} and config["width"] == 320
     def step(self, t, frame, imu):
-        assert frame.shape == (48, 64) and frame.dtype == np.uint8 and not frame.flags.writeable
+        assert frame.shape == (240, 320, 3) and frame.dtype == np.uint8 and not frame.flags.writeable
         assert imu.shape == (10, 7) and abs(imu[-1, 0] - 0.05) < 1e-12 and abs(imu[3, 3] - 9.81) < 1e-12
-        return [float(frame[7, 9]), float(imu[0, 1]), t, 0, 0, 0, 1]
+        return [float(frame[7, 9, 1]), float(imu[0, 1]), t, 0, 0, 0, 1]
 """
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source), tmp_path)
     sandbox.init(CONFIG)
     result = sandbox.step(0.05, FRAME, IMU)
     assert result.status == abi.STATUS_OK, sandbox.stderr_tail()
-    assert result.pose[0] == FRAME[7, 9] and result.pose[1] == 0.1 and result.pose[2] == 0.05
+    assert result.pose[0] == FRAME[7, 9, 1] and result.pose[1] == 0.1 and result.pose[2] == 0.05
 
 
 def test_empty_imu_window(engine, runtime_path, solution_dir, tmp_path):
@@ -210,6 +211,7 @@ class Solution:
         self.orb = cv2.ORB_create(100)
         self.previous = None
     def step(self, t, frame, imu):
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)
         corners = cv2.goodFeaturesToTrack(frame, 50, 0.01, 3)
         keypoints, descriptors = self.orb.detectAndCompute(frame, None)
         blurred = cv2.GaussianBlur(frame, (5, 5), 1.0)
@@ -221,7 +223,8 @@ class Solution:
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source), tmp_path)
     sandbox.init(CONFIG)
     rng = np.random.default_rng(1)
-    frame = np.kron(rng.integers(0, 255, (6, 8)), np.ones((8, 8))).astype(np.uint8)  # blocky: has corners
+    blocks = np.kron(rng.integers(0, 255, (30, 40)), np.ones((8, 8))).astype(np.uint8)  # blocky: has corners
+    frame = np.repeat(blocks[:, :, None], 3, axis=2)
     for k in range(2):
         result = sandbox.step(0.05 * (k + 1), frame, IMU)
         assert result.status == abi.STATUS_OK, sandbox.stderr_tail()
@@ -304,34 +307,36 @@ def test_abi_constants_match_the_guest_shim_and_the_native_header():
     assert f"#define RELPOSE_ABI_VERSION {abi.ABI_VERSION}" in header
 
 
-def test_rgb_opt_in_via_manifest(engine, runtime_path, solution_dir, tmp_path):
+def test_resolution_opt_in_via_manifest(engine, runtime_path, solution_dir, tmp_path):
     source = """
 import numpy as np
 class Solution:
     def __init__(self, config):
-        assert config["image"]["channels"] == 3 and config["image"]["layout"] == "HWC"
+        assert (config["width"], config["height"]) == (640, 480)
     def step(self, t, frame, imu):
-        assert frame.shape == (48, 64, 3)
+        assert frame.shape == (480, 640, 3)
         return [float(frame[1, 2, 0]), float(frame[1, 2, 1]), float(frame[1, 2, 2]), 0, 0, 0, 1]
 """
-    directory = solution_dir(source, {"solution.json": '{"channels": 3}'})
-    wasm = tmp_path / "rgb.wasm"
+    directory = solution_dir(source, {"solution.json": '{"resolution": [640, 480]}'})
+    wasm = tmp_path / "vga.wasm"
     summary = bundle(directory, wasm, runtime=runtime_path)
-    assert summary["channels"] == 3
+    assert summary["resolution"] == [640, 480]
     sandbox = Sandbox(wasm, engine, log_dir=tmp_path / "logs")
-    assert sandbox.channels == 3 and sandbox.manifest["channels"] == 3
-    with pytest.raises(SandboxError, match="declares 3"):
-        sandbox.init(CONFIG)  # grayscale config does not match the declaration
+    assert sandbox.resolution == (640, 480) and sandbox.manifest["resolution"] == [640, 480]
+    with pytest.raises(SandboxError, match="declares 640x480"):
+        sandbox.init(CONFIG)  # a 320x240 config does not match the declaration
     sandbox = Sandbox(wasm, engine, log_dir=tmp_path / "logs2")
-    sandbox.init(make_config(width=64, height=48, channels=3, num_frames=10))
-    rgb = np.stack([FRAME, FRAME // 2, FRAME // 3], axis=2)
-    result = sandbox.step(0.05, rgb, IMU)
+    sandbox.init(default_guest_config(640, 480))
+    vga = np.kron(FRAME, np.ones((2, 2, 1), dtype=np.uint8))
+    result = sandbox.step(0.05, vga, IMU)
     assert result.status == abi.STATUS_OK, sandbox.stderr_tail()
-    np.testing.assert_array_equal(result.pose[:3], rgb[1, 2])
-    # the manifest command rewrites the section; bundling again from a --channels flag overrides solution.json
+    np.testing.assert_array_equal(result.pose[:3], vga[1, 2])
+    # the manifest command rewrites the section; bundling again from a --resolution flag overrides solution.json
     from relpose.tools.abi.manifest import read_manifest, write_manifest
 
-    assert write_manifest(wasm, {"channels": 1})["channels"] == 1 and read_manifest(wasm.read_bytes())["channels"] == 1
-    assert bundle(directory, wasm, runtime=runtime_path, channels=1)["channels"] == 1
-    with pytest.raises(Exception, match="channels"):
-        write_manifest(wasm, {"channels": 4})
+    assert write_manifest(wasm, {"resolution": "320x240"})["resolution"] == [320, 240] and read_manifest(wasm.read_bytes())["resolution"] == [320, 240]
+    assert bundle(directory, wasm, runtime=runtime_path, resolution="320x240")["resolution"] == [320, 240]
+    with pytest.raises(Exception, match="resolution"):
+        write_manifest(wasm, {"resolution": [64, 48]})
+    with pytest.raises(Exception, match="unknown manifest keys"):  # there is no colour choice: frames are always RGB
+        write_manifest(wasm, {"channels": 3})

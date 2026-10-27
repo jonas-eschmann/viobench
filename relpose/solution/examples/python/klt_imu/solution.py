@@ -2,18 +2,21 @@
 rotation, accelerometer for scale and gravity.
 
 Per frame pair:
-  1. the gyroscope (bias from the initial hover) is integrated to the body rotation R_wb;
+  1. the gyroscope (bias from the first half second, if the platform was at rest) is integrated to the body rotation R_wb;
   2. features tracked from the previous frame (goodFeaturesToTrack + calcOpticalFlowPyrLK) give an essential matrix,
      recoverPose yields the unit translation direction of the camera motion;
   3. the IMU displacement over the frame interval (dead reckoning with the current velocity) provides the scale and
      the fallback when tracking fails; the fused displacement updates the velocity so dead-reckoning drift is damped.
-It is a baseline, not a VIO system: no bundle adjustment, no bias estimation beyond the hover. Fuel per frame is
+It is a baseline, not a VIO system: no bundle adjustment, no bias estimation beyond the start. Fuel per frame is
 dominated by the OpenCV calls, which run as SIMD wasm.
 """
 import cv2
 import numpy as np
 
 GRAVITY = 9.81
+CALIBRATION_SECONDS = 0.5  # IMU at the start that gives the gravity direction and, at rest, the gyro bias (as in dead_reckoning)
+REST_ACCEL_STD = 1.0  # m/s^2: at rest a MEMS IMU only shows noise
+REST_GYRO_STD = 0.2  # rad/s
 MIN_TRACKS = 30
 MIN_INLIERS = 15
 MIN_PARALLAX_PIXELS = 1.0
@@ -37,13 +40,11 @@ def matrix_to_quaternion(R):
 
 class Solution:
     def __init__(self, config):
-        camera = config["camera"]
-        self.K = np.array([[camera["fx"], 0, camera["cx"]], [0, camera["fy"], camera["cy"]], [0, 0, 1]])
-        self.T_cam_imu = np.asarray(config["imu"]["T_cam_imu"], dtype=float).reshape(4, 4)
+        self.K = np.array([[config["fx"], 0, config["cx"]], [0, config["fy"], config["cy"]], [0, 0, 1]])
+        self.T_cam_imu = np.asarray(config["T_cam_imu"], dtype=float)
         self.T_imu_cam = np.linalg.inv(self.T_cam_imu)
         self.R_bc = self.T_imu_cam[:3, :3]
-        self.hover_until = float(config["episode"].get("hover_seconds") or 0.5)
-        self.hover_samples = []
+        self.calibration_samples = []
         self.initialized = False
         self.R_wb = np.eye(3)
         self.v = np.zeros(3)
@@ -59,9 +60,10 @@ class Solution:
     # --- IMU ---------------------------------------------------------------------------------------------------
 
     def _initialize(self, t):
-        samples = np.asarray(self.hover_samples)
+        samples = np.asarray(self.calibration_samples)
         mean_accel = samples[:, 1:4].mean(axis=0)
-        self.gyro_bias = samples[:, 4:7].mean(axis=0)
+        at_rest = np.linalg.norm(samples[:, 1:4].std(axis=0)) < REST_ACCEL_STD and np.linalg.norm(samples[:, 4:7].std(axis=0)) < REST_GYRO_STD
+        self.gyro_bias = samples[:, 4:7].mean(axis=0) if at_rest else np.zeros(3)
         z_world = mean_accel / np.linalg.norm(mean_accel)  # "up" in body coordinates
         x_world = np.array([1.0, 0.0, 0.0]) - z_world[0] * z_world
         x_world /= np.linalg.norm(x_world)
@@ -118,10 +120,12 @@ class Solution:
     # --- protocol ----------------------------------------------------------------------------------------------
 
     def step(self, t, frame, imu):
+        frame = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)  # frames are RGB; tracking works on gray
         self.frame_count += 1
         if not self.initialized:
-            self.hover_samples.extend(imu.tolist())
-            if t < self.hover_until or len(self.hover_samples) < 20:
+            self.calibration_samples.extend(imu.tolist())
+            samples = self.calibration_samples
+            if len(samples) < 2 or samples[-1][0] - samples[0][0] < CALIBRATION_SECONDS:
                 return None
             self._initialize(imu[-1, 0] if len(imu) else t)
             self.previous_frame = frame.copy()

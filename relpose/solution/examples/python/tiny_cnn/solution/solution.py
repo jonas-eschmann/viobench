@@ -39,7 +39,7 @@ class Solution:
         self.imu_mean = np.asarray(self.meta["imu_mean"], dtype=np.float32)
         self.imu_std = np.asarray(self.meta["imu_std"], dtype=np.float32)
         self.target_std = np.asarray(self.meta["target_std"], dtype=np.float32)
-        self.T_cam_imu = np.asarray(config["imu"]["T_cam_imu"], dtype=float).reshape(4, 4)
+        self.T_cam_imu = np.asarray(config["T_cam_imu"], dtype=float)
         self.net = None
         if hasattr(cv2, "dnn") and bundle.exists("net.onnx"):
             try:
@@ -64,7 +64,8 @@ class Solution:
         return output * self.target_std
 
     def step(self, t, frame, imu):
-        small = cv2.resize(frame, self.size, interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
+        gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)  # frames are RGB; the network was trained on gray
+        small = cv2.resize(gray, self.size, interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
         if self.previous is None or len(imu) == 0:
             self.previous = small
             return np.array([0, 0, 0, 0, 0, 0, 1.0])

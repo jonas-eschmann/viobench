@@ -1,11 +1,11 @@
-"""In-memory episode: frames (materialised or streamed), IMU, ground truth and the config a solution receives."""
-import copy
+"""In-memory episode: frames (materialised or streamed), IMU, ground truth, its stored description and what a solution receives."""
 from dataclasses import dataclass, field
 
 import cv2
 import numpy as np
 
 from .. import abi
+from ..abi.config import guest_config
 from ..geometry import interpolate_poses, invert, matrices_to_poses, poses_to_matrices
 
 
@@ -70,7 +70,8 @@ class FrameSequence:
 class Episode:
     """frames (N, H, W[, C]) uint8 (ndarray or FrameSequence) at frame_times (N,) seconds; imu (M, 7) [t, ax, ay, az, gx, gy, gz];
     ground_truth (K, 8) [t, x, y, z, qx, qy, qz, qw] = pose of the body/IMU frame in the world frame, any rate;
-    T_body_camera (4, 4) maps camera coordinates into the body frame. config is what the solution's init() gets."""
+    T_body_camera (4, 4) maps camera coordinates into the body frame. config is the stored description (episode.json);
+    adapt() derives the frames and the config a solution receives."""
 
     name: str
     config: dict
@@ -114,11 +115,21 @@ class Episode:
     def resolution(self):
         return int(self.frames.shape[2]), int(self.frames.shape[1])
 
+    @property
+    def frame_interval(self):
+        return 1.0 / float(self.config["episode"]["frame_rate_hz"])
+
     def imu_window(self, index):
-        """IMU rows with t_{k-1} < t <= t_k (for k = 0: everything up to t_0)."""
+        """IMU rows with t_{k-1} < t <= t_k; frame 0 gets one frame interval as well (t_0 - interval < t <= t_0), so no set
+        reveals itself by how much IMU it recorded before its first frame."""
+        previous = self.frame_times[index - 1] if index else self.frame_times[0] - self.frame_interval
         upper = np.searchsorted(self.imu[:, 0], self.frame_times[index] + self.TIME_TOLERANCE, side="right")
-        lower = 0 if index == 0 else np.searchsorted(self.imu[:, 0], self.frame_times[index - 1] + self.TIME_TOLERANCE, side="right")
+        lower = np.searchsorted(self.imu[:, 0], previous + self.TIME_TOLERANCE, side="right")
         return self.imu[lower:upper]
+
+    def delivered_imu(self):
+        """All IMU rows a solution receives over the episode (the concatenated windows)."""
+        return np.concatenate([self.imu_window(index) for index in range(self.num_frames)])
 
     def steps(self, frames=None):
         """(t, frame, imu_window) per frame, the way the harness feeds a solution (frames: optional override)."""
@@ -145,35 +156,33 @@ class Episode:
         T_body_camera = np.asarray(T_body_camera, dtype=float)
         return {"T_cam_imu": invert(T_body_camera).reshape(-1).tolist(), "T_imu_cam": T_body_camera.reshape(-1).tolist()}
 
-    def as_channels(self, channels):
-        return self.adapt(channels=channels)
+    def adapt(self, resolution=None):
+        """(guest config, frames) for a solution that declared 320x240 or 640x480 (docs/ABI.md, "Frame format").
 
-    def adapt(self, channels=None, resolution=None):
-        """(config, frames) for a solution that wants 1 or 3 channels and a given (width, height).
-
-        RGB -> gray is the ITU-R 601 luma (cv2.COLOR_RGB2GRAY), gray -> RGB replicates (config["image"]["color"] says
-        whether colour is real). Downscaling uses area averaging, upscaling bilinear interpolation
-        (config["image"]["upscaled"] says so); the intrinsics are rescaled with the pixel-centre convention.
-        Streamed frames stay streamed: the conversion is applied per frame as the runner consumes them."""
-        channels = self.channels if channels is None else int(channels)
+        Frames are always RGB (H, W, 3): a grayscale-only set arrives with its gray value in all three channels, and
+        nothing says so. Downscaling averages areas and rescales the intrinsics with the pixel-centre convention;
+        there is no upscaling, so a set stored at 320x240 cannot serve a 640x480 solution. Streamed frames stay
+        streamed: the conversion is applied per frame as the runner consumes them."""
         resolution = self.resolution if resolution is None else (int(resolution[0]), int(resolution[1]))
-        if channels not in abi.SUPPORTED_CHANNELS:
-            raise ValueError(f"channels must be one of {abi.SUPPORTED_CHANNELS}")
-        source_channels, source_resolution = self.channels, self.resolution
-        config = copy.deepcopy(self.config)
-        camera = config["camera"]
+        if resolution not in abi.SUPPORTED_RESOLUTIONS:
+            raise ValueError(f"resolution must be one of {abi.SUPPORTED_RESOLUTIONS}, got {resolution}")
+        source_resolution = self.resolution
+        if source_resolution not in abi.SUPPORTED_RESOLUTIONS:
+            raise ValueError(f"{self.name} is stored at {source_resolution[0]}x{source_resolution[1]}; sets must be stored at 640x480 (or 320x240)")
+        camera = self.config["camera"]
+        fx, fy, cx, cy = camera["fx"], camera["fy"], camera["cx"], camera["cy"]
         transforms = []
-        if channels != source_channels:
-            transforms.append((lambda f: cv2.cvtColor(f, cv2.COLOR_RGB2GRAY)) if channels == 1 else (lambda f: np.repeat(f[..., None], 3, axis=2)))
         if resolution != source_resolution:
             width, height = resolution
             scale_x, scale_y = width / source_resolution[0], height / source_resolution[1]
-            if abs(scale_x - scale_y) > 1e-9:
-                raise ValueError(f"aspect ratio change {source_resolution} -> {resolution} is not supported")
-            interpolation = cv2.INTER_AREA if scale_x < 1 else cv2.INTER_LINEAR
-            transforms.append(lambda f: cv2.resize(f, (width, height), interpolation=interpolation))
-            camera["fx"], camera["fy"] = camera["fx"] * scale_x, camera["fy"] * scale_y
-            camera["cx"], camera["cy"] = (camera["cx"] + 0.5) * scale_x - 0.5, (camera["cy"] + 0.5) * scale_y - 0.5
+            if scale_x > 1:
+                raise ValueError(f"{self.name} is stored at {source_resolution[0]}x{source_resolution[1]} and cannot be delivered at "
+                                 f"{width}x{height}: sets are only ever downscaled (store them at 640x480 to serve every resolution)")
+            transforms.append(lambda f: cv2.resize(f, (width, height), interpolation=cv2.INTER_AREA))
+            fx, fy = fx * scale_x, fy * scale_y
+            cx, cy = (cx + 0.5) * scale_x - 0.5, (cy + 0.5) * scale_y - 0.5
+        if self.channels == 1:  # after the resize: one channel to resample instead of three
+            transforms.append(lambda f: np.repeat(f[..., None], abi.CHANNELS, axis=2))
 
         def convert(frame):
             for transform in transforms:
@@ -186,10 +195,7 @@ class Episode:
             frames = self.frames.map(convert)
         else:
             frames = np.stack([convert(frame) for frame in self.frames])
-        config["image"].update({"width": resolution[0], "height": resolution[1], "channels": channels, "layout": "HW" if channels == 1 else "HWC",
-                                "color": source_channels == 3 and channels == 3, "source_channels": source_channels,
-                                "source_resolution": list(source_resolution), "upscaled": resolution[0] > source_resolution[0]})
-        return config, frames
+        return guest_config(resolution[0], resolution[1], fx, fy, cx, cy, invert(self.T_body_camera)), frames
 
     def check_consistency(self):
         image = self.config["image"]

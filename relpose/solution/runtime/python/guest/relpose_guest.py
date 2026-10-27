@@ -135,10 +135,9 @@ def init(config_view, bundle_view):
     """Returns (status, frame_bytes)."""
     global _solution, _shape
     config = json.loads(bytes(config_view).decode("utf-8"))
-    image = config["image"]
-    height, width, channels = int(image["height"]), int(image["width"]), int(image.get("channels", 1))
-    _shape = (height, width) if channels == 1 else (height, width, channels)
-    frame_bytes = height * width * channels
+    height, width = int(config["height"]), int(config["width"])
+    _shape = (height, width, 3)  # always RGB (docs/ABI.md)
+    frame_bytes = height * width * 3
 
     if bundle_view is not None:
         bundle = Bundle(bytes(bundle_view))

@@ -77,7 +77,6 @@ class Sandbox:
             validate_manifest(self.manifest)
         except (AbiError, ValueError) as error:
             raise SandboxError(str(error)) from None
-        self.channels = int(self.manifest.get("channels", abi.DEFAULT_CHANNELS))  # 1 (default) or 3: what step() receives
         self.resolution = tuple(self.manifest.get("resolution", abi.DEFAULT_RESOLUTION))  # (width, height) of the frames
         self.descriptor = runtime_descriptor(wasm)  # None for native modules; .length == 0 for a bare Python runtime
         base = strip_custom(wasm, abi.MANIFEST_SECTION)  # the manifest does not change the code: identical modules share a compilation
@@ -190,12 +189,10 @@ class Sandbox:
             raise SandboxError(f"{self.path.name} is a bare Python runtime without solution code: run `relpose bundle` or pass --dir")
         self.config = dict(config)
         self.config.setdefault("abi_version", abi.ABI_VERSION)
-        image = self.config["image"]
-        if int(image.get("channels", 1)) != self.channels:  # the array layout the guest reshapes to must match the declaration
-            raise SandboxError(f"config promises {image.get('channels', 1)} channel(s) but the solution declares {self.channels}; "
-                                "adapt the episode with Episode.adapt() first")
-        # the resolution is informational to the guest (it reads width/height from the config): evaluate adapts episodes
-        # to self.resolution, check builds its config from it, direct API users may pass any size
+        delivered = int(self.config["width"]), int(self.config["height"])
+        if delivered != self.resolution:  # the frame size is the manifest's promise to the guest
+            raise SandboxError(f"config delivers {delivered[0]}x{delivered[1]} but the solution declares {self.resolution[0]}x{self.resolution[1]}; "
+                               "adapt the episode with Episode.adapt() first")
         encoded = json.dumps(self.config).encode("utf-8")
         pointer = self.alloc(len(encoded))
         self.write(pointer, encoded)
@@ -205,10 +202,8 @@ class Sandbox:
         self.init_fuel = self._consumed(self.limits.init_fuel)
         if status != abi.STATUS_OK:
             raise SandboxError(f"init failed: {abi.status_name(status)}\n--- stderr tail ---\n{self.stderr_tail()}")
-        image = self.config["image"]
-        self.height, self.width = int(image["height"]), int(image["width"])
-        self.channels = int(image.get("channels", 1))
-        self.frame_bytes = self.height * self.width * self.channels
+        self.width, self.height = self.resolution
+        self.frame_bytes = self.height * self.width * abi.CHANNELS
         self.frame_pointer = self.alloc(self.frame_bytes)
         self.out_pointer = self.alloc(abi.POSE_VALUES * abi.F64_BYTES)
         self.imu_capacity = self.limits.imu_capacity
@@ -222,7 +217,7 @@ class Sandbox:
             raise SandboxError("the instance trapped earlier; create a new Sandbox")
         frame = np.ascontiguousarray(frame, dtype=np.uint8)
         if frame.nbytes != self.frame_bytes:
-            raise SandboxError(f"frame has {frame.nbytes} bytes, the config promises {self.height}x{self.width}x{self.channels}")
+            raise SandboxError(f"frame has {frame.nbytes} bytes, the config promises {self.height}x{self.width}x{abi.CHANNELS}")
         imu = np.ascontiguousarray(imu, dtype=np.float64).reshape(-1, abi.IMU_ROW_VALUES)
         if len(imu) > self.imu_capacity:
             self.imu_capacity = max(len(imu), 2 * self.imu_capacity)

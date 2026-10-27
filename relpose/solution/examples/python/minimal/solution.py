@@ -10,12 +10,12 @@ import numpy as np
 
 class Solution:
     def __init__(self, config):
-        # config: intrinsics, camera-IMU extrinsics, image size, IMU rates/noise (docs/ABI.md)
+        # config: frame size, intrinsics, camera-IMU extrinsics (docs/ABI.md)
         self.config = config
         self.frames = 0
 
     def step(self, t, frame, imu):
-        """t: frame timestamp [s]; frame: uint8 (H, W) (or (H, W, C)), read-only view valid until the next step;
+        """t: frame timestamp [s]; frame: uint8 (H, W, 3) RGB, read-only view valid until the next step;
         imu: float64 (N, 7) rows [t, ax, ay, az, gx, gy, gz] with t_prev < t <= t_frame.
         Return [x, y, z, qx, qy, qz, qw] of this camera frame in the frame of the first one, or None."""
         if self.frames == 0:

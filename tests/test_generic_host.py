@@ -9,7 +9,7 @@ import numpy as np
 import wasmtime
 
 from relpose.solution.runtime.python.bundler.bundle import bundle
-from relpose.tools.abi.config import make_config
+from relpose.tools.abi.config import default_guest_config
 
 SOLUTION = """
 import numpy as np
@@ -45,12 +45,12 @@ def test_plain_wasmtime_host_runs_a_bundle(runtime_path, solution_dir, tmp_path)
     def write(pointer, data):
         ctypes.memmove(ctypes.cast(memory.data_ptr(store), ctypes.c_void_p).value + pointer, data, len(data))
 
-    config_bytes = json.dumps(make_config(width=32, height=24)).encode()
+    config_bytes = json.dumps(default_guest_config()).encode()
     pointer = alloc(store, len(config_bytes))
     write(pointer, config_bytes)
     assert init(store, pointer, len(config_bytes)) == 0
 
-    frame = np.full(32 * 24, 100, np.uint8).tobytes()
+    frame = np.full(320 * 240 * 3, 100, np.uint8).tobytes()  # 320x240 RGB
     frame_pointer, imu_pointer, out_pointer = alloc(store, len(frame)), alloc(store, 7 * 8), alloc(store, 7 * 8)
     write(frame_pointer, frame)
     assert step(store, 0.5, frame_pointer, imu_pointer, 0, out_pointer) == 0

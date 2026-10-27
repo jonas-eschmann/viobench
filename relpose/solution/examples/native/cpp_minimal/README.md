@@ -7,7 +7,7 @@ thousand fuel units of overhead instead of the interpreter's.
 ```bash
 relpose/solution/runtime/native/build.sh relpose/solution/examples/native/cpp_minimal         # cmake with wasi-sdk (downloaded into build/toolchain) → build/solution.wasm
 relpose check relpose/solution/examples/native/cpp_minimal/build/solution.wasm
-relpose manifest relpose/solution/examples/native/cpp_minimal/build/solution.wasm --channels 3   # optional: ask for RGB (or --resolution 640x480)
+relpose manifest relpose/solution/examples/native/cpp_minimal/build/solution.wasm --resolution 640x480   # optional: VGA instead of 320x240
 ```
 
 `CMakeLists.txt` is two lines of substance: `include(${RELPOSE_NATIVE_DIR}/relpose_reactor.cmake)` and

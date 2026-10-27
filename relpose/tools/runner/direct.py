@@ -1,7 +1,7 @@
 """`relpose debug`: run a Python solution directory in-process — no sandbox — on episodes, for debuggers and plots.
 
 The solution is imported and driven exactly like the runtime drives it (`Solution(config)` then `step(t, frame, imu)`
-per frame, inputs adapted to the channels/resolution of its `solution.json`), so a `breakpoint()` in `step` stops
+per frame, inputs adapted to the resolution of its `solution.json`), so a `breakpoint()` in `step` stops
 under pdb or VS Code and the returned poses can be plotted. Same metrics and `estimate.tum` as `relpose evaluate`,
 but no fuel and the host's numpy/OpenCV: `relpose check` remains the authority on what the sandbox accepts.
 
@@ -75,13 +75,12 @@ def install_solution_bundle(directory):
 
 
 class PythonSolution:
-    """A solution directory loaded on the host: its manifest (channels, resolution, entry) and a factory for instances."""
+    """A solution directory loaded on the host: its manifest (resolution, entry) and a factory for instances."""
 
     def __init__(self, directory, entry=None, solution_class=None):
         self.directory = Path(directory).resolve()
         manifest_path = self.directory / abi.BUNDLE_MANIFEST
         self.manifest = validate_manifest(json.loads(manifest_path.read_text()) if manifest_path.is_file() else {})
-        self.channels = int(self.manifest.get("channels", abi.DEFAULT_CHANNELS))
         self.resolution = tuple(parse_resolution(self.manifest.get("resolution", abi.DEFAULT_RESOLUTION)))
         install_solution_bundle(self.directory)
         if str(self.directory) not in sys.path:
@@ -116,7 +115,7 @@ class Step:
 
 def trace(solution, episode):
     """Drives one instance over one episode; yields a Step per frame (the hook for your own loops and plots)."""
-    config, frames = episode.adapt(solution.channels, solution.resolution)
+    config, frames = episode.adapt(solution.resolution)
     estimator = solution.create(config)
     for index, (t, frame, imu) in enumerate(episode.steps(frames)):
         started = time.perf_counter()

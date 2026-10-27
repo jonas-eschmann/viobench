@@ -15,8 +15,8 @@ relpose debug my_solution --simulate 2 --condition blur                         
 relpose debug my_solution <episode dir> -o out       # writes out/<dataset>/<episode>/estimate.tum like `evaluate` does
 ```
 
-The driver imports your directory (`solution.json` is honoured: `entry`, `channels`, `resolution`), provides the
-`solution_bundle` module backed by the files next to your code, adapts each episode to your channels/resolution and
+The driver imports your directory (`solution.json` is honoured: `entry`, `resolution`), provides the
+`solution_bundle` module backed by the files next to your code, adapts each episode to your resolution (RGB frames) and
 calls `Solution(config)` then `step(t, frame, imu)` per frame, exactly like the runtime. It prints the metrics line of
 `evaluate` (without fuel) per episode.
 
@@ -55,7 +55,7 @@ raw arrays, so C needs no PNG or JSON parser), calls `init` and `step` like the 
 `t_prev < t ≤ t_frame`, same buffers) and writes `estimate.tum`.
 
 ```bash
-relpose feed build/datasets/public/default-val/<name> -o build/feed          # --channels 3 / --resolution 640x480 if your solution declares them
+relpose feed build/datasets/public/default-val/<name> -o build/feed          # --resolution 640x480 if your solution declares it
 cd my_native_solution && cmake -S . -B build-host && cmake --build build-host
 build-host/debug ../build/feed estimate.tum                 # prints per-frame failures, ms/frame and the position RMSE
 relpose score build/datasets/public/default-val/<name> estimate.tum          # the full metrics line
@@ -63,8 +63,9 @@ gdb --args build-host/debug ../build/feed                   # or lldb; VS Code: 
 ```
 
 `relpose feed --simulate -o build/feed --condition lowlight` feeds a fresh HyperDrone episode instead. A feed is
-`config.json` (the bytes `init` receives), `frames.u8` (N×H×W×C), `frame_times.f64`, `imu.f64` (M×7), `gt.f64`
-(N×7 relative ground truth) and `shape.txt` (`N H W C M`); about 90 MB for a one-minute grayscale episode at 320×240.
+`config.json` (the bytes `init` receives), `frames.u8` (N×H×W×3 RGB), `frame_times.f64`, `imu.f64` (M×7, the rows the
+harness delivers), `gt.f64` (N×7 relative ground truth) and `shape.txt` (`N H W C M`, C = 3); about 280 MB for a
+one-minute episode at 320×240.
 
 With the VS Code CMake Tools extension pointed at your solution directory (`.vscode/settings.json`), the host
 configure is the default one, so its *Debug* button launches `debug` under gdb; pass the feed directory as the

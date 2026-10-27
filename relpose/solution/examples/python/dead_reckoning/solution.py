@@ -1,14 +1,18 @@
 """IMU-only baseline: integrate the gyroscope for attitude and the accelerometer twice for position.
 
-The first second of every episode is a hover (config["episode"]["hover_seconds"]): the mean accelerometer reading
-over that window gives the gravity direction in the body frame (and absorbs the accelerometer bias along it), the
-mean gyroscope reading gives the gyro bias. Everything is expressed in the camera frame of the first frame via the
-camera-IMU extrinsics from the config. Expect the position to drift within a few seconds; that is the baseline
-every visual method has to beat.
+Nothing says how an episode starts, so the first half second of IMU calibrates: the mean accelerometer reading gives
+the gravity direction in the body frame (and absorbs the accelerometer bias along it) and, if both sensors only show
+noise there (the platform was at rest), the mean gyroscope reading gives the gyro bias; a moving start keeps it at
+zero. Everything is expressed in the camera frame of the first frame via the camera-IMU extrinsics from the config.
+Expect the position to drift within a few seconds; that is the baseline every visual method has to beat.
 """
 import numpy as np
 
 GRAVITY = 9.81
+CALIBRATION_SECONDS = 0.5
+# at rest a MEMS IMU only shows noise (per-sample standard deviations of ~0.03-0.3 m/s^2 and ~0.002-0.07 rad/s)
+REST_ACCEL_STD = 1.0  # m/s^2, norm of the per-axis standard deviations
+REST_GYRO_STD = 0.2  # rad/s
 
 
 def quaternion_to_matrix(q):
@@ -47,10 +51,9 @@ def exp_so3(omega):
 
 class Solution:
     def __init__(self, config):
-        self.T_cam_imu = np.asarray(config["imu"]["T_cam_imu"], dtype=float).reshape(4, 4)
+        self.T_cam_imu = np.asarray(config["T_cam_imu"], dtype=float)
         self.T_imu_cam = np.linalg.inv(self.T_cam_imu)
-        self.hover_until = float(config["episode"].get("hover_seconds") or 0.5)
-        self.hover_samples = []
+        self.calibration_samples = []
         self.initialized = False
         # state of the IMU/body frame in the "world" = body frame at the first frame (gravity-aligned later)
         self.R_wb = np.eye(3)
@@ -62,9 +65,10 @@ class Solution:
         self.T_w_c0 = None
 
     def _initialize(self):
-        samples = np.asarray(self.hover_samples)
+        samples = np.asarray(self.calibration_samples)
         mean_accel = samples[:, 1:4].mean(axis=0)
-        self.gyro_bias = samples[:, 4:7].mean(axis=0)
+        at_rest = np.linalg.norm(samples[:, 1:4].std(axis=0)) < REST_ACCEL_STD and np.linalg.norm(samples[:, 4:7].std(axis=0)) < REST_GYRO_STD
+        self.gyro_bias = samples[:, 4:7].mean(axis=0) if at_rest else np.zeros(3)
         # choose the world frame so that gravity points down: measured specific force at rest = -g in body coordinates
         up_body = mean_accel / np.linalg.norm(mean_accel)
         z_world = up_body
@@ -97,9 +101,10 @@ class Solution:
 
     def step(self, t, frame, imu):
         if not self.initialized:
-            self.hover_samples.extend(imu.tolist())
-            if t < self.hover_until or len(self.hover_samples) < 20:
-                return None  # still collecting the stationary window; no estimate yet
+            self.calibration_samples.extend(imu.tolist())
+            samples = self.calibration_samples
+            if len(samples) < 2 or samples[-1][0] - samples[0][0] < CALIBRATION_SECONDS:
+                return None  # still calibrating; no estimate yet
             self._initialize()
             self.last_t = imu[-1, 0] if len(imu) else t
             self.T_w_c0 = self._pose_camera()

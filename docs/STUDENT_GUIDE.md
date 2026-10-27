@@ -55,17 +55,17 @@ with a debugger run it outside the sandbox: `relpose debug my_solution build/dat
   then `ep.frames`, `ep.imu`, `ep.ground_truth_relative()`, `ep.steps()`.
 - Augmentation: `relpose.tools.datasets.generate.conditions.sample(name, rng)` + `relpose.tools.datasets.generate.camera.apply(...)` reproduce the
   blur / low-light / saturation pipeline on your own renders (apply them to linear frames: `srgb_to_linear(frame / 255)`).
-- Length: episodes are continuous flights of about a minute, but nothing fixes that: read
-  `config["episode"]["num_frames"]` and `frame_rate_hz`, keep per-frame cost flat (do not accumulate every frame or
-  grow a map without bound), and expect drift to show over a minute where it hid over ten seconds.
+- Length: episodes are continuous flights of about a minute, but nothing fixes that and the config does not say: keep
+  per-frame cost flat (do not accumulate every frame or grow a map without bound), and expect drift to show over a
+  minute where it hid over ten seconds. Nor does it say how an episode starts: at rest or already flying.
 - Compute: watch the fuel column. Python-level loops over pixels are expensive; OpenCV calls are cheap per pixel; a
   `cv2.dnn` forward of a small CNN costs about as much as one `goodFeaturesToTrack`.
 - Learned models: `relpose/solution/examples/python/tiny_cnn` shows PyTorch → ONNX → `cv2.dnn` inside the runtime, with a numpy fallback,
   and `train.py --generate N` trains straight from the simulator.
-- Colour and resolution: frames are 320 × 240 grayscale unless `solution.json` next to your `solution.py` says
-  `{"channels": 3}` (RGB, `(H, W, 3)`) and/or `{"resolution": [640, 480]}` (VGA). Real-data episodes are grayscale
-  (replicated into three channels); if a set only exists at 320 × 240 you receive an upscale
-  (`config["image"]["upscaled"]`). More pixels cost fuel in everything you run on them.
+- Frames: always RGB `(H, W, 3)`, 320 × 240 unless `solution.json` next to your `solution.py` says
+  `{"resolution": [640, 480]}`. Some sets are grayscale-only and arrive with R = G = B; convert to gray yourself if
+  that is what your method uses (`cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)`). More pixels cost fuel in everything you
+  run on them.
 
 ## 4. Submit
 

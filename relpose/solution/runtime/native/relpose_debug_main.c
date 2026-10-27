@@ -91,7 +91,7 @@ int main(int argc, char **argv) {
     double squared_error = 0.0, total_seconds = 0.0;
     for (long k = 0; k < frames; k++) {
         double t = frame_times[k];
-        /* IMU rows with t_prev < t_row <= t (the first frame gets everything up to its own time) */
+        /* IMU rows with t_prev < t_row <= t (the feed starts at frame 0's window, so frame 0 gets everything up to its own time) */
         while (window_start < imu_rows && imu[window_start * RELPOSE_IMU_ROW_VALUES] <= previous + TIME_TOLERANCE) window_start++;
         long window_end = window_start;
         while (window_end < imu_rows && imu[window_end * RELPOSE_IMU_ROW_VALUES] <= t + TIME_TOLERANCE) window_end++;

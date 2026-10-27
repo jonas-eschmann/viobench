@@ -133,7 +133,7 @@ int32_t init(const char *config, uint32_t config_length) {
     return STATUS_OK;
 }
 
-// frame: height*width*channels uint8; imu: imu_count rows of [t, ax, ay, az, gx, gy, gz] float64 with
+// frame: height*width*3 uint8 RGB; imu: imu_count rows of [t, ax, ay, az, gx, gy, gz] float64 with
 // t_prev < t <= t_frame; out: [x, y, z, qx, qy, qz, qw] float64 written on STATUS_OK.
 int32_t step(double t, const uint8_t *frame, const double *imu, int32_t imu_count, double *out) {
     if (state != 1 || imu_count < 0) {

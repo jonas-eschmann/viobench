@@ -43,13 +43,13 @@ def command_bundle(arguments):
     from ..solution.runtime.python.bundler.bundle import bundle
 
     try:
-        summary = bundle(arguments.directory, arguments.output, runtime=arguments.runtime, entry=arguments.entry, channels=arguments.channels,
+        summary = bundle(arguments.directory, arguments.output, runtime=arguments.runtime, entry=arguments.entry,
                          resolution=arguments.resolution)
     except (BundleError, abi.AbiError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(f"wrote {summary['output']} ({summary['bytes'] / 2**20:.1f} MiB, bundle {summary['bundle_bytes'] / 1024:.0f} KiB, {len(summary['files'])} files, "
-          f"entry {summary['entry']}, {'RGB' if summary['channels'] == 3 else 'grayscale'} {summary['resolution'][0]}x{summary['resolution'][1]} frames)")
+          f"entry {summary['entry']}, {summary['resolution'][0]}x{summary['resolution'][1]} frames)")
     for warning in summary["warnings"]:
         print(f"warning: {warning}")
     print(f"next: relpose check {summary['output']}")
@@ -74,8 +74,6 @@ def command_manifest(arguments):
 
     try:
         updates = {}
-        if arguments.channels is not None:
-            updates["channels"] = arguments.channels
         if arguments.entry is not None:
             updates["entry"] = arguments.entry
         if arguments.resolution is not None:
@@ -93,8 +91,8 @@ def command_manifest(arguments):
 def command_check(arguments):
     from .runner.check import check
 
-    return run_with_large_stack(lambda: check(arguments.wasm, dev_dir=arguments.dir, frames=arguments.frames, channels=arguments.channels,
-                                              width=arguments.width, height=arguments.height, logs=arguments.logs, verbose=arguments.verbose))
+    return run_with_large_stack(lambda: check(arguments.wasm, dev_dir=arguments.dir, frames=arguments.frames, logs=arguments.logs,
+                                              verbose=arguments.verbose))
 
 
 def command_evaluate(arguments):
@@ -197,8 +195,8 @@ def command_feed(arguments):
     else:
         raise SystemExit("feed needs an episode directory or --simulate")
     resolution = tuple(int(v) for v in arguments.resolution.lower().split("x")) if arguments.resolution else abi.DEFAULT_RESOLUTION
-    directory = write_feed(episode, arguments.output, channels=arguments.channels or abi.DEFAULT_CHANNELS, resolution=resolution)
-    print(f"feed of {episode.name} ({episode.num_frames} frames at {resolution[0]}x{resolution[1]}x{arguments.channels or abi.DEFAULT_CHANNELS}) in {directory}")
+    directory = write_feed(episode, arguments.output, resolution=resolution)
+    print(f"feed of {episode.name} ({episode.num_frames} frames at {resolution[0]}x{resolution[1]}) in {directory}")
     return 0
 
 
@@ -211,7 +209,8 @@ def command_convert_euroc(arguments):
     output = Path(arguments.output)
     output.mkdir(parents=True, exist_ok=True)
     count = 0
-    for episode, origin_ns in convert(arguments.sequence, width=arguments.width, height=arguments.height, snippet_seconds=arguments.snippet,
+    width, height = (int(value) for value in arguments.resolution.split("x"))
+    for episode, origin_ns in convert(arguments.sequence, width=width, height=height, snippet_seconds=arguments.snippet,
                                       max_snippets=arguments.max_snippets, start_seconds=arguments.start, stride_seconds=arguments.stride):
         write_episode(episode, output / episode.name, origin_ns=origin_ns)
         count += 1
@@ -233,7 +232,6 @@ def main(argv=None):
     bundle.add_argument("-o", "--output", required=True, help="output .wasm")
     bundle.add_argument("--runtime", help="runtime.wasm to build on (default: $RELPOSE_RUNTIME or build/runtime/dist/runtime.wasm)")
     bundle.add_argument("--entry", help=f"module:Class of the solution (default {abi.DEFAULT_ENTRY} or solution.json)")
-    bundle.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS, help="frames the solution wants: 1 grayscale (default) or 3 RGB (or solution.json)")
     bundle.add_argument("--resolution", help="frames the solution wants: 320x240 (default) or 640x480 (or solution.json)")
     bundle.set_defaults(function=command_bundle)
 
@@ -244,7 +242,6 @@ def main(argv=None):
 
     manifest = commands.add_parser("manifest", help="[solution] show or change a module's manifest (native modules declare RGB / VGA this way)")
     manifest.add_argument("wasm")
-    manifest.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS)
     manifest.add_argument("--resolution", help="320x240 or 640x480")
     manifest.add_argument("--entry")
     manifest.set_defaults(function=command_manifest)
@@ -253,9 +250,6 @@ def main(argv=None):
     check.add_argument("wasm", help="solution .wasm (or a bare runtime.wasm together with --dir)")
     check.add_argument("--dir", help="dev mode: mount this solution directory instead of a bundle")
     check.add_argument("--frames", type=int, default=5)
-    check.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS, help="override the manifest's channel choice")
-    check.add_argument("--width", type=int, help="override the manifest's resolution")
-    check.add_argument("--height", type=int)
     check.add_argument("--logs", help="directory for stdout.txt/stderr.txt (default: temporary)")
     check.add_argument("-v", "--verbose", action="store_true", help="pass the guest's stdout/stderr through instead of capturing them")
     check.set_defaults(function=command_check)
@@ -297,7 +291,6 @@ def main(argv=None):
     feed.add_argument("episode", nargs="?", help="episode directory (or use --simulate)")
     feed.add_argument("-o", "--output", required=True, help="feed directory")
     feed.add_argument("--simulate", action="store_true", help="feed a fresh HyperDrone episode instead (GPU; options below)")
-    feed.add_argument("--channels", type=int, choices=abi.SUPPORTED_CHANNELS, help="what your solution declares (default grayscale)")
     feed.add_argument("--resolution", help="what your solution declares (default 320x240)")
     add_simulation_arguments(feed)
     feed.set_defaults(function=command_feed)
@@ -309,8 +302,8 @@ def main(argv=None):
     convert.add_argument("--stride", type=float, help="seconds between snippet starts (default: --snippet, no overlap)")
     convert.add_argument("--start", type=float, default=0.0, help="skip this many seconds at the beginning")
     convert.add_argument("--max-snippets", type=int)
-    convert.add_argument("--width", type=int, default=640, help="EuRoC's 752x480 crops to 640x480 without scaling")
-    convert.add_argument("--height", type=int, default=480)
+    convert.add_argument("--resolution", default="640x480", choices=[f"{w}x{h}" for w, h in abi.SUPPORTED_RESOLUTIONS],
+                         help="stored resolution (EuRoC's 752x480 crops to 640x480 without scaling; 640x480 serves every solution)")
     convert.set_defaults(function=command_convert_euroc)
 
     arguments = parser.parse_args(argv)

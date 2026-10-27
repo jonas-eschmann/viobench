@@ -40,7 +40,7 @@ my_solution/
   solution.py          class Solution (or a package solution/__init__.py)
   helpers/...          any modules and packages; relative imports work; __file__ is /bundle/<path>
   net.onnx, w.npz      data files: `import solution_bundle as bundle; bundle.read_bytes("net.onnx")`, `np.load(bundle.open("w.npz"))`
-  solution.json         optional: {"entry": "mypkg.estimator:Estimator", "channels": 3}   (channels: 1 grayscale default, 3 RGB)
+  solution.json         optional: {"entry": "mypkg.estimator:Estimator", "resolution": [640, 480]}   (default 320x240)
 ```
 
 Zips are stored uncompressed (there is no zlib in the guest), so `np.savez` rather than `np.savez_compressed`.

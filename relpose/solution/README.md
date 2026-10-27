@@ -15,5 +15,5 @@ dependency. We ship two reference recipes and the toolchain to build them. No bi
 Either way the result goes through `relpose check` (synthetic frames) and `relpose evaluate` (episodes) unchanged: the
 evaluator does not know which flavour it is running.
 
-Opt-ins (RGB frames, 640 × 480) are declared in the manifest: `solution.json` next to `solution.py` for the Python
-flavour, `relpose manifest x.wasm --channels 3 --resolution 640x480` for anything else.
+Frames are always RGB; the one opt-in, 640 × 480 instead of 320 × 240, is declared in the manifest: `solution.json`
+next to `solution.py` for the Python flavour, `relpose manifest x.wasm --resolution 640x480` for anything else.

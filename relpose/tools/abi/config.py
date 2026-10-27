@@ -1,4 +1,6 @@
-"""The config JSON handed to a solution's init(): camera intrinsics, camera-IMU extrinsics, image size, IMU model."""
+"""Configs: guest_config() is the JSON a solution's init() receives (docs/ABI.md): the frame format plus what any calibrated
+camera-IMU dataset provides. make_config() is the full description stored with an episode (episode.json: rates, IMU
+noise model, hover, name, ...), which the harness keeps to itself."""
 import math
 
 import numpy as np
@@ -35,9 +37,23 @@ def transform(rotation, translation):
     return matrix
 
 
-def make_config(width=320, height=240, channels=1, horizontal_fov_degrees=80.0, frame_rate_hz=20.0,
+def guest_config(width, height, fx, fy, cx, cy, T_cam_imu):
+    """What init() receives: the delivered frame size, the intrinsics for it and T_cam_imu (4x4, IMU -> camera coordinates)."""
+    return {"abi_version": ABI_VERSION, "width": int(width), "height": int(height),
+            "fx": float(fx), "fy": float(fy), "cx": float(cx), "cy": float(cy),
+            "T_cam_imu": np.asarray(T_cam_imu, dtype=float).reshape(4, 4).tolist()}
+
+
+def default_guest_config(width=320, height=240, horizontal_fov_degrees=80.0):
+    """A guest config for synthetic input (relpose check, tests): pinhole intrinsics, camera looking forward."""
+    camera = pinhole_intrinsics(width, height, horizontal_fov_degrees)
+    return guest_config(width, height, camera["fx"], camera["fy"], camera["cx"], camera["cy"],
+                        np.linalg.inv(transform(R_BODY_CAMERA_FORWARD, [0.0, 0.0, 0.0])))
+
+
+def make_config(width=640, height=480, channels=1, horizontal_fov_degrees=80.0, frame_rate_hz=20.0,
                 num_frames=None, hover_seconds=1.0, T_body_camera=None, imu=None, intrinsics=None, episode_name=None):
-    """Assemble the config dict. T_body_camera maps camera coordinates into the body (= IMU) frame."""
+    """The stored description of an episode. T_body_camera maps camera coordinates into the body (= IMU) frame."""
     if T_body_camera is None:
         T_body_camera = transform(R_BODY_CAMERA_FORWARD, [0.0, 0.0, 0.0])
     T_body_camera = np.asarray(T_body_camera, dtype=float)

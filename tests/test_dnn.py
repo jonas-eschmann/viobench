@@ -6,11 +6,11 @@ import pytest
 
 from relpose import Limits, Sandbox, abi
 from relpose.solution.runtime.python.bundler.bundle import bundle
-from relpose.tools.abi.config import make_config
+from relpose.tools.abi.config import default_guest_config
 
 torch = pytest.importorskip("torch")
 
-CONFIG = make_config(width=64, height=48, channels=1, num_frames=10)
+CONFIG = default_guest_config()
 
 SOLUTION = """
 import numpy as np, cv2
@@ -20,7 +20,7 @@ class Solution:
         self.net = cv2.dnn.readNetFromONNX(np.frombuffer(bundle.read_bytes("net.onnx"), np.uint8))
         self.imu_vector = np.load(bundle.open("imu.npy"))
     def step(self, t, frame, imu):
-        image = frame.astype(np.float32)[None, None] / 255.0  # NCHW
+        image = frame.transpose(2, 0, 1).astype(np.float32)[None] / 255.0  # RGB HWC -> NCHW
         self.net.setInput(image, "image")
         self.net.setInput(self.imu_vector[None].astype(np.float32), "imu")
         out = self.net.forward()
@@ -31,7 +31,7 @@ class Solution:
 class TinyNet(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv1 = torch.nn.Conv2d(1, 8, 3, stride=2, padding=1)
+        self.conv1 = torch.nn.Conv2d(3, 8, 3, stride=2, padding=1)
         self.conv2 = torch.nn.Conv2d(8, 16, 3, stride=2, padding=1)
         self.bn = torch.nn.BatchNorm2d(16)
         self.pool = torch.nn.AdaptiveAvgPool2d(1)
@@ -51,9 +51,9 @@ def test_onnx_in_wasm_matches_pytorch(engine, runtime_path, solution_dir, tmp_pa
         net.bn.running_mean.normal_()
         net.bn.running_var.uniform_(0.5, 2.0)
     rng = np.random.default_rng(0)
-    frame = rng.integers(0, 255, (48, 64), dtype=np.uint8)
+    frame = rng.integers(0, 255, (240, 320, 3), dtype=np.uint8)
     imu_vector = rng.normal(size=9).astype(np.float32)
-    image = torch.from_numpy(frame.astype(np.float32)[None, None] / 255.0)
+    image = torch.from_numpy(frame.transpose(2, 0, 1).astype(np.float32)[None] / 255.0)
     with torch.no_grad():
         expected = net(image, torch.from_numpy(imu_vector[None])).numpy()[0]
 

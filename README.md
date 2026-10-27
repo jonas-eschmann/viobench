@@ -1,26 +1,11 @@
-# relpose — compute-aware relative pose estimation (EECS 116/216 final project)
+# relpose: compute-aware relative pose estimation
 
-Students estimate the pose of a flying camera relative to its first frame from camera frames + IMU. A submission is
-one WebAssembly module; we are unopinionated about what runs inside it. The evaluator meters compute deterministically
-(Wasmtime fuel) and places every submission on an accuracy-vs-compute curve.
-
-```
-                      ┌──────────────── relpose/solution (guest) ────────────────┐
-                      │ runtime/native: the ABI header      runtime/python: CPython+numpy+OpenCV reactor + bundler │
-                      │ examples/{native,python}: complete solutions                                             │
-                      └──────────────────────────────── builds ──▶ solution.wasm ─┘
-                                                                        │ fs (CLI) / http (server)
-┌──────────────────────────────── relpose/tools (host) ──────────────────▼──────────────────────────────┐
-│ datasets: episodes from disk (HyperDrone-generated, EuRoC-converted) or fresh from HyperDrone (ad hoc) │
-│ runner:   wasmtime sandbox, fuel + wall time per frame, ATE/RPE → report.json → leaderboard            │
-│ server:   upload → the same runner on hidden episodes → leaderboard;   cli: `relpose ...`              │
-└────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-```
+This challenge is about estimating the pose of a flying camera relative to its first frame from camera frames + IMU data. A submission is one WebAssembly module that bundles everything needed to run it. We are unopinionated about what runs inside it. The evaluator meters compute deterministically (Wasmtime fuel) and places every submission on an accuracy-vs-compute curve.
 
 | directory | role |
 |---|---|
 | [`relpose/tools/`](relpose/tools/) | host side (the importable package): `abi` (the contract), `datasets` (episodes, producers), `runner`, `server`, `cli` |
-| [`relpose/solution/`](relpose/solution/) | guest side: how a solution `.wasm` is made, by you — `toolchain/` (one Docker image), `runtime/{native,python}`, `examples/{native,python}` |
+| [`relpose/solution/`](relpose/solution/) | guest side: how a solution `.wasm` is made, by you, `toolchain/`, `runtime/{native,python}`, `examples/{native,python}` |
 | [`docs/`](docs/) | [TASK](docs/TASK.md) (what to estimate, scoring), [STUDENT_GUIDE](docs/STUDENT_GUIDE.md), [DEBUGGING](docs/DEBUGGING.md), [INSTRUCTOR_GUIDE](docs/INSTRUCTOR_GUIDE.md), contracts: [ABI](docs/ABI.md), [RUNTIME](docs/RUNTIME.md), [DATA](docs/DATA.md) |
 | [`tests/`](tests/) | pytest suite driving a real `runtime.wasm` through the harness |
 
@@ -42,9 +27,10 @@ Docker, no GPU. Debugging happens outside the sandbox, in your own process: `doc
 
 ## Baselines
 
-Public validation sets (one-minute episodes, stored at 640 × 480, consumed at 320 × 240 grayscale @ 20 Hz; median ATE
-over episodes in metres, median fuel per frame). The numbers below were measured on the earlier 10 s sets and are
-being re-measured on the one-minute sets (ATE grows with the length, dead reckoning's most of all):
+Public validation sets (one-minute episodes, stored at 640 × 480, consumed at 320 × 240 RGB @ 20 Hz; median ATE
+over episodes in metres, median fuel per frame). The numbers below were measured on the earlier 10 s sets with
+grayscale input and the examples' former hover-based start, and are being re-measured on the one-minute sets (ATE
+grows with the length, dead reckoning's most of all):
 
 | solution | default | blur | lowlight | oversaturated | real (EuRoC V1_01) | fuel/frame |
 |---|---|---|---|---|---|---|
@@ -52,5 +38,5 @@ being re-measured on the one-minute sets (ATE grows with the length, dead reckon
 | `examples/python/klt_imu` (KLT + essential matrix + IMU) | 4.3 | 4.1 | 4.1 | 4.2 | 4.8 | 140–600 M |
 | `examples/python/tiny_cnn` (CNN via `cv2.dnn`, trained on 8 episodes) | 1.2 | 1.2 | 1.4 | 2.3 | 3.8 | 12 M |
 
-A submission opts into RGB and/or 640 × 480 through its manifest (`solution.json` or `relpose manifest`); the runner
-resamples every episode per submission.
+Frames are always RGB; a submission opts into 640 × 480 through its manifest (`solution.json` or `relpose manifest`),
+and the runner downscales every episode per submission.

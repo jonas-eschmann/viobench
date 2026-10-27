@@ -44,10 +44,11 @@ class TinyNet(torch.nn.Module):
 
 def samples_from_episode(episode):
     """(images (N-1, 2, H, W) float, imu (N-1, 9), target (N-1, 6)) for consecutive frame pairs."""
-    _, frames = episode.as_channels(1)  # the solution runs on grayscale frames (the default), so train on the same
-    small = np.stack([cv2.resize(frame, (INPUT_WIDTH, INPUT_HEIGHT), interpolation=cv2.INTER_AREA) for frame in frames]).astype(np.float32) / 255.0
+    config, frames = episode.adapt()  # what the solution receives (RGB); it converts to gray exactly like this
+    small = np.stack([cv2.resize(cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY), (INPUT_WIDTH, INPUT_HEIGHT), interpolation=cv2.INTER_AREA)
+                      for frame in frames]).astype(np.float32) / 255.0
     T = poses_to_matrices(episode.ground_truth_relative())
-    T_cam_imu = np.asarray(episode.config["imu"]["T_cam_imu"]).reshape(4, 4)
+    T_cam_imu = np.asarray(config["T_cam_imu"])
     images, imus, targets = [], [], []
     for k in range(1, episode.num_frames):
         window = episode.imu_window(k)

@@ -1,20 +1,20 @@
 """The manifest: what a module declares to the harness before it runs.
 
-`{"entry": "module:Class", "channels": 1 | 3, "resolution": [320, 240] | [640, 480]}` — stored as the custom section
+`{"entry": "module:Class", "resolution": [320, 240] | [640, 480]}` — stored as the custom section
 `relpose.manifest`. Reading is part of the contract (the runner needs it before instantiation); writing is done by the
 Python runtime's bundler or by `relpose manifest` for native modules. Python solutions write it with `solution.json` next to `solution.py` (the bundler copies it into
-the section); native modules add it with `relpose manifest solution.wasm --channels 3 --resolution 640x480`. Missing
-keys mean the defaults (grayscale, 320×240, `solution:Solution`).
+the section); native modules add it with `relpose manifest solution.wasm --resolution 640x480`. Missing keys mean the defaults
+(320×240, `solution:Solution`). Frames are always RGB; there is nothing to choose about colour.
 """
 import io
 import json
 import zipfile
 from pathlib import Path
 
-from . import (BUNDLE_MANIFEST, DEFAULT_CHANNELS, MANIFEST_SECTION, SUPPORTED_CHANNELS, SUPPORTED_RESOLUTIONS, AbiError)
+from . import BUNDLE_MANIFEST, MANIFEST_SECTION, SUPPORTED_RESOLUTIONS, AbiError
 from .wasm_binary import append_custom, find_custom
 
-MANIFEST_KEYS = {"entry", "channels", "resolution", "format"}
+MANIFEST_KEYS = {"entry", "resolution"}
 
 
 def parse_resolution(value):
@@ -32,9 +32,6 @@ def parse_resolution(value):
 
 
 def validate_manifest(manifest):
-    channels = manifest.get("channels", DEFAULT_CHANNELS)
-    if channels not in SUPPORTED_CHANNELS:
-        raise AbiError(f"manifest channels must be one of {SUPPORTED_CHANNELS}, got {channels!r}")
     if "resolution" in manifest:
         resolution = parse_resolution(manifest["resolution"])
         if resolution not in SUPPORTED_RESOLUTIONS:

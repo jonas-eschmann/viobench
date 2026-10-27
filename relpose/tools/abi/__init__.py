@@ -5,11 +5,10 @@ ABI_VERSION = 1
 BUNDLE_MAGIC = b"RELPOSEBUNDLEv1\0"  # 16-byte head of the runtime's bundle descriptor (see relpose/solution/runtime/python/reactor.c)
 BUNDLE_DESCRIPTOR_BYTES = 32  # magic[16] | address u32 | length u32 | version u32 | reserved u32
 MANIFEST_SECTION = "relpose.manifest"  # wasm custom section with the manifest JSON (read by the harness before init)
-BUNDLE_MANIFEST = "solution.json"  # optional file in the directory: {"entry": "module:Class", "channels": 1 | 3}
-DEFAULT_CHANNELS = 1  # grayscale unless the manifest opts into RGB
-SUPPORTED_CHANNELS = (1, 3)
+BUNDLE_MANIFEST = "solution.json"  # optional file in the directory: {"entry": "module:Class", "resolution": [w, h]}
+CHANNELS = 3  # frames are always RGB (H, W, 3); a grayscale-only set arrives with its gray value in all three channels
 DEFAULT_RESOLUTION = (320, 240)  # (width, height) unless the manifest opts into VGA
-SUPPORTED_RESOLUTIONS = ((320, 240), (640, 480))
+SUPPORTED_RESOLUTIONS = ((320, 240), (640, 480))  # also the only resolutions a set may be stored at; 640x480 serves both
 DEFAULT_ENTRY = "solution:Solution"
 SOLUTION_DIR_VARIABLE = "RELPOSE_SOLUTION_DIR"  # dev mode: guest path of the preopened solution directory
 

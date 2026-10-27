@@ -15,13 +15,12 @@ namespace {
 
 
 struct Config {
-    int width = 0, height = 0, channels = 1;
+    int width = 0, height = 0;
     double fx = 0, fy = 0, cx = 0, cy = 0;
-    double imu_rate_hz = 200;
 };
 
-// A deliberately tiny JSON number lookup: finds `"key": <number>` after an optional object prefix. Good enough for the
-// flat config; use a real JSON parser (e.g. nlohmann/json, header-only, works with wasi-sdk) for anything more.
+// A deliberately tiny JSON number lookup: finds `"key": <number>`. Good enough for the flat config's scalars; use a
+// real JSON parser (e.g. nlohmann/json, header-only, works with wasi-sdk) for T_cam_imu.
 bool find_number(const std::string& json, const char* key, double& out) {
     std::string needle = std::string("\"") + key + "\"";
     size_t at = json.find(needle);
@@ -57,23 +56,21 @@ int32_t init(const char* json, uint32_t length) {
     double value;
     if (find_number(text, "width", value)) state.config.width = static_cast<int>(value);
     if (find_number(text, "height", value)) state.config.height = static_cast<int>(value);
-    if (find_number(text, "channels", value)) state.config.channels = static_cast<int>(value);
     find_number(text, "fx", state.config.fx);
     find_number(text, "fy", state.config.fy);
     find_number(text, "cx", state.config.cx);
     find_number(text, "cy", state.config.cy);
-    find_number(text, "rate_hz", state.config.imu_rate_hz);
     if (state.config.width <= 0 || state.config.height <= 0) {
         std::fprintf(stderr, "config without image size\n");
         return RELPOSE_STATUS_EXCEPTION;
     }
-    state.previous_frame.resize(static_cast<size_t>(state.config.width) * state.config.height * state.config.channels);
-    std::printf("init: %dx%dx%d fx=%.1f cx=%.1f imu %.0f Hz\n", state.config.width, state.config.height, state.config.channels, state.config.fx, state.config.cx, state.config.imu_rate_hz);
+    state.previous_frame.resize(static_cast<size_t>(state.config.width) * state.config.height * 3);  // RGB
+    std::printf("init: %dx%d fx=%.1f cx=%.1f\n", state.config.width, state.config.height, state.config.fx, state.config.cx);
     state.initialized = true;
     return RELPOSE_STATUS_OK;
 }
 
-// frame: height*width*channels uint8; imu: imu_count rows [t, ax, ay, az, gx, gy, gz]; out: [x, y, z, qx, qy, qz, qw]
+// frame: height*width*3 uint8 RGB; imu: imu_count rows [t, ax, ay, az, gx, gy, gz]; out: [x, y, z, qx, qy, qz, qw]
 int32_t step(double t, const uint8_t* frame, const double* imu, int32_t imu_count, double* out) {
     if (!state.initialized || imu_count < 0) return RELPOSE_STATUS_PROTOCOL;
     state.frames++;

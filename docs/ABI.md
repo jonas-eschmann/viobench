@@ -29,30 +29,43 @@ runtime's initial memory (the memory minimum grows by the zip's size), and a 32-
 from it. The bundler is pure Python section surgery; no compiler is involved, and the zip can be as large as the
 memory cap allows. `relpose unbundle` extracts it again.
 
-## Manifest (optional custom section `relpose.manifest`)
+## Frame format
 
-A JSON object the harness reads from the binary *before* `init`:
-`{"channels": 1 | 3, "resolution": [320, 240] | [640, 480], "entry": "module:Class"}`.
-`channels` selects what `step` receives: grayscale (`1`, the default) or RGB (`3`); `resolution` selects 320 × 240
-(default) or VGA 640 × 480. `relpose bundle` writes the manifest from `solution.json` or `--channels`/`--resolution`;
-native modules add it with `relpose manifest solution.wasm --channels 3 --resolution 640x480`. The harness
-resamples every episode to the declared format (area averaging down, bilinear up, intrinsics rescaled) and the config
-reports what happened: `image.color` (real colour or replicated grayscale), `image.upscaled` (the source had fewer
-pixels), `image.source_channels`, `image.source_resolution`.
+Frames are always **RGB**, `uint8`, `height × width × 3`, and the only choice a solution makes is the resolution:
+**320 × 240** (default) or **640 × 480**. Nothing else about the format varies between episodes or sets, and the
+config does not say where an episode comes from.
+
+- **Colour**: simulated sets are RGB; grayscale-only sources (EuRoC) arrive with their gray value in all three
+  channels, unannounced. A solution that relies on colour has to cope with frames where R = G = B; one that works on
+  gray converts itself (`cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)`, ITU-R 601 luma).
+- **Resolution**: every set is stored at 640 × 480 (or 320 × 240), 4:3. A 640 × 480 set is delivered as stored or
+  area-averaged to 320 × 240, with the intrinsics rescaled (pixel-centre convention); nothing is ever upscaled, so a
+  set stored at 320 × 240 cannot serve a 640 × 480 solution and the runner refuses to try. More pixels cost fuel in
+  everything a solution runs on them.
+- **Camera**: rectified pinhole without distortion, global shutter, timestamps at mid-exposure. The intrinsics in the
+  config are those of the delivered resolution; `fx = fy` and a centred principal point are not promised.
+
+**Requesting the resolution: the manifest.** A JSON object in the module's custom section `relpose.manifest`, read by
+the harness *before* `init`: `{"resolution": [320, 240] | [640, 480], "entry": "module:Class"}`, both optional
+(`entry` only matters to the Python runtime). Python solutions write `solution.json` next to `solution.py` and
+`relpose bundle` copies it into the section (`--resolution` / `--entry` override it); native modules add the section
+with `relpose manifest solution.wasm --resolution 640x480`. The harness takes the section if present, else a
+`solution.json` inside the embedded bundle, else the defaults; in dev mode (`--dir`) the directory's `solution.json` is
+merged on top, so editing it takes effect without rebundling. Unknown keys and other resolutions are rejected. The
+section is removed before compilation: modules that differ only in their manifest share one compiled artifact.
 
 ## Buffers
 
 All numbers are little-endian; integers are `i32`, floats `f64`.
 
-- **`frame`**: `height × width × channels` bytes of `uint8`, row-major, C-contiguous; channels is 1 (grayscale, default)
-  or 3 (RGB, if the manifest asks for it; grayscale is the ITU-R 601 luma of the stored RGB, `cv2.COLOR_RGB2GRAY`). For
-  `channels == 1` the Python runtime hands the solution a `(H, W)` array, otherwise `(H, W, 3)`. Size and channel
-  count come from the config and are constant for the episode. The buffer is **reused for the next frame**: keep a copy
-  if you need the old frame.
+- **`frame`**: `height × width × 3` bytes of `uint8` RGB, row-major, C-contiguous (see "Frame format"); the Python
+  runtime hands the solution a `(H, W, 3)` array. The size comes from the config and is constant for the episode. The
+  buffer is **reused for the next frame**: keep a copy if you need the old frame.
 - **`imu`**: `imu_count` rows of 7 `f64`: `[t, ax, ay, az, gx, gy, gz]` — time in seconds, specific force in m/s²
-  (includes gravity, body frame), angular rate in rad/s (body frame). The rows are all IMU samples with
-  `t_previous_frame < t ≤ t_frame` in time order; `imu_count` may be 0 (the first frame typically carries the hover
-  samples before it). Also reused next step.
+  (includes gravity: at rest it reads ≈ 9.81 opposite to gravity) and angular rate in rad/s, both in the IMU frame that
+  `T_cam_imu` refers to. The rows are all IMU samples with `t_previous_frame < t ≤ t_frame` in time order; the first
+  frame gets one frame interval as well (`t_0 − 1/20 s < t ≤ t_0`), never more, whatever a set recorded before it.
+  `imu_count` may be 0. Nominal rates are 20 Hz (camera) and 200 Hz (IMU); go by the timestamps. Also reused next step.
 - **`t`**: timestamp of the frame in seconds (mid-exposure), same clock as the IMU rows.
 - **`out`**: 7 `f64` `[x, y, z, qx, qy, qz, qw]` — the pose of the *current camera frame* expressed in the
   *first camera frame* (`T_c0_ck`: `p_c0 = R p_ck + t`), unit quaternion with scalar last. Written on status `0`.
@@ -83,25 +96,19 @@ In Python, `sys.exit()` is caught like any exception (status `-1`); `os._exit()`
 ```json
 {
   "abi_version": 1,
-  "image": {"width": 320, "height": 240, "channels": 1, "dtype": "uint8", "layout": "HW",
-            "color": false, "upscaled": false, "source_channels": 3, "source_resolution": [640, 480]},
-  "camera": {"fx": 190.7, "fy": 190.7, "cx": 159.5, "cy": 119.5, "model": "pinhole", "distortion": []},
-  "imu": {"rate_hz": 200.0,
-          "accel_noise_std": 0.28, "gyro_noise_std": 0.07,
-          "accel_bias_init_max": 0.2, "gyro_bias_init_max": 0.02,
-          "accel_bias_random_walk": 0.001, "gyro_bias_random_walk": 0.0006,
-          "gravity": [0.0, 0.0, -9.81],
-          "T_cam_imu": [16 numbers, row-major 4x4: IMU/body coordinates -> camera coordinates],
-          "T_imu_cam": [16 numbers, its inverse]},
-  "episode": {"name": "...", "frame_rate_hz": 20.0, "num_frames": 1200, "hover_seconds": 1.0},
-  "pose": {"frame": "camera0", "order": "xyz_qxyzw", "timestamp": "mid_exposure"}
+  "width": 320, "height": 240,
+  "fx": 190.7, "fy": 190.7, "cx": 159.5, "cy": 119.5,
+  "T_cam_imu": [[0, -1, 0, 0], [0, 0, -1, 0], [1, 0, 0, 0], [0, 0, 0, 1]]
 }
 ```
 
-Camera convention is OpenCV's: x right, y down, z forward (optical axis). The body/IMU frame is the drone's: x
-forward, y left, z up (FLU). Intrinsics vary per episode within the announced ranges — read them from the config.
-`episode.num_frames` and `frame_rate_hz` are per episode as well: sets differ in length (the shipped ones are about a
-minute), so size buffers and schedules from the config rather than from an assumed frame count.
+`width`/`height` are the delivered frame size (what the manifest asked for), `fx, fy, cx, cy` the pinhole intrinsics
+at that size in pixels, `T_cam_imu` the 4 × 4 transform from IMU coordinates to camera coordinates (rows of the
+matrix; camera axes as in OpenCV: x right, y down, z forward). The intrinsics vary per episode, so read them.
+
+That is all a solution is told, on purpose: only what any calibrated camera-IMU dataset provides. There are no
+rates (the timestamps are in the data), no IMU noise model, no episode length, no statement about how an episode starts
+(at rest or in flight), no colour flag and no name. A solution that needs any of these estimates it from the stream.
 
 ## Resource accounting
 
@@ -116,7 +123,7 @@ surfaces as an allocation failure inside the guest (Python: `MemoryError`), not 
 class Solution:
     def __init__(self, config: dict): ...
     def step(self, t: float, frame: np.ndarray, imu: np.ndarray) -> Sequence[float] | None:
-        """frame: uint8 (H, W) or (H, W, C), read-only view valid until the next step;
+        """frame: uint8 (H, W, 3) RGB, read-only view valid until the next step;
         imu: float64 (N, 7) rows [t, ax, ay, az, gx, gy, gz]. Return [x, y, z, qx, qy, qz, qw] or None."""
 ```
 

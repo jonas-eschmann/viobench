@@ -24,7 +24,7 @@ class Solution:
 
 
 def test_evaluate_report(engine, runtime_path, solution_dir, tmp_path):
-    episode = synthetic_episode(n_frames=12, width=64, height=48)
+    episode = synthetic_episode(n_frames=12, width=320, height=240)
     dataset = tmp_path / "set"
     write_episode(episode, dataset / episode.name)
     gt = episode.ground_truth_relative()
@@ -46,34 +46,31 @@ def test_evaluate_report(engine, runtime_path, solution_dir, tmp_path):
     np.testing.assert_allclose(estimate[:, 1:], gt, atol=1e-6)
 
 
-def test_evaluate_converts_rgb_episode_per_solution(engine, runtime_path, solution_dir, tmp_path):
-    episode = synthetic_episode(n_frames=6, width=64, height=48)
-    rgb = np.stack([episode.frames, episode.frames // 2, episode.frames // 4], axis=3)
-    episode = type(episode)(episode.name, {**episode.config, "image": {**episode.config["image"], "channels": 3, "layout": "HWC"}},
-                            episode.frame_times, rgb, episode.imu, episode.ground_truth, episode.T_body_camera, episode.meta)
-    dataset = tmp_path / "set"
-    write_episode(episode, dataset / episode.name)
+def test_evaluate_delivers_rgb_from_gray_and_rgb_sets(engine, runtime_path, solution_dir, tmp_path):
+    gray = synthetic_episode(n_frames=6, width=320, height=240)
+    rgb = synthetic_episode(n_frames=6, width=320, height=240, channels=3)
+    write_episode(gray, tmp_path / "gray" / gray.name)
+    write_episode(rgb, tmp_path / "rgb" / rgb.name)
     probe = """
 import numpy as np
 class Solution:
     def __init__(self, config):
-        self.channels = config["image"]["channels"]
-        self.color = config["image"].get("color")
+        assert "channels" not in config and "color" not in config
     def step(self, t, frame, imu):
-        return [frame.ndim, self.channels, float(self.color), 0, 0, 0, 1]
+        replicated = np.array_equal(frame[..., 0], frame[..., 1]) and np.array_equal(frame[..., 1], frame[..., 2])
+        return [frame.ndim, frame.shape[2], float(replicated), 0, 0, 0, 1]
 """
-    for channels in (1, 3):
-        directory = solution_dir(probe, {"solution.json": '{"channels": %d}' % channels}, name=f"probe{channels}")
-        wasm = tmp_path / f"probe{channels}.wasm"
-        bundle(directory, wasm, runtime=runtime_path)
-        report = evaluate(wasm, [dataset], output_dir=tmp_path / f"report{channels}", engine=engine, log=lambda *a: None)
-        estimate = np.loadtxt(tmp_path / f"report{channels}" / "logs" / "set" / episode.name / "estimate.tum")
-        assert estimate[0, 1] == (2 if channels == 1 else 3) and estimate[0, 2] == channels and estimate[0, 3] == (1.0 if channels == 3 else 0.0)
-        assert report["summary"]["overall"]["completed"] == 1
+    wasm = tmp_path / "probe.wasm"
+    bundle(solution_dir(probe), wasm, runtime=runtime_path)
+    report = evaluate(wasm, [tmp_path / "gray", tmp_path / "rgb"], output_dir=tmp_path / "report", engine=engine, log=lambda *a: None)
+    assert report["summary"]["overall"]["completed"] == 2
+    for dataset, replicated in (("gray", 1.0), ("rgb", 0.0)):
+        estimate = np.loadtxt(tmp_path / "report" / "logs" / dataset / gray.name / "estimate.tum")
+        assert estimate[0, 1] == 3 and estimate[0, 2] == 3 and estimate[0, 3] == replicated
 
 
 def test_evaluate_resolution_opt_in(engine, runtime_path, solution_dir, tmp_path):
-    episode = synthetic_episode(n_frames=4, width=64, height=48)
+    episode = synthetic_episode(n_frames=4, width=640, height=480)
     dataset = tmp_path / "set"
     write_episode(episode, dataset / episode.name)
     probe = """
@@ -81,30 +78,32 @@ class Solution:
     def __init__(self, config):
         self.config = config
     def step(self, t, frame, imu):
-        image = self.config["image"]
-        return [frame.shape[1], frame.shape[0], self.config["camera"]["fx"], float(image["upscaled"]), 0, 0, 1]
+        return [frame.shape[1], frame.shape[0], self.config["fx"], 0, 0, 0, 1]
 """
     import pytest
 
     # only the two supported resolutions are accepted by the manifest validation
-
     with pytest.raises(Exception, match="resolution"):
         bundle(solution_dir(probe, {"solution.json": '{"resolution": [128, 96]}'}, name="bad"), tmp_path / "bad.wasm", runtime=runtime_path)
-    directory = solution_dir(probe, {"solution.json": '{"resolution": "640x480"}'}, name="vga")
-    wasm = tmp_path / "vga.wasm"
-    assert bundle(directory, wasm, runtime=runtime_path)["resolution"] == [640, 480]
-    report = evaluate(wasm, [dataset], output_dir=tmp_path / "report", engine=engine, log=lambda *a: None)
-    estimate = np.loadtxt(tmp_path / "report" / "logs" / "set" / episode.name / "estimate.tum")
-    assert estimate[0, 1] == 640 and estimate[0, 2] == 480 and estimate[0, 4] == 1.0  # upscaled from 64x48
-    assert estimate[0, 3] == pytest.approx(episode.config["camera"]["fx"] * 10)
-    assert report["summary"]["overall"]["completed"] == 1
+    for name, manifest, size in (("qvga", "{}", (320, 240)), ("vga", '{"resolution": "640x480"}', (640, 480))):
+        wasm = tmp_path / f"{name}.wasm"
+        assert bundle(solution_dir(probe, {"solution.json": manifest}, name=name), wasm, runtime=runtime_path)["resolution"] == list(size)
+        report = evaluate(wasm, [dataset], output_dir=tmp_path / name, engine=engine, log=lambda *a: None)
+        estimate = np.loadtxt(tmp_path / name / "logs" / "set" / episode.name / "estimate.tum")
+        assert (estimate[0, 1], estimate[0, 2]) == size and report["summary"]["overall"]["completed"] == 1
+        assert estimate[0, 3] == pytest.approx(episode.config["camera"]["fx"] * size[0] / 640)
+    # a set stored at 320x240 cannot serve a 640x480 solution: no upscaling
+    small = synthetic_episode(n_frames=4, width=320, height=240)
+    write_episode(small, tmp_path / "small" / small.name)
+    with pytest.raises(ValueError, match="only ever downscaled"):
+        evaluate(tmp_path / "vga.wasm", [tmp_path / "small"], output_dir=tmp_path / "refused", engine=engine, log=lambda *a: None)
 
 
 def test_evaluate_accepts_an_in_memory_dataset(engine, runtime_path, solution_dir, tmp_path):
     """The ad-hoc provider path: a list of Episodes, nothing on disk (this is what --simulate feeds the runner)."""
     import io
 
-    episode = synthetic_episode(n_frames=5, width=64, height=48)
+    episode = synthetic_episode(n_frames=5, width=320, height=240)
     episode.meta["dataset"] = "adhoc"
     gt = episode.ground_truth_relative()
     buffer = io.BytesIO()
@@ -120,12 +119,12 @@ def test_streamed_frames_from_disk(tmp_path):
     from relpose.tools.datasets.episode import FrameSequence
     from relpose.tools.datasets.storage import episodes, read_episode
 
-    episode = synthetic_episode(n_frames=6, width=32, height=24)
+    episode = synthetic_episode(n_frames=6, width=320, height=240)
     write_episode(episode, tmp_path / "set" / episode.name)
     lazy = read_episode(tmp_path / "set" / episode.name)
-    assert isinstance(lazy.frames, FrameSequence) and lazy.frames.shape == (6, 24, 32) and lazy.channels == 1
+    assert isinstance(lazy.frames, FrameSequence) and lazy.frames.shape == (6, 240, 320) and lazy.channels == 1
     np.testing.assert_array_equal(lazy.frames[3], episode.frames[3])
     np.testing.assert_array_equal(np.asarray(lazy.frames), episode.frames)
-    config, frames = lazy.adapt(channels=3, resolution=(64, 48))
-    assert isinstance(frames, FrameSequence) and frames.shape == (6, 48, 64, 3)
+    config, frames = lazy.adapt()
+    assert isinstance(frames, FrameSequence) and frames.shape == (6, 240, 320, 3)
     assert next(iter(episodes([tmp_path / "set"]))).dataset == "set"

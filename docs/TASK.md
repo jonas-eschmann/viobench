@@ -8,13 +8,13 @@ compute they spend per frame, so the leaderboard is a curve, not a number.
 
 | | |
 |---|---|
-| Frames | `uint8`, 320 × 240 grayscale by default. Your submission may opt into RGB (`{"channels": 3}`) and/or VGA (`{"resolution": [640, 480]}`) in `solution.json` (see `docs/ABI.md`): sets are stored at 640 × 480 and resampled to what you declare; real-data sets are grayscale (replicated into three channels, `config["image"]["color"]` says so) and if a set only exists at 320 × 240 you get a bilinear upscale (`config["image"]["upscaled"]`). Pinhole camera without distortion, intrinsics in the config (`fx, fy, cx, cy`; the horizontal field of view varies between roughly 48° and 80° across episodes), global shutter, timestamp = mid-exposure |
-| Frame rate | 20 Hz (default; `config["episode"]["frame_rate_hz"]`) |
-| IMU | 200 Hz, in the body/IMU frame: specific force in m/s² (gravity included: a resting IMU reads ≈ 9.81 along the direction opposite to gravity), angular rate in rad/s. In simulation the body frame is x forward, y left, z up and the IMU sits at the body origin; in real data it is whatever the sensor calibration says (`T_cam_imu` is exact, the initial orientation w.r.t. gravity is not given). Noise and bias magnitudes are listed in the config (`imu.*_noise_std` per sample, `*_bias_init_max`, `*_random_walk`). |
-| Extrinsics | `imu.T_cam_imu` (4 × 4, row-major): body/IMU coordinates → camera coordinates (OpenCV: x right, y down, z forward). `imu.T_imu_cam` is the inverse. |
-| Timing | `step(t, frame, imu)`: `t` is the frame timestamp, `imu` holds all IMU rows with `t_previous_frame < t_row ≤ t` (the first call also delivers the rows before the first frame). Everything is one clock. |
-| Start | Episodes of the simulated sets begin with ≥ 1 s of hover (`config["episode"]["hover_seconds"]`) before the drone starts flying its route; real-data snippets may start mid-flight (`hover_seconds` is 0 then). |
-| Duration | One continuous flight per episode. The length is in the config (`config["episode"]["num_frames"]`, `frame_rate_hz`) and may differ between sets, so never hard-code it; the shipped sets are about a minute long (1 200 frames, 12 000 IMU samples), and real-data snippets are cut to the same length as the simulated episodes |
+| Frames | `uint8` RGB, `(H, W, 3)`, at 320 × 240 by default or 640 × 480 if `solution.json` asks for it (`{"resolution": [640, 480]}`, see `docs/ABI.md`, "Frame format"); nothing else about the format varies. Some sets are grayscale-only and arrive with R = G = B, unannounced. Pinhole camera without distortion, intrinsics in the config (`fx, fy, cx, cy`; the horizontal field of view varies between roughly 48° and 80° across episodes), global shutter, timestamp = mid-exposure |
+| Frame rate | nominally 20 Hz; use the timestamps |
+| IMU | nominally 200 Hz: specific force in m/s² (gravity included: a resting IMU reads ≈ 9.81 along the direction opposite to gravity) and angular rate in rad/s, in the IMU frame. Expect a consumer MEMS IMU with white noise, turn-on biases and slow bias drift; no noise model is given, and the initial orientation w.r.t. gravity is not given either. |
+| Extrinsics | `T_cam_imu` (4 × 4): IMU coordinates → camera coordinates (OpenCV: x right, y down, z forward); exact for the episode |
+| Timing | `step(t, frame, imu)`: `t` is the frame timestamp, `imu` holds all IMU rows with `t_previous_frame < t_row ≤ t`; the first call gets the rows of one frame interval before the first frame. Everything is one clock. |
+| Start | Not announced: an episode may start at rest or in flight. |
+| Duration | One continuous flight per episode, of unannounced length: never assume a frame count, and keep the per-frame cost flat. The shipped sets are about a minute long (1 200 frames, 12 000 IMU samples). |
 
 ## Output
 

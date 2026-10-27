@@ -11,12 +11,13 @@ from relpose.tools.datasets.generate.camera import SensorParams, apply, integrat
 from relpose.tools.runner.metrics import matrices_to_poses, poses_to_matrices, quaternion_to_matrix
 
 
-def synthetic_episode(n_frames=8, rate=20.0, imu_rate=200.0, width=32, height=24):
+def synthetic_episode(n_frames=8, rate=20.0, imu_rate=200.0, width=32, height=24, channels=1, lead_in=0.0):
+    """lead_in: seconds of IMU (and ground truth) recorded before the first frame."""
     rng = np.random.default_rng(0)
-    config = make_config(width=width, height=height, channels=1, frame_rate_hz=rate, num_frames=n_frames)
+    config = make_config(width=width, height=height, channels=channels, frame_rate_hz=rate, num_frames=n_frames)
     T_body_camera = np.asarray(config["imu"]["T_imu_cam"]).reshape(4, 4)
     duration = n_frames / rate
-    gt_t = np.arange(0, duration + 1 / imu_rate, 1 / imu_rate)
+    gt_t = np.arange(-lead_in, duration + 1 / imu_rate, 1 / imu_rate)
     # smooth trajectory: circle with yaw
     angle = 0.5 * gt_t
     position = np.column_stack([np.cos(angle), np.sin(angle), 0.1 * gt_t])
@@ -25,7 +26,7 @@ def synthetic_episode(n_frames=8, rate=20.0, imu_rate=200.0, width=32, height=24
     imu_t = gt_t[1:]
     imu = np.column_stack([imu_t, rng.normal(0, 0.1, (len(imu_t), 3)) + [0, 0, 9.81], rng.normal(0, 0.01, (len(imu_t), 3))])
     frame_times = (np.arange(n_frames) + 1) / rate
-    frames = rng.integers(0, 256, (n_frames, height, width), dtype=np.uint8)
+    frames = rng.integers(0, 256, (n_frames, height, width) + (() if channels == 1 else (channels,)), dtype=np.uint8)
     return Episode("synthetic", config, frame_times, frames, imu, ground_truth, T_body_camera, {"condition": "test"})
 
 
@@ -42,6 +43,13 @@ def test_episode_windows_and_ground_truth():
     T_wc = poses_to_matrices(episode.camera_poses_world())
     expected = np.linalg.inv(T_wc[0]) @ T_wc[3]
     np.testing.assert_allclose(poses_to_matrices(relative)[3], expected, atol=1e-12)
+
+
+def test_first_imu_window_is_one_frame_interval():
+    episode = synthetic_episode(lead_in=1.5)  # EuRoC snippets record IMU before their first frame, simulated sets barely
+    first = episode.imu_window(0)
+    assert len(first) == 10 and first[0, 0] > episode.frame_times[0] - episode.frame_interval
+    np.testing.assert_array_equal(episode.delivered_imu(), np.concatenate([imu for _, _, imu in episode.steps()]))
 
 
 def test_interpolation_matches_samples():
@@ -71,11 +79,7 @@ def test_write_read_roundtrip(tmp_path):
 
 @pytest.mark.parametrize("channels", [1, 3])
 def test_write_episode_copies_existing_pngs(tmp_path, channels):
-    episode = synthetic_episode(n_frames=4, width=16, height=12)
-    if channels == 3:
-        episode.config, episode.frames = episode.adapt(channels=3)
-        episode.frames[..., 1] //= 2
-        episode.frames[..., 2] //= 4
+    episode = synthetic_episode(n_frames=4, width=16, height=12, channels=channels)
     source = read_episode(write_episode(episode, tmp_path / "src"))
     assert isinstance(source.frames, FrameSequence) and len(source.frames.paths) == 4
     copy = write_episode(source, tmp_path / "dst")
@@ -132,14 +136,13 @@ def test_write_episode_exports_spool_and_survives_cleanup(tmp_path, monkeypatch,
 
     from relpose.tools.datasets.generate.simulation import Spool, spooled_frames
 
-    episode = synthetic_episode(n_frames=4, width=16, height=12)
-    episode.config, episode.frames = episode.adapt(channels=channels)
+    episode = synthetic_episode(n_frames=4, width=16, height=12, channels=channels)
     expected = episode.frames.copy()
     spool = Spool(tmp_path / "spool")
     spool_path = spool.path
     stored = read_episode(write_episode(episode, spool.path / "episode"))
     episode.frames = spooled_frames(stored.frames.paths, channels, expected.shape[1:], spool)
-    _, mapped = episode.adapt(channels=3 if channels == 1 else 1)
+    mapped = episode.frames.map(np.copy)
     assert mapped.paths is None and not mapped.link_paths
     del mapped, spool
 
@@ -231,29 +234,29 @@ def test_isp_identity_and_effects():
     np.testing.assert_allclose(integrate_exposure(np.repeat(srgb[:1], 5, axis=0)), srgb_to_linear(srgb[0]), atol=1e-6)
 
 
-def test_as_channels_conversions():
-    episode = synthetic_episode(n_frames=3, width=16, height=12)
-    config, frames = episode.as_channels(3)
-    assert frames.shape == (3, 12, 16, 3) and config["image"]["channels"] == 3 and config["image"]["color"] is False
-    np.testing.assert_array_equal(frames[..., 0], episode.frames)
-    rgb = type(episode)(episode.name, {**episode.config, "image": {**episode.config["image"], "channels": 3, "layout": "HWC"}},
-                        episode.frame_times, frames, episode.imu, episode.ground_truth, episode.T_body_camera)
-    config, gray = rgb.as_channels(1)
-    assert gray.shape == (3, 12, 16) and config["image"]["channels"] == 1 and config["image"]["source_channels"] == 3
-    np.testing.assert_array_equal(gray, episode.frames)  # replicated channels -> identical luma
-    assert rgb.as_channels(3)[1] is frames
+def test_adapt_always_delivers_rgb():
+    episode = synthetic_episode(n_frames=3, width=320, height=240)  # a grayscale-only set
+    config, frames = episode.adapt()
+    assert frames.shape == (3, 240, 320, 3)
+    for channel in range(3):
+        np.testing.assert_array_equal(frames[..., channel], episode.frames)  # replicated, and nothing announces it
+    assert set(config) == {"abi_version", "width", "height", "fx", "fy", "cx", "cy", "T_cam_imu"}
+    np.testing.assert_allclose(np.asarray(config["T_cam_imu"]) @ episode.T_body_camera, np.eye(4), atol=1e-12)
+    rgb = synthetic_episode(n_frames=3, width=320, height=240, channels=3)
+    assert rgb.adapt()[1] is rgb.frames  # RGB at the stored resolution passes through untouched
 
 
-def test_adapt_resolution_rescales_frames_and_intrinsics():
-    episode = synthetic_episode(n_frames=2, width=64, height=48)
-    config, frames = episode.adapt(resolution=(32, 24))
-    assert frames.shape == (2, 24, 32) and config["image"]["width"] == 32 and config["image"]["upscaled"] is False
-    assert config["camera"]["fx"] == pytest.approx(episode.config["camera"]["fx"] / 2)
-    assert config["camera"]["cx"] == pytest.approx((episode.config["camera"]["cx"] + 0.5) / 2 - 0.5)
+def test_adapt_downscales_frames_and_intrinsics():
+    episode = synthetic_episode(n_frames=2, width=640, height=480)
+    config, frames = episode.adapt(resolution=(320, 240))
+    assert frames.shape == (2, 240, 320, 3) and (config["width"], config["height"]) == (320, 240)
+    assert config["fx"] == pytest.approx(episode.config["camera"]["fx"] / 2)
+    assert config["cx"] == pytest.approx((episode.config["camera"]["cx"] + 0.5) / 2 - 0.5)
     # a frame-centre ray keeps its direction: the principal point stays at the image centre
-    assert config["camera"]["cx"] == pytest.approx(32 / 2 - 0.5) and config["camera"]["cy"] == pytest.approx(24 / 2 - 0.5)
-    config_up, frames_up = episode.adapt(channels=3, resolution=(128, 96))
-    assert frames_up.shape == (2, 96, 128, 3) and config_up["image"]["upscaled"] is True and config_up["image"]["source_resolution"] == [64, 48]
-    assert config_up["camera"]["fx"] == pytest.approx(episode.config["camera"]["fx"] * 2)
-    with pytest.raises(ValueError, match="aspect"):
-        episode.adapt(resolution=(64, 24))
+    assert config["cx"] == pytest.approx(320 / 2 - 0.5) and config["cy"] == pytest.approx(240 / 2 - 0.5)
+    with pytest.raises(ValueError, match="only ever downscaled"):
+        synthetic_episode(n_frames=2, width=320, height=240).adapt(resolution=(640, 480))
+    with pytest.raises(ValueError, match="resolution must be one of"):
+        episode.adapt(resolution=(64, 48))
+    with pytest.raises(ValueError, match="sets must be stored at"):
+        synthetic_episode(n_frames=2, width=64, height=48).adapt(resolution=(320, 240))

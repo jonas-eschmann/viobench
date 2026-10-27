@@ -18,10 +18,15 @@ One directory per episode, EuRoC/ASL layout so that standard VIO tooling (evo, O
 `relpose.tools.datasets.read_episode(dir)` loads it into an `Episode` (frames, frame times, IMU rows `[t, a, g]`, ground truth,
 `T_body_camera`, config); `episode.ground_truth_relative()` gives the `T_c0_ck` poses a perfect solution would output
 (ground truth interpolated to each frame's mid-exposure time, moved into the camera frame via the extrinsics, re-based
-on frame 0). `episode.steps()` yields `(t, frame, imu_window)` exactly as the harness feeds a solution;
-`episode.adapt(channels, resolution)` converts to what a solution asked for (RGB → grayscale is `cv2.COLOR_RGB2GRAY`,
-grayscale → RGB replicates; 640 × 480 → 320 × 240 is area averaging, the reverse bilinear; intrinsics are rescaled).
-Simulated episodes are stored as RGB at 640 × 480, real ones as grayscale at 640 × 480 (EuRoC's 752 × 480 cropped).
+on frame 0). `episode.steps()` yields `(t, frame, imu_window)` exactly as the harness feeds a solution (the first
+window is one frame interval, however much IMU the set recorded before frame 0); `episode.adapt(resolution)` returns
+the frames and config a solution receives (`docs/ABI.md`, "Frame format": always RGB, grayscale replicated; 640 × 480 →
+320 × 240 by area averaging with rescaled intrinsics, never upscaled). The `config` in `episode.json` is the set's full
+description (rates, IMU noise model, hover, name, ...); solutions only get the frame size, intrinsics and `T_cam_imu`.
+
+A set must be stored at 640 × 480 (or 320 × 240, which then only serves 320 × 240 solutions), RGB or grayscale,
+rectified pinhole, with intrinsics, `T_cam_imu` and ground truth covering every frame on one clock. Simulated episodes
+are stored as RGB at 640 × 480, real ones as grayscale at 640 × 480 (EuRoC's 752 × 480 cropped).
 
 A one-minute episode at 640 × 480 is ~360 MB (RGB PNG); the format has no length limit, and `episode.json` records
 `frames` and `duration_s`.
@@ -83,8 +88,9 @@ shutter at 20 Hz, ADIS16448 IMU at 200 Hz, Vicon/Leica ground truth. The convert
 crops a centred 4:3 window (640 × 480, no scaling), recomputes the intrinsics, copies the IMU noise
 densities, keeps `T_BS` (camera in IMU frame) and cuts the sequence into non-overlapping snippets of `--snippet`
 seconds (default one minute, like the simulated episodes; the sequences are 1.5–3 minutes long) inside the
-ground-truth span. Snippet 0 starts at the sequence start (the MAV is static there: `hover_seconds` = 1); later
-snippets start mid-flight (`hover_seconds` = 0 — no stationary window).
+ground-truth span. Snippet 0 starts at the sequence start (the MAV is static there: `hover_seconds` = 1 in
+`episode.json`); later snippets start mid-flight (`hover_seconds` = 0 — no stationary window). Solutions are not told
+either.
 
 ## Metrics
 
