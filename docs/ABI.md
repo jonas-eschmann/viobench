@@ -56,7 +56,10 @@ All numbers are little-endian; integers are `i32`, floats `f64`.
   (includes gravity: at rest it reads ≈ 9.81 opposite to gravity) and angular rate in rad/s, both in the IMU frame that
   `T_cam_imu` refers to. The rows are all IMU samples with `t_previous_frame < t ≤ t_frame` in time order; the first
   frame gets one frame interval as well (`t_0 − 1/20 s < t ≤ t_0`), never more, whatever a set recorded before it.
-  `imu_count` may be 0. Nominal rates are 20 Hz (camera) and 200 Hz (IMU); go by the timestamps. Also reused next step.
+  Frames arrive at 20 Hz and the IMU at 200 Hz, so `imu_count` is always **10**. The data pipeline guarantees this:
+  a dropped frame is replaced by a repeat of the previous frame (at its own timestamp), dropped IMU samples by
+  repeats of the previous sample, and an IMU recorded at another rate is linearly interpolated. Spacing between rows
+  is only nominal (≈ 5 ms); go by the timestamps. Also reused next step.
 - **`t`**: timestamp of the frame in seconds (mid-exposure of the centre row), same clock as the IMU rows.
 - **`out`**: 7 `f64` `[x, y, z, qx, qy, qz, qw]` — the pose of the *current camera frame* expressed in the
   *first camera frame* (`T_c0_ck`: `p_c0 = R p_ck + t`), unit quaternion with scalar last. Written on status `0`.
@@ -96,8 +99,8 @@ In Python, `sys.exit()` is caught like any exception (status `-1`); `os._exit()`
 at that size in pixels, `T_cam_imu` the 4 × 4 transform from IMU coordinates to camera coordinates (rows of the
 matrix; camera axes as in OpenCV: x right, y down, z forward). The intrinsics vary per episode, so read them.
 
-That is all a solution is told, on purpose: only what any calibrated camera-IMU dataset provides. There are no
-rates (the timestamps are in the data), no IMU noise model, no episode length, no statement about how an episode starts
+That is all a solution is told, on purpose: only what any calibrated camera-IMU dataset provides. Beyond the fixed
+20 Hz / 200 Hz above there are no rates, no IMU noise model, no episode length, no statement about how an episode starts
 (at rest or in flight), no shutter type or readout time, no colour flag and no name. A solution that needs any of these
 estimates it from the stream.
 

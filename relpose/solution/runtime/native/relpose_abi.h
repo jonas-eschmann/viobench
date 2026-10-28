@@ -41,8 +41,8 @@ RELPOSE_EXPORT(abi_version) int32_t abi_version(void);                   /* retu
 RELPOSE_EXPORT(alloc) void *alloc(uint32_t size);                        /* malloc; never freed by the host */
 RELPOSE_EXPORT(init) int32_t init(const char *config_json, uint32_t length); /* once; the bytes are valid during the call */
 RELPOSE_EXPORT(step) int32_t step(double t, const uint8_t *frame, const double *imu, int32_t imu_count, double *out);
-/* frame: height*width*3 uint8 RGB (row-major), size per the config; imu: imu_count rows of RELPOSE_IMU_ROW_VALUES doubles
- * with t_prev_frame < t <= t_frame; out: RELPOSE_POSE_VALUES doubles, written on RELPOSE_STATUS_OK. The frame and IMU
+/* frame: height*width*3 uint8 RGB (row-major), size per the config; imu: imu_count (always 10) rows of RELPOSE_IMU_ROW_VALUES
+ * doubles with t_prev_frame < t <= t_frame; out: RELPOSE_POSE_VALUES doubles, written on RELPOSE_STATUS_OK. The frame and IMU
  * buffers are reused for the next step: copy what you want to keep. */
 
 #ifdef __cplusplus

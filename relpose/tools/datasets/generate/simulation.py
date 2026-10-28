@@ -30,6 +30,7 @@ from ... import abi
 from ...abi.config import make_config, pinhole_intrinsics
 from ...geometry import matrix_to_quaternion, quaternion_to_matrix
 from ..episode import Episode, FrameSequence
+from ..regularize import regularize
 from ..storage import read_png
 from .camera import apply, srgb_to_linear
 from .conditions import sample as sample_condition
@@ -296,7 +297,7 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
                   "sensor": params.as_dict(), "sub_frames": k, "spawn": spawns[instance], "hyperdrone": _versions(),
                   "sim": asdict(sim)},
         )
-        yield episode
+        yield regularize(episode)  # frame 0's window starts before the first IMU sample
 
 
 def _versions():

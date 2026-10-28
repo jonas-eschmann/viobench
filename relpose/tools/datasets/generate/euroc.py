@@ -15,6 +15,7 @@ import yaml
 
 from ...abi.config import make_config
 from ..episode import Episode
+from ..regularize import regularize
 
 SOURCE_NAME = "euroc"
 
@@ -132,11 +133,13 @@ def convert(sequence, width=640, height=480, snippet_seconds=60.0, max_snippets=
                              T_body_camera=T_body_camera, imu=imu_noise, episode_name=name,
                              intrinsics={"fx": float(new_K[0, 0]), "fy": float(new_K[1, 1]), "cx": float(new_K[0, 2]), "cy": float(new_K[1, 2])})
         config["camera"]["horizontal_fov_degrees"] = float(np.degrees(2 * np.arctan(width / (2 * new_K[0, 0]))))
-        episode = Episode(name, config, times, np.stack(frames), imu, ground_truth, T_body_camera,
-                          {"source": SOURCE_NAME, "sequence": raw["name"], "snippet": count, "start_s": float(snippet_start),
-                           "origin_ns": origin_ns, "condition": "real", "hover_seconds": hover})
+        episode = regularize(Episode(name, config, times, np.stack(frames), imu, ground_truth, T_body_camera,
+                                     {"source": SOURCE_NAME, "sequence": raw["name"], "snippet": count, "start_s": float(snippet_start),
+                                      "origin_ns": origin_ns, "condition": "real", "hover_seconds": hover}))
         episode.check_consistency()
-        log(f"{name}: {len(selected)} frames {times[0]:.2f}-{times[-1]:.2f}s, {len(imu)} IMU rows")
+        filled = episode.meta["regularized"]
+        log(f"{name}: {episode.num_frames} frames {times[0]:.2f}-{times[-1]:.2f}s ({filled['filled_frames']} filled), "
+            f"{len(episode.imu)} IMU rows ({filled['resampled_imu_windows']} windows resampled)")
         yield episode, origin_ns
         count += 1
         snippet_start += stride

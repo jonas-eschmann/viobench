@@ -12,6 +12,9 @@ SOLUTION_MODULE = "solution"  # the entry point is always class Solution in solu
 SOLUTION_CLASS = "Solution"
 
 IMU_ROW_VALUES = 7  # [t_s, ax, ay, az, gx, gy, gz]
+FRAME_RATE_HZ = 20.0  # every set is delivered at these rates (relpose.tools.datasets.regularize)
+IMU_RATE_HZ = 200.0
+IMU_ROWS_PER_FRAME = 10  # IMU_RATE_HZ / FRAME_RATE_HZ: imu_count of every step
 POSE_VALUES = 7  # [x, y, z, qx, qy, qz, qw]
 F64_BYTES = 8
 

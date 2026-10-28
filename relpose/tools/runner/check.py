@@ -5,9 +5,6 @@ from .. import abi
 from ..abi.config import default_guest_config
 from .sandbox import Limits, Sandbox, SandboxError
 
-FRAME_RATE_HZ = 20.0  # the nominal rates of every set (docs/ABI.md); solutions go by the timestamps
-IMU_RATE_HZ = 200.0
-
 
 def check(wasm, frames=5, logs=None, verbose=False, log=print):
     """Returns 0 when every step succeeded, 1 otherwise. Prints one line per step."""
@@ -20,9 +17,9 @@ def check(wasm, frames=5, logs=None, verbose=False, log=print):
     width, height = sandbox.resolution
     config = default_guest_config(width=width, height=height)
     shape = (height, width, abi.CHANNELS)
-    dt = 1.0 / FRAME_RATE_HZ
-    imu_dt = 1.0 / IMU_RATE_HZ
-    rows_per_frame = int(round(dt / imu_dt))
+    dt = 1.0 / abi.FRAME_RATE_HZ
+    imu_dt = 1.0 / abi.IMU_RATE_HZ
+    rows_per_frame = abi.IMU_ROWS_PER_FRAME
     log(f"module: frames {shape}, manifest {sandbox.manifest or '{}'}")
     try:
         sandbox.init(config)

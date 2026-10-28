@@ -31,6 +31,13 @@ timestamps at the mid-exposure of the centre row (a converter shifts a source th
 of exposure). Simulated episodes are stored as RGB at 640 × 480, real ones as grayscale at 640 × 480 (EuRoC's
 752 × 480 cropped).
 
+Every set is stored on the ABI's timeline: a frame every 50 ms and exactly 10 IMU rows per frame interval
+(`docs/ABI.md`, "Buffers"; `episode.check_consistency()` asserts it). The generators pass each episode through
+`relpose.tools.datasets.regularize`, which repeats the previous frame for a dropped one and the previous IMU
+sample for dropped samples (also before the first sample: the simulator's frame 0 window starts before its IMU),
+resamples an IMU at another rate linearly, and keeps windows that are already regular untouched. It rejects sources
+whose camera is not at 20 Hz. `episode.json` records what it did under `meta.regularized`.
+
 A one-minute episode at 640 × 480 is ~360 MB (RGB PNG); the format has no length limit, and `episode.json` records
 `frames` and `duration_s`.
 

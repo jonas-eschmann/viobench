@@ -194,4 +194,7 @@ class Episode:
         np.testing.assert_allclose(np.asarray(self.config["imu"]["T_imu_cam"]).reshape(4, 4), self.T_body_camera, atol=1e-9)
         assert self.ground_truth[0, 0] <= self.frame_times[0] and self.ground_truth[-1, 0] >= self.frame_times[-1], "ground truth must cover all frames"
         np.testing.assert_allclose(np.linalg.norm(self.ground_truth[:, 4:8], axis=1), 1.0, atol=1e-4)
+        assert np.all(np.abs(np.diff(self.frame_times) * abi.FRAME_RATE_HZ - 1) < 0.5), "frames must be one interval apart (datasets.regularize)"
+        assert all(len(self.imu_window(index)) == abi.IMU_ROWS_PER_FRAME for index in range(self.num_frames)), \
+            f"every frame needs {abi.IMU_ROWS_PER_FRAME} IMU rows (datasets.regularize)"
         return True
