@@ -47,7 +47,7 @@ def null_pose_estimates(n):
     return np.full((n, abi.POSE_VALUES), np.nan)
 
 
-def run_episode(wasm_path, episode, engine, limits, log_dir, dev_dir=None, progress=None):
+def run_episode(wasm_path, episode, engine, limits, log_dir, progress=None):
     """One episode through a fresh Sandbox; returns (EpisodeReport, estimates (N, 7) with NaN rows for missing frames)."""
     estimates = null_pose_estimates(episode.num_frames)
     fuel = np.zeros(episode.num_frames)
@@ -59,7 +59,7 @@ def run_episode(wasm_path, episode, engine, limits, log_dir, dev_dir=None, progr
     wall_init = 0.0
     sandbox = None
     try:
-        sandbox = Sandbox(wasm_path, engine, limits=limits, log_dir=log_dir, dev_dir=dev_dir)
+        sandbox = Sandbox(wasm_path, engine, limits=limits, log_dir=log_dir)
         config, frames = episode.adapt(sandbox.resolution)
         sandbox.init(config)
         fuel_init, wall_init = sandbox.init_fuel, sandbox.init_wall_seconds
@@ -141,7 +141,7 @@ def as_dataset(dataset):
     return dataset
 
 
-def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, dev_dir=None, max_episodes=None,
+def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_episodes=None,
              save_estimates=True, progress=None, log=print):
     """dataset: episode directories / dataset roots, or any iterable of Episodes. Returns the report dict (also written as report.json)."""
     wasm_path = Path(wasm_path)
@@ -155,7 +155,7 @@ def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, dev_
         if max_episodes is not None and count >= max_episodes:
             break
         log_dir = output_dir / "logs" / episode.dataset / episode.name
-        report, estimates = run_episode(wasm_path, episode, engine, limits, log_dir, dev_dir=dev_dir, progress=progress)
+        report, estimates = run_episode(wasm_path, episode, engine, limits, log_dir, progress=progress)
         reports.append(report)
         if save_estimates:
             np.savetxt(log_dir / "estimate.tum", np.column_stack([episode.frame_times, estimates]), fmt="%.9g",

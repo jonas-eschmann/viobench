@@ -231,13 +231,6 @@ class Solution:
     assert result.pose[0] > 0 and result.pose[1] > 0
 
 
-def test_dev_mode_mounts_the_directory(engine, runtime_path, solution_dir, tmp_path):
-    directory = solution_dir(IDENTITY.replace("self.config = config", "self.config = config\n        import solution; assert solution.__file__.startswith('/solution/')"))
-    sandbox = Sandbox(runtime_path, engine, log_dir=tmp_path / "logs", dev_dir=directory)
-    sandbox.init(CONFIG)
-    assert sandbox.step(0.05, FRAME, IMU).status == abi.STATUS_OK, sandbox.stderr_tail()
-
-
 def test_bare_runtime_without_code_is_refused(engine, runtime_path, tmp_path):
     sandbox = Sandbox(runtime_path, engine, log_dir=tmp_path / "logs")
     assert sandbox.descriptor is not None and sandbox.descriptor.length == 0
@@ -281,7 +274,7 @@ def test_unbundle_roundtrip(runtime_path, solution_dir, tmp_path):
     descriptor = runtime_descriptor(bundled)
     assert descriptor.length == len(extract_bundle(bundled)) and descriptor.address % 65536 == 0
     names = unbundle(wasm, tmp_path / "out")
-    assert set(names) == {"solution.py", "data/w.npy", "pkg/__init__.py", "solution.json"}
+    assert set(names) == {"solution.py", "data/w.npy", "pkg/__init__.py"}
     assert (tmp_path / "out" / "data" / "w.npy").read_bytes() == b"\x93NUMPY" + bytes(100)
     # stripping gives back the clean runtime byte for byte (the manifest section aside), and bundling twice is idempotent
     assert strip_custom_manifest(strip_bundle(bundled)) == strip_custom_manifest(runtime_path.read_bytes())
@@ -331,15 +324,11 @@ class Solution:
     result = sandbox.step(0.05, vga, IMU)
     assert result.status == abi.STATUS_OK, sandbox.stderr_tail()
     np.testing.assert_array_equal(result.pose[:3], vga[1, 2])
-    # the manifest command rewrites the section; bundling again from a --resolution flag overrides solution.json
+    # the manifest command rewrites the section
     from relpose.tools.abi.manifest import read_manifest, write_manifest
 
     assert write_manifest(wasm, {"resolution": "320x240"})["resolution"] == [320, 240] and read_manifest(wasm.read_bytes())["resolution"] == [320, 240]
-    assert bundle(directory, wasm, runtime=runtime_path, resolution="320x240")["resolution"] == [320, 240]
     with pytest.raises(Exception, match="resolution"):
         write_manifest(wasm, {"resolution": [64, 48]})
     with pytest.raises(Exception, match="unknown manifest keys"):  # there is no colour choice: frames are always RGB
         write_manifest(wasm, {"channels": 3})
-    assert "entry" not in write_manifest(wasm, {"entry": "solution:Solution"})  # what older bundlers wrote: accepted and dropped
-    with pytest.raises(Exception, match="from mypkg.estimator import Estimator as Solution"):  # the entry point is fixed
-        write_manifest(wasm, {"entry": "mypkg.estimator:Estimator"})

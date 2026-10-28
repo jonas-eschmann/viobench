@@ -8,7 +8,7 @@ Needs `pip install hyperdrone` and a GPU (the environment module is JIT-compiled
 the rendered spec header's hash is the key, so every distinct resolution, duration or route length compiles once).
 Frames are RGB uint8 after the camera/ISP model (relpose.tools.datasets.generate.camera) with per-episode parameters
 drawn from the condition's public ranges (relpose.tools.datasets.generate.conditions); solutions receive them as
-stored or downscaled (Episode.adapt). The episode length is `SimConfig.duration_seconds` (default one
+stored or rescaled (Episode.adapt). The episode length is `SimConfig.duration_seconds` (default one
 minute); developed frames are spooled to a temporary directory while a batch renders, so memory does not grow with it.
 """
 import hashlib
@@ -321,7 +321,7 @@ def add_simulation_arguments(parser):
     parser.add_argument("--scenes", default="procthor-train", choices=["procthor-train", "hssd-train", "hssd-val"])
     parser.add_argument("--scene-names", nargs="*", help="restrict to these scene names")
     parser.add_argument("--render-resolution", dest="render_resolution", default="640x480", choices=[f"{w}x{h}" for w, h in abi.SUPPORTED_RESOLUTIONS],
-                        help="stored resolution; the runner only downscales, so 640x480 (default) serves every solution")
+                        help="stored resolution; the runner rescales to whatever a solution declares")
     parser.add_argument("--instances", type=int, default=8, help="flights per batch")
     parser.add_argument("--frame-rate", type=float, default=20.0)
     parser.add_argument("--duration", type=float, default=60.0, help="seconds of flight per episode (frames = duration x frame rate)")

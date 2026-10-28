@@ -62,19 +62,15 @@ class Sandbox:
     Fresh instance per episode: nothing is reset between episodes, and a trap kills the instance for good.
     """
 
-    def __init__(self, wasm_path, engine=None, limits=None, log_dir=None, dev_dir=None, inherit_stdio=False):
+    def __init__(self, wasm_path, engine=None, limits=None, log_dir=None, inherit_stdio=False):
         self.path = Path(wasm_path)
         self.limits = limits or Limits()
         self.engine = engine or Engine()
-        self.dev_dir = Path(dev_dir) if dev_dir else None
         self.dead = False
         self.initialized = False
         wasm = self.path.read_bytes()
         try:
-            self.manifest = read_manifest(wasm)
-            if self.dev_dir is not None and (self.dev_dir / abi.BUNDLE_MANIFEST).is_file():  # dev mode: the directory's solution.json
-                self.manifest = {**self.manifest, **json.loads((self.dev_dir / abi.BUNDLE_MANIFEST).read_text())}
-            validate_manifest(self.manifest)
+            self.manifest = validate_manifest(read_manifest(wasm))
         except (AbiError, ValueError) as error:
             raise SandboxError(str(error)) from None
         self.resolution = tuple(self.manifest.get("resolution", abi.DEFAULT_RESOLUTION))  # (width, height) of the frames
@@ -98,11 +94,7 @@ class Sandbox:
         self.store.set_limits(memory_size=self.limits.memory_bytes)
         wasi = wasmtime.WasiConfig()
         wasi.argv = ["solution"]
-        environment = [("RELPOSE", "1")]
-        if self.dev_dir is not None:
-            wasi.preopen_dir(str(self.dev_dir), "/solution", fs_mutable=False)
-            environment.append((abi.SOLUTION_DIR_VARIABLE, "/solution"))
-        wasi.env = environment
+        wasi.env = [("RELPOSE", "1")]
         if inherit_stdio:
             wasi.inherit_stdout()
             wasi.inherit_stderr()
@@ -185,8 +177,8 @@ class Sandbox:
         """Hands the bundle (if any) and the config JSON to the guest; raises SandboxError on failure."""
         if self.initialized:
             raise SandboxError("init() called twice")
-        if self.descriptor is not None and self.descriptor.length == 0 and self.dev_dir is None:
-            raise SandboxError(f"{self.path.name} is a bare Python runtime without solution code: run `relpose bundle` or pass --dir")
+        if self.descriptor is not None and self.descriptor.length == 0:
+            raise SandboxError(f"{self.path.name} is a bare Python runtime without solution code: run `relpose bundle` first")
         self.config = dict(config)
         self.config.setdefault("abi_version", abi.ABI_VERSION)
         delivered = int(self.config["width"]), int(self.config["height"])

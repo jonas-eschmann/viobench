@@ -9,7 +9,6 @@ import importlib.abc
 import importlib.util
 import io
 import json
-import os
 import sys
 import traceback
 import types
@@ -21,7 +20,6 @@ BUNDLE_ROOT = "/bundle"  # virtual location used for __file__ of bundled modules
 BUNDLE_MODULE = "solution_bundle"  # `import solution_bundle` gives students their data files
 SOLUTION_MODULE = "solution"  # the entry point is always class Solution in solution.py (or solution/__init__.py)
 SOLUTION_CLASS = "Solution"
-SOLUTION_DIR_VARIABLE = "RELPOSE_SOLUTION_DIR"  # dev mode: the host preopened the directory instead of bundling it
 IMU_ROW_VALUES = 7
 POSE_VALUES = 7
 
@@ -61,22 +59,6 @@ class Bundle:
         prefix = prefix.strip("/")
         prefix = prefix + "/" if prefix else ""
         return sorted(name[len(prefix):] for name in self.names if name.startswith(prefix))
-
-
-class DirectoryBundle(Bundle):
-    """Same interface over a preopened directory (dev mode)."""
-
-    def __init__(self, directory):
-        self.directory = directory
-        names = []
-        for root, _, files in os.walk(directory):
-            for file in files:
-                names.append(os.path.relpath(os.path.join(root, file), directory).replace(os.sep, "/"))
-        self.names = frozenset(names)
-
-    def read_bytes(self, name):
-        with open(os.path.join(self.directory, name), "rb") as file:
-            return file.read()
 
 
 class BundleImporter(importlib.abc.MetaPathFinder, importlib.abc.SourceLoader):
@@ -139,16 +121,11 @@ def init(config_view, bundle_view):
     _shape = (height, width, 3)  # always RGB (docs/ABI.md)
     frame_bytes = height * width * 3
 
-    if bundle_view is not None:
-        bundle = Bundle(bytes(bundle_view))
-        sys.meta_path.insert(0, BundleImporter(bundle))
-    else:
-        directory = os.environ.get(SOLUTION_DIR_VARIABLE)
-        if not directory:
-            print("runtime: no solution code (the wasm carries no bundle and no directory was mounted)", file=sys.stderr)
-            return STATUS_NO_SOLUTION, 0
-        bundle = DirectoryBundle(directory)
-        sys.path.insert(0, directory)
+    if bundle_view is None:
+        print("runtime: no solution code (the wasm carries no bundle)", file=sys.stderr)
+        return STATUS_NO_SOLUTION, 0
+    bundle = Bundle(bytes(bundle_view))
+    sys.meta_path.insert(0, BundleImporter(bundle))
     _install_bundle_module(bundle)
     try:
         module = importlib.import_module(SOLUTION_MODULE)

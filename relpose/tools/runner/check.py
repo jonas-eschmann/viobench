@@ -9,11 +9,11 @@ FRAME_RATE_HZ = 20.0  # the nominal rates of every set (docs/ABI.md); solutions 
 IMU_RATE_HZ = 200.0
 
 
-def check(wasm, dev_dir=None, frames=5, logs=None, verbose=False, seed=0, log=print):
+def check(wasm, frames=5, logs=None, verbose=False, seed=0, log=print):
     """Returns 0 when every step succeeded, 1 otherwise. Prints one line per step."""
     rng = np.random.default_rng(seed)
     try:
-        sandbox = Sandbox(wasm, limits=Limits(), log_dir=logs, dev_dir=dev_dir, inherit_stdio=verbose)
+        sandbox = Sandbox(wasm, limits=Limits(), log_dir=logs, inherit_stdio=verbose)
     except SandboxError as error:
         log(f"load failed: {error}")
         return 1

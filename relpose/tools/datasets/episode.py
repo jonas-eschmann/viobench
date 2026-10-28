@@ -160,9 +160,9 @@ class Episode:
         """(guest config, frames) for a solution that declared 320x240 or 640x480 (docs/ABI.md, "Frame format").
 
         Frames are always RGB (H, W, 3): a grayscale-only set arrives with its gray value in all three channels, and
-        nothing says so. Downscaling averages areas and rescales the intrinsics with the pixel-centre convention;
-        there is no upscaling, so a set stored at 320x240 cannot serve a 640x480 solution. Streamed frames stay
-        streamed: the conversion is applied per frame as the runner consumes them."""
+        nothing says so. Downscaling averages areas, upscaling interpolates bilinearly; either way the intrinsics are
+        rescaled with the pixel-centre convention. Streamed frames stay streamed: the conversion is applied per frame
+        as the runner consumes them."""
         resolution = self.resolution if resolution is None else (int(resolution[0]), int(resolution[1]))
         if resolution not in abi.SUPPORTED_RESOLUTIONS:
             raise ValueError(f"resolution must be one of {abi.SUPPORTED_RESOLUTIONS}, got {resolution}")
@@ -175,10 +175,8 @@ class Episode:
         if resolution != source_resolution:
             width, height = resolution
             scale_x, scale_y = width / source_resolution[0], height / source_resolution[1]
-            if scale_x > 1:
-                raise ValueError(f"{self.name} is stored at {source_resolution[0]}x{source_resolution[1]} and cannot be delivered at "
-                                 f"{width}x{height}: sets are only ever downscaled (store them at 640x480 to serve every resolution)")
-            transforms.append(lambda f: cv2.resize(f, (width, height), interpolation=cv2.INTER_AREA))
+            interpolation = cv2.INTER_AREA if scale_x < 1 else cv2.INTER_LINEAR
+            transforms.append(lambda f: cv2.resize(f, (width, height), interpolation=interpolation))
             fx, fy = fx * scale_x, fy * scale_y
             cx, cy = (cx + 0.5) * scale_x - 0.5, (cy + 0.5) * scale_y - 0.5
         if self.channels == 1:  # after the resize: one channel to resample instead of three

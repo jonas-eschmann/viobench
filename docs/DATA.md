@@ -20,13 +20,16 @@ One directory per episode, EuRoC/ASL layout so that standard VIO tooling (evo, O
 (ground truth interpolated to each frame's mid-exposure time, moved into the camera frame via the extrinsics, re-based
 on frame 0). `episode.steps()` yields `(t, frame, imu_window)` exactly as the harness feeds a solution (the first
 window is one frame interval, however much IMU the set recorded before frame 0); `episode.adapt(resolution)` returns
-the frames and config a solution receives (`docs/ABI.md`, "Frame format": always RGB, grayscale replicated; 640 × 480 →
-320 × 240 by area averaging with rescaled intrinsics, never upscaled). The `config` in `episode.json` is the set's full
-description (rates, IMU noise model, hover, name, ...); solutions only get the frame size, intrinsics and `T_cam_imu`.
+the frames and config a solution receives (`docs/ABI.md`, "Frame format": always RGB, grayscale replicated; scaled
+to the declared resolution, area averaging down and bilinear up, with rescaled intrinsics). The `config` in
+`episode.json` is the set's full description (rates, IMU noise model, hover, name, ...); solutions only get the frame
+size, intrinsics and `T_cam_imu`.
 
-A set must be stored at 640 × 480 (or 320 × 240, which then only serves 320 × 240 solutions), RGB or grayscale,
-rectified pinhole, with intrinsics, `T_cam_imu` and ground truth covering every frame on one clock. Simulated episodes
-are stored as RGB at 640 × 480, real ones as grayscale at 640 × 480 (EuRoC's 752 × 480 cropped).
+A set must be stored at 640 × 480 or 320 × 240 (either serves both resolutions), RGB or grayscale, rectified pinhole,
+global or rolling shutter, with intrinsics, `T_cam_imu` and ground truth covering every frame on one clock, and frame
+timestamps at the mid-exposure of the centre row (a converter shifts a source that stamps the first row or the start
+of exposure). Simulated episodes are stored as RGB at 640 × 480, real ones as grayscale at 640 × 480 (EuRoC's
+752 × 480 cropped).
 
 A one-minute episode at 640 × 480 is ~360 MB (RGB PNG); the format has no length limit, and `episode.json` records
 `frames` and `duration_s`.

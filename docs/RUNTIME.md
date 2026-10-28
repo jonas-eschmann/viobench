@@ -40,17 +40,11 @@ my_solution/
   solution.py          class Solution (or a package solution/__init__.py)
   helpers/...          any modules and packages; relative imports work; __file__ is /bundle/<path>
   net.onnx, w.npz      data files: `import solution_bundle as bundle; bundle.read_bytes("net.onnx")`, `np.load(bundle.open("w.npz"))`
-  solution.json         optional: {"resolution": [640, 480]}   (default 320x240)
+  solution.json        optional: {"resolution": [640, 480]}   (default 320x240); `relpose bundle` copies it into the manifest
 ```
 
 Zips are stored uncompressed (there is no zlib in the guest), so `np.savez` rather than `np.savez_compressed`.
 `relpose unbundle solution.wasm -o dir` extracts a bundle again.
-
-## Developing without rebundling
-
-`relpose check runtime.wasm --dir my_solution` mounts the directory into the guest (read-only) instead of a
-bundle, so edits are picked up immediately and tracebacks show real file paths. `evaluate ... --dir my_solution`
-works the same way with `runtime.wasm`.
 
 ## Measuring
 

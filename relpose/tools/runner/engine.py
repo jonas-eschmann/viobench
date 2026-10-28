@@ -29,8 +29,8 @@ def make_config(fuel=True, epochs=True, opt_level="speed", cache=True):
 class Engine:
     """One wasmtime engine with its epoch ticker plus a per-process cache of compiled modules keyed by the binary's hash.
 
-    Hand the *stripped* runtime binary (bundle section removed) to module() so every student submission built on
-    the same runtime.wasm shares one compilation.
+    The bundle is a data segment, so every distinct bundle is its own compilation; only the manifest section is
+    stripped before module(), so modules that differ in nothing else share one.
     """
 
     def __init__(self, fuel=True, epochs=True, opt_level="speed", cache=True):

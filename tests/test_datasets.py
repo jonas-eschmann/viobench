@@ -246,7 +246,7 @@ def test_adapt_always_delivers_rgb():
     assert rgb.adapt()[1] is rgb.frames  # RGB at the stored resolution passes through untouched
 
 
-def test_adapt_downscales_frames_and_intrinsics():
+def test_adapt_rescales_frames_and_intrinsics():
     episode = synthetic_episode(n_frames=2, width=640, height=480)
     config, frames = episode.adapt(resolution=(320, 240))
     assert frames.shape == (2, 240, 320, 3) and (config["width"], config["height"]) == (320, 240)
@@ -254,8 +254,11 @@ def test_adapt_downscales_frames_and_intrinsics():
     assert config["cx"] == pytest.approx((episode.config["camera"]["cx"] + 0.5) / 2 - 0.5)
     # a frame-centre ray keeps its direction: the principal point stays at the image centre
     assert config["cx"] == pytest.approx(320 / 2 - 0.5) and config["cy"] == pytest.approx(240 / 2 - 0.5)
-    with pytest.raises(ValueError, match="only ever downscaled"):
-        synthetic_episode(n_frames=2, width=320, height=240).adapt(resolution=(640, 480))
+    small = synthetic_episode(n_frames=2, width=320, height=240)
+    config, frames = small.adapt(resolution=(640, 480))
+    assert frames.shape == (2, 480, 640, 3) and (config["width"], config["height"]) == (640, 480)
+    assert config["fx"] == pytest.approx(small.config["camera"]["fx"] * 2)
+    assert config["cx"] == pytest.approx((small.config["camera"]["cx"] + 0.5) * 2 - 0.5)
     with pytest.raises(ValueError, match="resolution must be one of"):
         episode.adapt(resolution=(64, 48))
     with pytest.raises(ValueError, match="sets must be stored at"):

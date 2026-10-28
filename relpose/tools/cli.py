@@ -1,6 +1,6 @@
 """The `relpose` command line (also `python -m relpose`).
 
-solution     bundle, unbundle, manifest        Python runtime + directory <-> solution.wasm; declare RGB / VGA (any module)
+solution     bundle, unbundle, manifest        Python runtime + directory <-> solution.wasm; declare VGA (any module)
 runner       check, evaluate, leaderboard      run a module on synthetic frames / on a dataset (disk or freshly simulated); aggregate reports
              debug, score                      run a Python solution in-process (debugger-friendly); score a pose file
 datasets     simulate, convert-euroc, feed     write episodes with HyperDrone (GPU); cut EuRoC sequences into episodes; export raw inputs for native debugging
@@ -43,7 +43,7 @@ def command_bundle(arguments):
     from ..solution.runtime.python.bundler.bundle import bundle
 
     try:
-        summary = bundle(arguments.directory, arguments.output, runtime=arguments.runtime, resolution=arguments.resolution)
+        summary = bundle(arguments.directory, arguments.output, runtime=arguments.runtime)
     except (BundleError, abi.AbiError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
@@ -88,7 +88,7 @@ def command_manifest(arguments):
 def command_check(arguments):
     from .runner.check import check
 
-    return run_with_large_stack(lambda: check(arguments.wasm, dev_dir=arguments.dir, frames=arguments.frames, logs=arguments.logs,
+    return run_with_large_stack(lambda: check(arguments.wasm, frames=arguments.frames, logs=arguments.logs,
                                               verbose=arguments.verbose))
 
 
@@ -116,7 +116,7 @@ def command_evaluate(arguments):
             yield from itertools.islice(dataset_from_arguments(arguments), arguments.simulate)
 
     def run():
-        result = evaluate(arguments.wasm, dataset(), output_dir=arguments.output, limits=limits, dev_dir=arguments.dir, max_episodes=max_episodes)
+        result = evaluate(arguments.wasm, dataset(), output_dir=arguments.output, limits=limits, max_episodes=max_episodes)
         summary = result["summary"]["overall"]
         print(f"overall: {summary['completed']}/{summary['episodes']} episodes completed, ATE median {summary['ate_rmse_median']:.3f} m, "
               f"fuel/frame median {summary['fuel_per_frame_median']:,.0f}")
@@ -228,7 +228,6 @@ def main(argv=None):
     bundle.add_argument("directory")
     bundle.add_argument("-o", "--output", required=True, help="output .wasm")
     bundle.add_argument("--runtime", help="runtime.wasm to build on (default: $RELPOSE_RUNTIME or build/runtime/dist/runtime.wasm)")
-    bundle.add_argument("--resolution", help="frames the solution wants: 320x240 (default) or 640x480 (or solution.json)")
     bundle.set_defaults(function=command_bundle)
 
     unbundle = commands.add_parser("unbundle", help="[solution] extract the embedded directory from a solution .wasm")
@@ -236,14 +235,13 @@ def main(argv=None):
     unbundle.add_argument("-o", "--output", required=True, help="output directory")
     unbundle.set_defaults(function=command_unbundle)
 
-    manifest = commands.add_parser("manifest", help="[solution] show or change a module's manifest (native modules declare RGB / VGA this way)")
+    manifest = commands.add_parser("manifest", help="[solution] show or change a module's manifest (native modules declare VGA this way)")
     manifest.add_argument("wasm")
     manifest.add_argument("--resolution", help="320x240 or 640x480")
     manifest.set_defaults(function=command_manifest)
 
     check = commands.add_parser("check", help="[runner] instantiate a module and run a few synthetic frames through it")
-    check.add_argument("wasm", help="solution .wasm (or a bare runtime.wasm together with --dir)")
-    check.add_argument("--dir", help="dev mode: mount this solution directory instead of a bundle")
+    check.add_argument("wasm", help="solution .wasm")
     check.add_argument("--frames", type=int, default=5)
     check.add_argument("--logs", help="directory for stdout.txt/stderr.txt (default: temporary)")
     check.add_argument("-v", "--verbose", action="store_true", help="pass the guest's stdout/stderr through instead of capturing them")
@@ -253,7 +251,6 @@ def main(argv=None):
     evaluate.add_argument("wasm")
     evaluate.add_argument("datasets", nargs="*", help="episode directories or directories of episodes")
     evaluate.add_argument("-o", "--output", help="report directory (default: ./report-<name>)")
-    evaluate.add_argument("--dir", help="dev mode: mount this solution directory instead of a bundle")
     evaluate.add_argument("--max-episodes", type=int)
     evaluate.add_argument("--step-fuel", type=int, help="fuel budget per step (default from Limits)")
     evaluate.add_argument("--memory-mib", type=int, help="guest memory cap in MiB")

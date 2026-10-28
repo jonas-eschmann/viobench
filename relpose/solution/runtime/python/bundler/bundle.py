@@ -1,19 +1,18 @@
 """`relpose bundle`: a directory of Python code (plus data files) → one self-contained solution.wasm; `unbundle` reverses it.
 
 The directory is zipped (uncompressed, reproducible) and embedded into the Python runtime as a data segment
-(`embed.py`); the manifest (`solution.json` or command-line flags) is written both into the zip and into the
-`relpose.manifest` custom section. Nothing is compiled, so no toolchain is needed beyond the runtime itself.
+(`embed.py`); its `solution.json`, if any, becomes the `relpose.manifest` custom section. Nothing is compiled, so no
+toolchain is needed beyond the runtime itself.
 """
 import ast
 import hashlib
 import io
-import json
 import os
 import zipfile
 from pathlib import Path
 
 from relpose.tools import abi
-from relpose.tools.abi.manifest import parse_resolution, read_manifest, validate_manifest, with_manifest
+from relpose.tools.abi.manifest import directory_manifest, read_manifest, with_manifest
 from relpose.tools.abi.wasm_binary import strip_custom
 
 from . import BundleError as PackagingError
@@ -107,42 +106,28 @@ def validate(directory, files):
     return warnings
 
 
-def make_zip(directory, files, resolution=abi.DEFAULT_RESOLUTION):
-    """Uncompressed (the guest has no zlib), deterministic zip with the manifest at the end. Returns (bytes, manifest)."""
+def make_zip(directory, files):
+    """Uncompressed (the guest has no zlib), deterministic zip."""
     directory = Path(directory)
-    manifest = {}
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:
         for file in files:
-            name = file.as_posix()
-            data = (directory / file).read_bytes()
-            if name == abi.BUNDLE_MANIFEST:
-                manifest = json.loads(data)
-                continue
-            info = zipfile.ZipInfo(name, date_time=ZIP_EPOCH)
+            info = zipfile.ZipInfo(file.as_posix(), date_time=ZIP_EPOCH)
             info.compress_type = zipfile.ZIP_STORED
             info.external_attr = 0o644 << 16
-            archive.writestr(info, data)
-        manifest["resolution"] = list(parse_resolution(resolution))
-        validate_manifest(manifest)
-        info = zipfile.ZipInfo(abi.BUNDLE_MANIFEST, date_time=ZIP_EPOCH)
-        info.external_attr = 0o644 << 16
-        archive.writestr(info, json.dumps(manifest, indent=1, sort_keys=True))
-    return buffer.getvalue(), manifest
+            archive.writestr(info, (directory / file).read_bytes())
+    return buffer.getvalue()
 
 
-def bundle(directory, output, runtime=None, resolution=None):
-    """Writes output (.wasm) and returns a summary dict. resolution defaults to solution.json in the directory."""
+def bundle(directory, output, runtime=None):
+    """Writes output (.wasm) and returns a summary dict. The manifest comes from solution.json in the directory."""
     directory = Path(directory)
     files = collect_files(directory)
-    manifest_path = directory / abi.BUNDLE_MANIFEST
-    existing = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
-    if resolution is None:
-        resolution = existing.get("resolution", abi.DEFAULT_RESOLUTION)
+    manifest = {"resolution": list(abi.DEFAULT_RESOLUTION), **directory_manifest(directory)}
     warnings = validate(directory, files)
     runtime_path = Path(runtime) if runtime else default_runtime()
     runtime_bytes = strip_custom(runtime_path.read_bytes(), abi.MANIFEST_SECTION)
-    payload, manifest = make_zip(directory, files, resolution)
+    payload = make_zip(directory, files)
     result = with_manifest(embed_bundle(runtime_bytes, payload), manifest)
     if extract_bundle(result) != payload or read_manifest(result) != manifest:
         raise PackagingError("internal error: the embedded bundle does not round-trip")

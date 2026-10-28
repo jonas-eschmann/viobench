@@ -35,21 +35,15 @@ Frames are always **RGB**, `uint8`, `height × width × 3`, and the only choice 
 **320 × 240** (default) or **640 × 480**. Nothing else about the format varies between episodes or sets, and the
 config does not say where an episode comes from.
 
-- **Resolution**: every set is stored at 640 × 480 (or 320 × 240), 4:3. A 640 × 480 set is delivered as stored or
-  area-averaged to 320 × 240, with the intrinsics rescaled (pixel-centre convention); nothing is ever upscaled, so a
-  set stored at 320 × 240 cannot serve a 640 × 480 solution and the runner refuses to try. More pixels cost fuel in
-  everything a solution runs on them.
-- **Camera**: rectified pinhole without distortion, global shutter, timestamps at mid-exposure. The intrinsics in the
-  config are those of the delivered resolution; `fx = fy` and a centred principal point are not promised.
+- **Resolution**: the solution selects the resolution it consumes (see the manifest below), e.g. the lower one to save
+  compute: more pixels cost fuel in everything a solution runs on them. Any up- or downscaling from the resolution a
+  set is stored at is left to the harness, which rescales the intrinsics to match (pixel-centre convention).
+- **Camera**: rectified pinhole without distortion.
 
-**Requesting the resolution: the manifest.** A JSON object in the module's custom section `relpose.manifest`, read by
-the harness *before* `init`: `{"resolution": [320, 240] | [640, 480]}`, optional. Python solutions write
-`solution.json` next to `solution.py` and `relpose bundle` copies it into the section (`--resolution` overrides it);
-native modules add the section with `relpose manifest solution.wasm --resolution 640x480`. The harness takes the
-section if present, else a `solution.json` inside the embedded bundle, else the default; in dev mode (`--dir`) the
-directory's `solution.json` is merged on top, so editing it takes effect without rebundling. Unknown keys and other
-resolutions are rejected. The section is removed before compilation: modules that differ only in their manifest share
-one compiled artifact.
+**Requesting the resolution: the manifest.** An optional JSON object in the module's custom section
+`relpose.manifest`, read by the harness *before* `init`: `{"resolution": [640, 480]}`; without it frames are
+320 × 240. Unknown keys and other resolutions are rejected. Python solutions put it in `solution.json` next to
+`solution.py` and `relpose bundle` copies it in; native modules use `relpose manifest solution.wasm --resolution 640x480`.
 
 ## Buffers
 
@@ -63,7 +57,7 @@ All numbers are little-endian; integers are `i32`, floats `f64`.
   `T_cam_imu` refers to. The rows are all IMU samples with `t_previous_frame < t ≤ t_frame` in time order; the first
   frame gets one frame interval as well (`t_0 − 1/20 s < t ≤ t_0`), never more, whatever a set recorded before it.
   `imu_count` may be 0. Nominal rates are 20 Hz (camera) and 200 Hz (IMU); go by the timestamps. Also reused next step.
-- **`t`**: timestamp of the frame in seconds (mid-exposure), same clock as the IMU rows.
+- **`t`**: timestamp of the frame in seconds (mid-exposure of the centre row), same clock as the IMU rows.
 - **`out`**: 7 `f64` `[x, y, z, qx, qy, qz, qw]` — the pose of the *current camera frame* expressed in the
   *first camera frame* (`T_c0_ck`: `p_c0 = R p_ck + t`), unit quaternion with scalar last. Written on status `0`.
 
@@ -105,7 +99,8 @@ matrix; camera axes as in OpenCV: x right, y down, z forward). The intrinsics va
 
 That is all a solution is told, on purpose: only what any calibrated camera-IMU dataset provides. There are no
 rates (the timestamps are in the data), no IMU noise model, no episode length, no statement about how an episode starts
-(at rest or in flight), no colour flag and no name. A solution that needs any of these estimates it from the stream.
+(at rest or in flight), no shutter type or readout time, no colour flag and no name. A solution that needs any of these
+estimates it from the stream.
 
 ## Resource accounting
 

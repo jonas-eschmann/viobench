@@ -55,3 +55,19 @@ def test_memory_and_data_section_roundtrip():
     grown = replace_sections(module, {MEMORY_SECTION_ID: encode_memory_section([Memory(0x01, 5, 10)])})
     assert parse_memory_section(section_payload(grown, MEMORY_SECTION_ID))[0].minimum == 5
     assert section_payload(grown, DATA_SECTION_ID) == section_payload(module, DATA_SECTION_ID)
+
+
+def test_manifest_lives_only_in_its_section(tmp_path):
+    from relpose.tools.abi import AbiError
+    from relpose.tools.abi.manifest import directory_manifest, read_manifest, write_manifest
+
+    assert read_manifest(TINY_MODULE) == {}
+    wasm = tmp_path / "m.wasm"
+    wasm.write_bytes(TINY_MODULE)
+    assert write_manifest(wasm, {"resolution": "640x480"}) == {"resolution": [640, 480]} == read_manifest(wasm.read_bytes())
+    for bad in ({"resolution": [64, 48]}, {"entry": "solution:Solution"}):
+        with pytest.raises(AbiError):
+            write_manifest(wasm, bad)
+    assert directory_manifest(tmp_path) == {}
+    (tmp_path / "solution.json").write_text('{"resolution": "640x480"}')
+    assert directory_manifest(tmp_path) == {"resolution": [640, 480]}

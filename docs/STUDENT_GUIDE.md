@@ -32,16 +32,17 @@ Read `docs/TASK.md` (what to estimate, how it is scored) and `docs/ABI.md` / `do
 
 ```bash
 cp -r relpose/solution/examples/python/dead_reckoning my_solution
-relpose check build/runtime/dist/runtime.wasm --dir my_solution          # synthetic frames, prints status/fuel per step
-relpose evaluate build/runtime/dist/runtime.wasm --dir my_solution build/datasets/public/default-val -o report-dev
-relpose evaluate build/runtime/dist/runtime.wasm --dir my_solution --simulate 8 --condition blur   # fresh episodes, GPU, nothing on disk
+relpose bundle my_solution -o my_solution.wasm             # your runtime + your directory in one file; rerun after every edit
+relpose check my_solution.wasm                             # synthetic frames, prints status/fuel per step
+relpose evaluate my_solution.wasm build/datasets/public/default-val
+relpose evaluate my_solution.wasm --simulate 8 --condition blur   # fresh episodes, GPU, nothing on disk
 ```
 
 `check` catches crashes and protocol errors; `evaluate` gives ATE/RPE and fuel per frame on real episodes
-(`report-dev/report.json`, per-episode `estimate.tum` for plotting with `evo`). `--dir` mounts your directory into the
-guest, so edits take effect immediately and tracebacks show real paths; bundling comes last. To step through your code
-with a debugger run it outside the sandbox: `relpose debug my_solution build/datasets/public/default-val --episode-limit 1`
-(or `python my_solution/solution.py …`), see `docs/DEBUGGING.md`.
+(`report-my_solution/report.json`, per-episode `estimate.tum` for plotting with `evo`). Tracebacks name your files
+`/bundle/<path>`. To step through your code with a debugger, or to iterate without bundling, run it outside the sandbox:
+`relpose debug my_solution build/datasets/public/default-val --episode-limit 1` (or `python my_solution/solution.py …`),
+see `docs/DEBUGGING.md`.
 
 ## 3. Iterate
 

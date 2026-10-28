@@ -92,11 +92,13 @@ class Solution:
         estimate = np.loadtxt(tmp_path / name / "logs" / "set" / episode.name / "estimate.tum")
         assert (estimate[0, 1], estimate[0, 2]) == size and report["summary"]["overall"]["completed"] == 1
         assert estimate[0, 3] == pytest.approx(episode.config["camera"]["fx"] * size[0] / 640)
-    # a set stored at 320x240 cannot serve a 640x480 solution: no upscaling
+    # a set stored at 320x240 serves a 640x480 solution: the harness upscales
     small = synthetic_episode(n_frames=4, width=320, height=240)
     write_episode(small, tmp_path / "small" / small.name)
-    with pytest.raises(ValueError, match="only ever downscaled"):
-        evaluate(tmp_path / "vga.wasm", [tmp_path / "small"], output_dir=tmp_path / "refused", engine=engine, log=lambda *a: None)
+    report = evaluate(tmp_path / "vga.wasm", [tmp_path / "small"], output_dir=tmp_path / "upscaled", engine=engine, log=lambda *a: None)
+    estimate = np.loadtxt(tmp_path / "upscaled" / "logs" / "small" / small.name / "estimate.tum")
+    assert (estimate[0, 1], estimate[0, 2]) == (640, 480) and report["summary"]["overall"]["completed"] == 1
+    assert estimate[0, 3] == pytest.approx(small.config["camera"]["fx"] * 2)
 
 
 def test_evaluate_accepts_an_in_memory_dataset(engine, runtime_path, solution_dir, tmp_path):

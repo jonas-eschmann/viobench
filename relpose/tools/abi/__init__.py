@@ -8,10 +8,9 @@ MANIFEST_SECTION = "relpose.manifest"  # wasm custom section with the manifest J
 BUNDLE_MANIFEST = "solution.json"  # optional file in the directory: {"resolution": [w, h]}
 CHANNELS = 3  # frames are always RGB (H, W, 3); a grayscale-only set arrives with its gray value in all three channels
 DEFAULT_RESOLUTION = (320, 240)  # (width, height) unless the manifest opts into VGA
-SUPPORTED_RESOLUTIONS = ((320, 240), (640, 480))  # also the only resolutions a set may be stored at; 640x480 serves both
+SUPPORTED_RESOLUTIONS = ((320, 240), (640, 480))  # also the only resolutions a set may be stored at; either serves both
 SOLUTION_MODULE = "solution"  # the entry point is always class Solution in solution.py (or solution/__init__.py)
 SOLUTION_CLASS = "Solution"
-SOLUTION_DIR_VARIABLE = "RELPOSE_SOLUTION_DIR"  # dev mode: guest path of the preopened solution directory
 
 IMU_ROW_VALUES = 7  # [t_s, ax, ay, az, gx, gy, gz]
 POSE_VALUES = 7  # [x, y, z, qx, qy, qz, qw]

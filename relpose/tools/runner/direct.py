@@ -15,7 +15,6 @@ import argparse
 import importlib
 import inspect
 import itertools
-import json
 import os
 import sys
 import time
@@ -26,7 +25,7 @@ from pathlib import Path
 import numpy as np
 
 from .. import abi
-from ..abi.manifest import parse_resolution, validate_manifest
+from ..abi.manifest import directory_manifest
 from .metrics import evaluate_trajectory
 
 BUNDLE_MODULE = "solution_bundle"
@@ -79,9 +78,8 @@ class PythonSolution:
 
     def __init__(self, directory, solution_class=None):
         self.directory = Path(directory).resolve()
-        manifest_path = self.directory / abi.BUNDLE_MANIFEST
-        self.manifest = validate_manifest(json.loads(manifest_path.read_text()) if manifest_path.is_file() else {})
-        self.resolution = tuple(parse_resolution(self.manifest.get("resolution", abi.DEFAULT_RESOLUTION)))
+        self.manifest = directory_manifest(self.directory)
+        self.resolution = tuple(self.manifest.get("resolution", abi.DEFAULT_RESOLUTION))
         install_solution_bundle(self.directory)
         if str(self.directory) not in sys.path:
             sys.path.insert(0, str(self.directory))
