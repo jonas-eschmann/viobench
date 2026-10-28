@@ -70,12 +70,8 @@ All numbers are little-endian; integers are `i32`, floats `f64`.
   step):
   - `[x, y, z, qx, qy, qz, qw]`: its pose expressed in the *first camera frame* (`T_c0_ck`: `p_c0 = R p_ck + t`), unit
     quaternion with scalar last;
-  - `[vx, vy, vz, wx, wy, wz]`: its twist in its *own* axes (x right, y down, z forward), the derivative of the same
-    `T_c0_ck`: `v = Rᵀ dt/dt` is the velocity of the camera centre in m/s and `w` (with `[w]× = Rᵀ dR/dt`) the angular
-    velocity in rad/s. Flying straight ahead at 2 m/s while yawing left at 0.5 rad/s is `v = (0, 0, 2)`,
-    `w = (0, −0.5, 0)`, however the camera is oriented relative to frame 0. A filter that tracks the IMU's velocity
-    `v_w` in a world frame converts with `v = R_cam_imu (R_wiᵀ v_w + w_i × r)` and `w = R_cam_imu w_i`, where `w_i`
-    is the IMU's angular velocity and `r = −R_cam_imuᵀ t_cam_imu` the camera centre in IMU coordinates (lever arm).
+  - `[vx, vy, vz, wx, wy, wz]`: its twist in the camera frame, the velocity of the camera centre `v = Rᵀ dt/dt` (m/s)
+    and the angular velocity `w` with `[w]× = Rᵀ dR/dt` (rad/s), where `(R, t)` is `T_c0_ck`.
 
 The harness writes `frame`/`imu` into memory it obtained from `alloc`, calls `step`, then reads `out`. The guest
 owns nothing the host passes except the right to read it during the call; the config bytes given to `init` are

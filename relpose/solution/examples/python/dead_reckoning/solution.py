@@ -106,8 +106,8 @@ class Solution:
     def _twist_camera(self):
         """[v, w] of the camera in camera axes: the camera centre sits at r in IMU coordinates, so it moves with v + w x r."""
         R_cam_imu, r = self.T_cam_imu[:3, :3], self.T_imu_cam[:3, 3]
-        velocity = R_cam_imu @ (self.R_wb.T @ self.v + np.cross(self.omega, r))
-        return np.concatenate([velocity, R_cam_imu @ self.omega])
+        velocity = R_cam_imu @ (self.R_wb.T @ self.v + np.cross(self.omega, r))  # world -> IMU axes, + lever arm, -> camera axes
+        return np.concatenate([velocity, R_cam_imu @ self.omega])  # the angular velocity is the same everywhere on the body
 
     def step(self, t, frame, imu):
         if not self.initialized:

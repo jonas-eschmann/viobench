@@ -22,8 +22,8 @@ compute they spend per frame, so the leaderboard is a curve, not a number.
 
 - its pose: translation (metres) and unit quaternion (scalar last) of `T_c0_ck`, the pose of the current camera frame
   in the first camera frame (`p_c0 = R p_ck + t`);
-- its twist in its own axes: the velocity of the camera centre (m/s) and the angular velocity (rad/s), `v = Rᵀ dt/dt`
-  and `[w]× = Rᵀ dR/dt` of the same `T_c0_ck` (`docs/ABI.md`, `out`, has an example and the conversion from IMU states).
+- its twist in the camera frame: the velocity of the camera centre (m/s) and the angular velocity (rad/s),
+  `v = Rᵀ dt/dt` and `[w]× = Rᵀ dR/dt` of the same `T_c0_ck`.
 
 Metric scale is expected: the IMU makes it observable. Every step must return a usable state, all 13 values: one that
 raises, returns anything else or a value that is not finite ends the episode as failed, so until you have an estimate
