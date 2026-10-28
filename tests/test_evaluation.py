@@ -2,9 +2,11 @@
 import json
 
 import numpy as np
+import pytest
 
 from relpose.solution.runtime.python.bundler.bundle import bundle
 from relpose.tools.datasets.storage import write_episode
+from relpose.tools.runner.metrics import evaluate_trajectory
 from relpose.tools.runner.run import evaluate
 from tests.test_datasets import synthetic_episode
 
@@ -38,12 +40,40 @@ def test_evaluate_report(engine, runtime_path, solution_dir, tmp_path):
     report = evaluate(wasm, [dataset], output_dir=tmp_path / "report", engine=engine, log=lambda *a: None)
     assert report["summary"]["overall"]["episodes"] == 1 and report["summary"]["overall"]["completed"] == 1
     episode_report = report["episodes"][0]
-    assert episode_report["metrics"]["ate_rmse"] < 1e-9 and episode_report["metrics"]["coverage"] == 1.0
+    assert episode_report["metrics"]["ate_rmse"] < 1e-9 and episode_report["metrics"]["held"] == 0
     assert episode_report["fuel_per_frame_median"] > 0
     assert (tmp_path / "report" / "report.json").is_file()
     assert json.loads((tmp_path / "report" / "report.json").read_text())["episodes"][0]["name"] == episode.name
     estimate = np.loadtxt(tmp_path / "report" / "logs" / "set" / episode.name / "estimate.tum")
     np.testing.assert_allclose(estimate[:, 1:], gt, atol=1e-6)
+
+
+@pytest.mark.parametrize("failure", ["raise RuntimeError('flaky')", "return [float('nan')] * 7"])
+def test_a_failed_step_ends_the_episode(failure, engine, runtime_path, solution_dir, tmp_path):
+    episode = synthetic_episode(n_frames=6, width=320, height=240)
+    write_episode(episode, tmp_path / "set" / episode.name)
+    flaky = f"""
+class Solution:
+    def __init__(self, config):
+        self.k = 0
+    def step(self, t, frame, imu):
+        self.k += 1
+        if self.k == 3:
+            {failure}
+        return [self.k, 0, 0, 0, 0, 0, 1]
+"""
+    wasm = tmp_path / "flaky.wasm"
+    bundle(solution_dir(flaky), wasm, runtime=runtime_path)
+    report = evaluate(wasm, [tmp_path / "set"], output_dir=tmp_path / "report", engine=engine, log=lambda *a: None)
+    assert report["summary"]["overall"]["completed"] == 0
+    episode_report = report["episodes"][0]
+    assert not episode_report["completed"] and episode_report["failure"].startswith("step")
+    estimate = np.loadtxt(tmp_path / "report" / "logs" / "set" / episode.name / "estimate.tum")
+    assert list(estimate[:2, 1]) == [1, 2] and np.isnan(estimate[2:, 1:]).all()
+    held = np.tile([0, 0, 0, 0, 0, 0, 1.0], (6, 1))
+    held[:, 0] = [1, 2, 2, 2, 2, 2]  # the frames from the failure on repeat the last pose
+    expected = evaluate_trajectory(episode.ground_truth_relative(), held, episode.frame_times)
+    assert episode_report["metrics"]["held"] == 4 and episode_report["metrics"]["ate_rmse"] == expected.ate_rmse
 
 
 def test_evaluate_delivers_rgb_from_gray_and_rgb_sets(engine, runtime_path, solution_dir, tmp_path):
@@ -80,8 +110,6 @@ class Solution:
     def step(self, t, frame, imu):
         return [frame.shape[1], frame.shape[0], self.config["fx"], 0, 0, 0, 1]
 """
-    import pytest
-
     # only the two supported resolutions are accepted by the manifest validation
     with pytest.raises(Exception, match="resolution"):
         bundle(solution_dir(probe, {"solution.json": '{"resolution": [128, 96]}'}, name="bad"), tmp_path / "bad.wasm", runtime=runtime_path)

@@ -15,6 +15,7 @@ from ..abi.manifest import read_manifest, validate_manifest
 from ..abi.module import runtime_descriptor
 from ..abi.wasm_binary import strip_custom
 from .engine import Engine
+from .metrics import valid_poses
 
 IMU_CAPACITY_ROWS = 1024  # initial IMU buffer; grows on demand
 
@@ -30,18 +31,13 @@ class Limits:
 
 @dataclass
 class StepResult:
-    status: int
-    pose: np.ndarray | None  # [x, y, z, qx, qy, qz, qw] when status == STATUS_OK
+    pose: np.ndarray  # [x, y, z, qx, qy, qz, qw], a usable pose
     fuel: int
     wall_seconds: float
 
-    @property
-    def ok(self):
-        return self.status == abi.STATUS_OK
-
 
 class SandboxError(Exception):
-    """The solution broke the protocol or failed to initialize; the message carries the stderr tail."""
+    """The solution failed: init or a step returned an error, a step returned an unusable pose, or the protocol was broken."""
 
 
 class SandboxTrap(SandboxError):
@@ -190,7 +186,7 @@ class Sandbox:
         self.init_wall_seconds = time.perf_counter() - started
         self.init_fuel = self._consumed(self.limits.init_fuel)
         if status != abi.STATUS_OK:
-            raise SandboxError(f"init failed: {abi.status_name(status)}\n--- stderr tail ---\n{self.stderr_tail()}")
+            raise SandboxError(f"init failed (status {status})\n--- stderr tail ---\n{self.stderr_tail()}")
         self.width, self.height = self.resolution
         self.frame_bytes = self.height * self.width * abi.CHANNELS
         self.frame_pointer = self.alloc(self.frame_bytes)
@@ -219,7 +215,9 @@ class Sandbox:
         status = self._guard(lambda: self._step(self.store, float(t), self.frame_pointer, self.imu_pointer, len(imu), self.out_pointer))
         wall = time.perf_counter() - started
         fuel = self._consumed(self.limits.step_fuel)
-        pose = None
-        if status == abi.STATUS_OK:
-            pose = np.frombuffer(self.read(self.out_pointer, abi.POSE_VALUES * abi.F64_BYTES), dtype=np.float64).copy()
-        return StepResult(status, pose, fuel, wall)
+        if status != abi.STATUS_OK:
+            raise SandboxError(f"step failed (status {status})\n--- stderr tail ---\n{self.stderr_tail()}")
+        pose = np.frombuffer(self.read(self.out_pointer, abi.POSE_VALUES * abi.F64_BYTES), dtype=np.float64).copy()
+        if not valid_poses(pose[None])[0]:
+            raise SandboxError(f"step returned an unusable pose {pose.tolist()} (NaN/inf or an all-zero quaternion)")
+        return StepResult(pose, fuel, wall)

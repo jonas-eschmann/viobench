@@ -31,7 +31,7 @@ def rows(reports):
                 "seconds": summary["duration_s_median"],
                 "ate_m": summary["ate_rmse_median"],
                 "rpe_m_per_s": summary["rpe_translation_rmse_median"],
-                "rot_deg": float(np.degrees(summary["rotation_rmse_median"])) if summary["rotation_rmse_median"] == summary["rotation_rmse_median"] else float("nan"),
+                "rot_deg": float(np.degrees(summary["rotation_rmse_median"])),
                 "fuel_per_frame": summary["fuel_per_frame_median"],
                 "fuel_p95": summary["fuel_per_frame_p95"],
                 "ms_per_frame": summary["wall_per_frame_median_ms"],

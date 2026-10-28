@@ -23,14 +23,9 @@
 #define RELPOSE_IMU_ROW_VALUES 7 /* [t_s, ax, ay, az, gx, gy, gz] as double */
 #define RELPOSE_POSE_VALUES 7    /* [x, y, z, qx, qy, qz, qw] as double, camera k in camera 0 */
 
-/* Status codes returned by init() and step(). */
-#define RELPOSE_STATUS_OK 0           /* step: out[] holds a pose */
-#define RELPOSE_STATUS_NO_ESTIMATE 1  /* step: no pose for this frame (yet) */
-#define RELPOSE_STATUS_EXCEPTION -1   /* an error inside the solution; message on stderr; the episode continues */
-#define RELPOSE_STATUS_PROTOCOL -2    /* step before init, init twice, bad arguments */
-#define RELPOSE_STATUS_RUNTIME -3     /* the module itself could not start */
-#define RELPOSE_STATUS_NO_SOLUTION -4 /* a Python runtime without embedded code */
-#define RELPOSE_STATUS_NOT_FINITE -5  /* pose contains NaN or inf */
+/* Status codes returned by init() and step(): anything but OK is an error (explain it on stderr). */
+#define RELPOSE_STATUS_OK 0     /* init: ready; step: out[] holds the pose */
+#define RELPOSE_STATUS_ERROR -1 /* the episode ends and is marked failed */
 
 #ifdef __cplusplus
 extern "C" {

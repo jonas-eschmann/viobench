@@ -1,4 +1,5 @@
-"""`relpose score`: the metrics of a pose file (TUM format: t x y z qx qy qz qw, NaN rows allowed) against an episode."""
+"""`relpose score`: the metrics of a pose file (TUM format: t x y z qx qy qz qw) against an episode; frames the file has
+no usable pose for (NaN rows, gaps) repeat the previous pose, like the frames after a failure in `relpose evaluate`."""
 import numpy as np
 
 from .. import abi
@@ -29,5 +30,5 @@ def score(episode_dir, tum_path, log=print):
     estimates = load_tum(tum_path, episode.frame_times)
     metrics = evaluate_trajectory(episode.ground_truth_relative(), estimates, episode.frame_times)
     log(f"{episode.dataset}/{episode.name}: ATE {metrics.ate_rmse:.3f} m  RPE {metrics.rpe_translation_rmse:.3f} m/s  "
-        f"rot {np.degrees(metrics.rotation_rmse):.1f} deg  coverage {metrics.coverage:.2f}  sim3 scale {metrics.sim3_scale:.3f}")
+        f"rot {np.degrees(metrics.rotation_rmse):.1f} deg  held {metrics.held}  sim3 scale {metrics.sim3_scale:.3f}")
     return metrics

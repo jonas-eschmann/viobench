@@ -16,7 +16,8 @@ and Rust solutions implement it directly (`relpose/solution/examples/native/cpp_
 | `init` | `(i32, i32) → i32` | `int32_t init(const char *json, uint32_t size)` | once, before any `step` |
 | `step` | `(f64, i32, i32, i32, i32) → i32` | `int32_t step(double t, const uint8_t *frame, const double *imu, int32_t imu_count, double *out)` | once per frame |
 
-Call sequence per episode: `instantiate → _initialize → init → alloc × 3 → step × N → drop`.
+Call sequence per episode: `instantiate → _initialize → init → alloc × 3 → step × N → drop`. The harness guarantees
+this order (`step` only after a successful `init`), so a solution need not check it.
 There is no `reset`: every episode gets a fresh instance (instantiation costs ~0.1 s, Python init ~0.1 s). The host
 treats Python and native modules identically; it does not know what runs inside.
 
@@ -71,19 +72,21 @@ call because the memory may grow and move.
 
 ## Status codes
 
-| code | name | meaning | harness reaction |
-|---|---|---|---|
-| `0` | ok | `out` holds a pose | recorded |
-| `1` | no_estimate | the solution has no pose for this frame yet | recorded as missing (counts as a failed frame in ATE) |
-| `-1` | exception | the solution raised; traceback on stderr | frame missing, episode continues; after 10 consecutive failures the episode is abandoned |
-| `-2` | protocol | `step` before `init`, `init` twice, negative count | episode failed |
-| `-3` | runtime | the runtime itself could not start | submission failed |
-| `-4` | no_solution | runtime without bundled code | submission failed |
-| `-5` | not_finite | pose contains NaN/inf | frame missing |
+| code | from `init` | from `step` |
+|---|---|---|
+| `0` | ready | `out` holds the pose |
+| anything else (return `-1`) | error | error |
+
+Explain an error on stderr (the Python runtime prints the traceback there).
+
+**Every step must deliver a usable pose.** An error from `init` or `step`, a pose that is not finite or has an
+all-zero quaternion, or a trap ends the episode there and marks it failed. It is still scored: the frames from the
+failure on repeat the last pose (identity if there was none). There is no "no estimate": until you have one, return
+your best guess (at rest: identity).
 
 **Traps** (`unreachable`, out-of-bounds memory access, stack overflow, running out of fuel, wall-clock deadline,
-`exit()`/`proc_exit`) kill the instance: the episode is marked failed and the next episode gets a new instance.
-In Python, `sys.exit()` is caught like any exception (status `-1`); `os._exit()` is a trap.
+`exit()`/`proc_exit`) kill the instance; the next episode gets a new instance. In Python, `sys.exit()` is caught like
+any exception (an error); `os._exit()` is a trap.
 
 ## Config JSON
 
@@ -116,9 +119,10 @@ surfaces as an allocation failure inside the guest (Python: `MemoryError`), not 
 ```python
 class Solution:
     def __init__(self, config: dict): ...
-    def step(self, t: float, frame: np.ndarray, imu: np.ndarray) -> Sequence[float] | None:
+    def step(self, t: float, frame: np.ndarray, imu: np.ndarray) -> Sequence[float]:
         """frame: uint8 (H, W, 3) RGB, read-only view valid until the next step;
-        imu: float64 (N, 7) rows [t, ax, ay, az, gx, gy, gz]. Return [x, y, z, qx, qy, qz, qw] or None."""
+        imu: float64 (N, 7) rows [t, ax, ay, az, gx, gy, gz]. Return [x, y, z, qx, qy, qz, qw]; anything else
+        (None included) or raising is an error and ends the episode."""
 ```
 
 The entry point is always `Solution` in `solution.py` (or `solution/__init__.py`) at the root of the bundled

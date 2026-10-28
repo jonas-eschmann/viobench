@@ -16,6 +16,14 @@
 
 #define TIME_TOLERANCE 1e-6 /* seconds: the same slack the host harness uses when selecting IMU rows */
 
+/* The harness's test for a usable pose: finite, with a non-zero quaternion. */
+static int usable(const double *pose) {
+    for (int i = 0; i < RELPOSE_POSE_VALUES; i++) {
+        if (!isfinite(pose[i])) return 0;
+    }
+    return pose[3] != 0 || pose[4] != 0 || pose[5] != 0 || pose[6] != 0;
+}
+
 static void *read_file(const char *directory, const char *name, size_t *size) {
     char path[4096];
     snprintf(path, sizeof path, "%s/%s", directory, name);
@@ -87,9 +95,9 @@ int main(int argc, char **argv) {
     double pose[RELPOSE_POSE_VALUES];
     double previous = -INFINITY;
     long window_start = 0;
-    long estimated = 0;
+    long k = 0;
     double squared_error = 0.0, total_seconds = 0.0;
-    for (long k = 0; k < frames; k++) {
+    for (; k < frames; k++) {
         double t = frame_times[k];
         /* IMU rows with t_prev < t_row <= t (the feed starts at frame 0's window, so frame 0 gets everything up to its own time) */
         while (window_start < imu_rows && imu[window_start * RELPOSE_IMU_ROW_VALUES] <= previous + TIME_TOLERANCE) window_start++;
@@ -98,22 +106,21 @@ int main(int argc, char **argv) {
         double started = now_seconds();
         status = step(t, pixels + (size_t)k * frame_bytes, imu + window_start * RELPOSE_IMU_ROW_VALUES, (int32_t)(window_end - window_start), pose);
         double seconds = now_seconds() - started;
-        total_seconds += seconds;
-        if (status == RELPOSE_STATUS_OK) {
-            fprintf(tum, "%.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g\n", t, pose[0], pose[1], pose[2], pose[3], pose[4], pose[5], pose[6]);
-            const double *truth = ground_truth + k * RELPOSE_POSE_VALUES;
-            double dx = pose[0] - truth[0], dy = pose[1] - truth[1], dz = pose[2] - truth[2];
-            squared_error += dx * dx + dy * dy + dz * dz;
-            estimated++;
-        } else {
-            fprintf(tum, "%.9g nan nan nan nan nan nan nan\n", t);
-            printf("frame %ld: status %d\n", k, status);
+        if (status != RELPOSE_STATUS_OK || !usable(pose)) {
+            printf("frame %ld: %s; the harness ends the episode here and marks it failed\n", k,
+                   status != RELPOSE_STATUS_OK ? "step returned an error" : "pose not usable (NaN/inf or all-zero quaternion)");
+            break;
         }
+        total_seconds += seconds;
+        fprintf(tum, "%.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g\n", t, pose[0], pose[1], pose[2], pose[3], pose[4], pose[5], pose[6]);
+        const double *truth = ground_truth + k * RELPOSE_POSE_VALUES;
+        double dx = pose[0] - truth[0], dy = pose[1] - truth[1], dz = pose[2] - truth[2];
+        squared_error += dx * dx + dy * dy + dz * dz;
         previous = t;
         window_start = window_end;
     }
     fclose(tum);
-    printf("%ld/%ld frames estimated, position RMSE over them %.3f m, %.2f ms/frame (host, no fuel); poses in %s\n", estimated, frames,
-           estimated ? sqrt(squared_error / (double)estimated) : NAN, 1e3 * total_seconds / (double)frames, output);
-    return 0;
+    printf("%ld/%ld frames ok, position RMSE over them %.3f m, %.2f ms/frame (host, no fuel); poses in %s\n", k, frames,
+           sqrt(squared_error / (double)k), 1e3 * total_seconds / (double)k, output);
+    return k < frames;
 }

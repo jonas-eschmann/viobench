@@ -33,7 +33,6 @@ bool find_number(const std::string& json, const char* key, double& out) {
 
 struct State {
     Config config;
-    bool initialized = false;
     long frames = 0;
     std::vector<uint8_t> previous_frame;  // keep the previous frame: the host reuses its buffer every step
     double position[3] = {0, 0, 0};
@@ -48,8 +47,8 @@ int32_t abi_version() { return RELPOSE_ABI_VERSION; }
 
 void* alloc(uint32_t size) { return std::malloc(size ? size : 1); }
 
+// Called once per instance; step() is only called after init() succeeded.
 int32_t init(const char* json, uint32_t length) {
-    if (state.initialized) return RELPOSE_STATUS_PROTOCOL;
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // a reactor never exits: unbuffered prints reach the host log
     std::setvbuf(stderr, nullptr, _IONBF, 0);
     std::string text(json, length);
@@ -62,17 +61,15 @@ int32_t init(const char* json, uint32_t length) {
     find_number(text, "cy", state.config.cy);
     if (state.config.width <= 0 || state.config.height <= 0) {
         std::fprintf(stderr, "config without image size\n");
-        return RELPOSE_STATUS_EXCEPTION;
+        return RELPOSE_STATUS_ERROR;
     }
     state.previous_frame.resize(static_cast<size_t>(state.config.width) * state.config.height * 3);  // RGB
     std::printf("init: %dx%d fx=%.1f cx=%.1f\n", state.config.width, state.config.height, state.config.fx, state.config.cx);
-    state.initialized = true;
     return RELPOSE_STATUS_OK;
 }
 
 // frame: height*width*3 uint8 RGB; imu: imu_count rows [t, ax, ay, az, gx, gy, gz]; out: [x, y, z, qx, qy, qz, qw]
 int32_t step(double t, const uint8_t* frame, const double* imu, int32_t imu_count, double* out) {
-    if (!state.initialized || imu_count < 0) return RELPOSE_STATUS_PROTOCOL;
     state.frames++;
     double mean = 0;
     for (size_t i = 0; i < state.previous_frame.size(); i++) mean += frame[i];

@@ -23,12 +23,14 @@ buffers in numpy arrays and calls `Solution.step`.
 
 - `init` runs once per episode; a fresh instance is created for every episode (no state leaks between episodes).
 - Exceptions in `Solution.__init__`/`step` are caught by the shim: traceback to stderr (shown by `check` and kept in
-  the evaluation logs), status `-1`, the episode continues. Ten consecutive failures abandon the episode.
+  the evaluation logs), status `-1`, the episode ends and is marked failed. Returning `None`, a wrong shape or a pose
+  with NaN/inf does the same.
 - `sys.exit()` is an exception like any other. `os._exit()`, a C-level `abort()` or a memory fault trap the instance:
   episode failed.
 - Running out of fuel in one `step` (`Limits.step_fuel`) or exceeding the wall-clock deadline traps: episode failed.
   Budget your per-frame work; `check` prints fuel per step.
-- Memory is capped (`Limits.memory_bytes`): a too-large allocation raises `MemoryError` (recoverable).
+- Memory is capped (`Limits.memory_bytes`): a too-large allocation raises `MemoryError` (catch it yourself to recover;
+  uncaught, it ends the episode like any exception).
 - The frame array handed to `step` is a read-only view into a buffer the harness overwrites with the next frame; copy
   it (`frame.copy()`) if you keep it. OpenCV accepts read-only inputs.
 - `print` output goes to the log; keep it light, host calls are free in fuel but cost wall time.

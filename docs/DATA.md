@@ -105,6 +105,6 @@ either.
 ## Metrics
 
 `relpose.tools.runner.metrics.evaluate_trajectory(ground_truth, estimate, timestamps)` → ATE (no alignment), rotation RMSE, RPE at
-1 s, Sim(3)-aligned ATE and scale, coverage, final drift. `relpose evaluate solution.wasm <dataset dirs>`
+1 s, Sim(3)-aligned ATE and scale, final drift, held frames. `relpose evaluate solution.wasm <dataset dirs>`
 writes `report.json` with per-episode metrics, fuel and wall-time statistics, plus `estimate.tum` per episode
 (`t x y z qx qy qz qw`, loadable with `evo_traj tum`).

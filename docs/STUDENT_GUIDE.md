@@ -94,7 +94,7 @@ OpenCV's static libraries behind if you want them. Configured with your host com
 | `ModuleNotFoundError: scipy` | not available in the reference runtime; numpy + OpenCV only (`docs/RUNTIME.md`), or build your own |
 | `trap OUT_OF_FUEL` | one step exceeded the fuel budget: reduce work per frame (resolution, feature count, iterations) |
 | `MemoryError` | the 2 GiB cap; avoid keeping every frame |
-| status `not_finite` | NaN in the pose: guard divisions and normalise quaternions |
+| `step returned an unusable pose` | NaN/inf or an all-zero quaternion in the pose: guard divisions and normalise quaternions |
 | frames look identical | you kept a view of the frame buffer; `frame.copy()` |
 | `np.load` fails on `.npz` | compressed archive: save with `np.savez`, not `np.savez_compressed` |
 | real data looks "upside down" in the IMU | the IMU frame of the real sensor is not gravity-aligned at start; estimate gravity from the measurements |

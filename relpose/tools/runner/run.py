@@ -16,8 +16,6 @@ from .engine import WASMTIME_VERSION, Engine
 from .metrics import evaluate_trajectory
 from .sandbox import Limits, Sandbox, SandboxError, SandboxTrap
 
-MAX_CONSECUTIVE_FAILURES = 10
-
 
 @dataclass
 class EpisodeReport:
@@ -25,9 +23,8 @@ class EpisodeReport:
     dataset: str
     frames: int
     duration_s: float  # first to last frame; episodes of one set share it, sets may differ
-    completed: bool  # all frames were fed (no trap / abandonment)
-    failure: str | None  # trap or protocol error text
-    statuses: dict  # status name -> count
+    completed: bool  # all frames were fed; otherwise the episode failed and the remaining frames repeat the last pose
+    failure: str | None  # why it ended early: init failed, a step failed or returned an unusable pose, a trap
     fuel_init: int
     fuel_per_frame_median: float
     fuel_per_frame_p95: float
@@ -48,11 +45,10 @@ def null_pose_estimates(n):
 
 
 def run_episode(wasm_path, episode, engine, limits, log_dir):
-    """One episode through a fresh Sandbox; returns (EpisodeReport, estimates (N, 7) with NaN rows for missing frames)."""
+    """One episode through a fresh Sandbox; returns (EpisodeReport, estimates (N, 7) with NaN rows from where it failed)."""
     estimates = null_pose_estimates(episode.num_frames)
     fuel = np.zeros(episode.num_frames)
     wall = np.zeros(episode.num_frames)
-    statuses = {}
     failure = None
     completed = False
     fuel_init = 0
@@ -63,20 +59,11 @@ def run_episode(wasm_path, episode, engine, limits, log_dir):
         config, frames = episode.adapt(sandbox.resolution)
         sandbox.init(config)
         fuel_init, wall_init = sandbox.init_fuel, sandbox.init_wall_seconds
-        consecutive = 0
         for index, (t, frame, imu) in enumerate(episode.steps(frames)):
             result = sandbox.step(t, frame, imu)
-            name = abi.status_name(result.status)
-            statuses[name] = statuses.get(name, 0) + 1
             fuel[index], wall[index] = result.fuel, result.wall_seconds
-            if result.ok:
-                estimates[index] = result.pose
-            consecutive = consecutive + 1 if result.status < 0 else 0
-            if consecutive >= MAX_CONSECUTIVE_FAILURES:
-                failure = f"abandoned after {consecutive} consecutive failing steps (last: {name})"
-                break
-        else:
-            completed = True
+            estimates[index] = result.pose
+        completed = True
     except SandboxTrap as trap:
         failure = f"trap {trap.trap_code}: {trap.trap_message}"
     except SandboxError as error:
@@ -92,7 +79,6 @@ def run_episode(wasm_path, episode, engine, limits, log_dir):
         duration_s=float(episode.duration),
         completed=completed,
         failure=failure,
-        statuses=statuses,
         fuel_init=int(fuel_init),
         fuel_per_frame_median=float(np.median(per_frame_fuel)),
         fuel_per_frame_p95=float(np.percentile(per_frame_fuel, 95)),
@@ -116,8 +102,7 @@ def summarize(reports):
             "duration_s_median": float(np.median([r.duration_s for r in group])),
             "ate_rmse_median": float(np.median([r.metrics["ate_rmse"] for r in group])),
             "rpe_translation_rmse_median": float(np.nanmedian([r.metrics["rpe_translation_rmse"] for r in group])),
-            "rotation_rmse_median": float(np.nanmedian([r.metrics["rotation_rmse"] for r in group])),
-            "coverage_mean": float(np.mean([r.metrics["coverage"] for r in group])),
+            "rotation_rmse_median": float(np.median([r.metrics["rotation_rmse"] for r in group])),
             "fuel_per_frame_median": float(np.median([r.fuel_per_frame_median for r in group])),
             "fuel_per_frame_p95": float(np.median([r.fuel_per_frame_p95 for r in group])),
             "wall_per_frame_median_ms": float(np.median([r.wall_per_frame_median_ms for r in group])),
@@ -158,7 +143,7 @@ def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_
                    header="t x y z qx qy qz qw (camera k in camera 0 frame)", comments="# ")
         m = report.metrics
         log(f"{episode.dataset}/{episode.name}: {'ok' if report.completed else 'FAILED'} ATE {m['ate_rmse']:.3f} m  RPE {m['rpe_translation_rmse']:.3f} m/s  "
-            f"rot {np.degrees(m['rotation_rmse']):.1f} deg  coverage {m['coverage']:.2f}  fuel/frame {report.fuel_per_frame_median:,.0f} (p95 {report.fuel_per_frame_p95:,.0f})  "
+            f"rot {np.degrees(m['rotation_rmse']):.1f} deg  held {m['held']}  fuel/frame {report.fuel_per_frame_median:,.0f} (p95 {report.fuel_per_frame_p95:,.0f})  "
             f"wall/frame {report.wall_per_frame_median_ms:.1f} ms" + (f"  [{report.failure}]" if report.failure else ""))
     if not reports:
         raise ValueError("the dataset yielded no episodes")

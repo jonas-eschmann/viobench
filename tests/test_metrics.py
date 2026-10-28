@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from relpose.tools.geometry import invert, matrices_to_poses, matrix_to_quaternion, poses_to_matrices, quaternion_to_matrix
-from relpose.tools.runner.metrics import evaluate_trajectory, umeyama_sim3
+from relpose.tools.runner.metrics import evaluate_trajectory, hold_last_pose, umeyama_sim3
 
 
 def random_poses(rng, n):
@@ -28,21 +28,26 @@ def test_perfect_estimate_has_zero_error():
     m = evaluate_trajectory(gt, gt.copy(), t)
     assert m.ate_rmse == pytest.approx(0, abs=1e-12) and m.rotation_rmse == pytest.approx(0, abs=1e-7)
     assert m.rpe_translation_rmse == pytest.approx(0, abs=1e-12) and m.rpe_pairs == 20
-    assert m.coverage == 1.0 and m.sim3_scale == pytest.approx(1.0)
+    assert m.held == 0 and m.sim3_scale == pytest.approx(1.0)
 
 
-def test_constant_offset_and_missing_frames():
+def test_constant_offset_and_held_frames():
     rng = np.random.default_rng(2)
     gt = random_poses(rng, 30)
     t = np.arange(30) * 0.05
     est = gt.copy()
     est[:, 0] += 0.5  # half a metre off everywhere
-    est[5] = np.nan
-    m = evaluate_trajectory(gt, est, t, max_position_error=2.0)
-    assert m.estimated == 29
-    assert m.ate_rmse_valid == pytest.approx(0.5)
-    assert m.ate_rmse == pytest.approx(np.sqrt((29 * 0.25 + 4.0) / 30))
-    assert m.final_drift == pytest.approx(0.5)
+    m = evaluate_trajectory(gt, est, t)
+    assert m.held == 0 and m.ate_rmse == pytest.approx(0.5) and m.final_drift == pytest.approx(0.5)
+    est[0] = np.nan  # no pose yet: identity
+    est[5] = np.nan  # a failed step: repeats frame 4
+    est[6, 3:] = 0  # a zero quaternion is no pose either
+    held = hold_last_pose(est)
+    np.testing.assert_array_equal(held[0], [0, 0, 0, 0, 0, 0, 1])
+    np.testing.assert_array_equal(held[5:7], [est[4], est[4]])
+    np.testing.assert_array_equal(np.delete(held, [0, 5, 6], axis=0), np.delete(est, [0, 5, 6], axis=0))
+    m = evaluate_trajectory(gt, est, t)
+    assert m.held == 3 and m.ate_rmse == pytest.approx(evaluate_trajectory(gt, held, t).ate_rmse) and m.ate_rmse > 0.5
 
 
 def test_scaled_estimate_is_fixed_by_sim3():

@@ -24,13 +24,14 @@ def test_direct_run_matches_the_sandbox(engine, runtime_path, tmp_path):
     from relpose.solution.runtime.python.bundler.bundle import bundle
     from relpose.tools.runner.run import evaluate
 
-    episode = synthetic_episode(n_frames=30, width=320, height=240)  # 1.5 s: dead reckoning calibrates on the first 0.5 s, then estimates
+    episode = synthetic_episode(n_frames=30, width=320, height=240)  # 1.5 s: dead reckoning calibrates on the first 0.5 s (identity), then estimates
     dataset = tmp_path / "set"
     write_episode(episode, dataset / episode.name)
     solution = direct.PythonSolution(EXAMPLES / "python" / "dead_reckoning")
     assert solution.resolution == (320, 240)
     [(_, estimates, metrics)] = direct.run(solution, [dataset], output_dir=tmp_path / "direct", log=lambda *a: None)
-    assert estimates.shape == (30, 7) and np.isfinite(estimates[-1]).all() and 0 < metrics.coverage < 1
+    assert estimates.shape == (30, 7) and metrics.held == 0
+    np.testing.assert_array_equal(estimates[0], [0, 0, 0, 0, 0, 0, 1])
     written = np.loadtxt(tmp_path / "direct" / "set" / episode.name / "estimate.tum")
     np.testing.assert_allclose(written[:, 1:], estimates, atol=1e-8)
 
@@ -97,15 +98,16 @@ def test_feed_and_score(tmp_path, capsys):
     np.testing.assert_allclose(imu, episode.delivered_imu())
     gt = np.fromfile(feed / "gt.f64").reshape(6, 7)
     np.testing.assert_allclose(gt, episode.ground_truth_relative())
-    # a perfect pose file scores zero; one with a missing frame has coverage < 1
+    # a perfect pose file scores zero; a frame missing from the file repeats the previous pose (identity for the first)
     tum = tmp_path / "perfect.tum"
     np.savetxt(tum, np.column_stack([episode.frame_times, gt]), fmt="%.12g")
     metrics = score(tmp_path / "set" / episode.name, tum)
-    assert metrics.ate_rmse < 1e-9 and metrics.coverage == 1.0
+    assert metrics.ate_rmse < 1e-9 and metrics.held == 0
     assert "ATE 0.000" in capsys.readouterr().out
     rows = np.column_stack([episode.frame_times, gt])[1:]  # first frame missing
     np.savetxt(tum, rows, fmt="%.12g")
     assert np.isnan(load_tum(tum, episode.frame_times)[0]).all()
+    assert score(tmp_path / "set" / episode.name, tum, log=lambda *a: None).held == 1
     assert cli(["score", str(tmp_path / "set" / episode.name), str(tum)]) == 0
 
 
@@ -126,8 +128,8 @@ def test_native_host_debug_build(tmp_path):
     tum = tmp_path / "estimate.tum"
     run = subprocess.run([str(build / "debug"), str(feed), str(tum)], capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
-    assert "5/5 frames estimated" in run.stdout
+    assert "5/5 frames ok" in run.stdout
     estimates = load_tum(tum, episode.frame_times)
     np.testing.assert_allclose(estimates, np.tile([0, 0, 0, 0, 0, 0, 1.0], (5, 1)))
     metrics = score(tmp_path / "set" / episode.name, tum, log=lambda *a: None)
-    assert metrics.coverage == 1.0
+    assert metrics.held == 0

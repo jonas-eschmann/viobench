@@ -104,7 +104,7 @@ class Solution:
             self.calibration_samples.extend(imu.tolist())
             samples = self.calibration_samples
             if len(samples) < 2 or samples[-1][0] - samples[0][0] < CALIBRATION_SECONDS:
-                return None  # still calibrating; no estimate yet
+                return [0, 0, 0, 0, 0, 0, 1.0]  # still calibrating at rest: identity until there is an estimate
             self._initialize()
             self.last_t = imu[-1, 0] if len(imu) else t
             self.T_w_c0 = self._pose_camera()

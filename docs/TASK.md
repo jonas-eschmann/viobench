@@ -20,7 +20,8 @@ compute they spend per frame, so the leaderboard is a curve, not a number.
 
 `[x, y, z, qx, qy, qz, qw]`: translation (metres) and unit quaternion (scalar last) of `T_c0_ck`, the pose of the
 current camera frame in the first camera frame (`p_c0 = R p_ck + t`). Metric scale is expected: the IMU makes it
-observable. Return `None` while you have no estimate yet (counted as a missing frame).
+observable. Every step must return a usable pose: one that raises or returns none ends the episode as failed, so
+until you have an estimate return your best guess (at rest: identity).
 
 Everything is **causal**: at step `k` you have seen frames `0..k` and IMU samples up to `t_k`, nothing later. The
 estimate for frame `k` is final once `step` returns.
@@ -30,13 +31,12 @@ estimate for frame `k` is final once `step` returns.
 Per episode (`relpose.tools.runner.metrics`):
 
 - **ATE** – RMSE of the position error over all frames, in the frame-0 coordinates, *without* any alignment (frame 0
-  defines the frame; a missing/invalid estimate counts with the error of a stationary estimator, i.e. the ground-truth
-  distance travelled);
+  defines the frame);
 - rotation RMSE (geodesic angle);
 - **RPE** at Δ = 1 s – RMSE of the relative pose error between frames one second apart (drift rate, robust to a single
   early mistake);
-- diagnostics: Sim(3)-aligned ATE and the fitted scale (separates "wrong scale" from "wrong shape"), coverage,
-  final drift per metre travelled.
+- diagnostics: Sim(3)-aligned ATE and the fitted scale (separates "wrong scale" from "wrong shape"), final
+  drift per metre travelled, held frames (after a failure).
 
 Compute (`relpose.tools.runner.run`):
 
@@ -46,8 +46,8 @@ Compute (`relpose.tools.runner.run`):
 
 Each dataset category (default simulation, motion blur, low light, oversaturation, real) is summarised by the median
 ATE and median fuel per frame over its episodes. A submission is a point in the (fuel/frame, ATE) plane per category;
-your submissions together form your curve. Failures (trap, exceptions on 10 consecutive frames, protocol errors)
-mark an episode failed: its ATE is the stationary-estimator error and it stays on the record.
+your submissions together form your curve. A failure (an error from `init` or `step`, an unusable pose, a trap)
+ends the episode and marks it failed: the frames from there on repeat the last pose, and it stays on the record.
 
 ## Limits (default `Limits` in `relpose.tools.runner.sandbox`)
 

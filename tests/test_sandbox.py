@@ -36,7 +36,6 @@ def test_identity_solution_round_trip(engine, runtime_path, solution_dir, tmp_pa
     sandbox.init(CONFIG)
     assert sandbox.init_fuel > 0
     results = [sandbox.step(0.05 * (k + 1), FRAME, IMU) for k in range(3)]
-    assert all(result.status == abi.STATUS_OK for result in results)
     np.testing.assert_array_equal(results[0].pose, [0, 0, 0, 0, 0, 0, 1])
     assert all(result.fuel > 0 for result in results)
     # fuel is deterministic for deterministic code: a second instance repeats the exact per-step numbers
@@ -60,7 +59,6 @@ class Solution:
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source), tmp_path)
     sandbox.init(CONFIG)
     result = sandbox.step(0.05, FRAME, IMU)
-    assert result.status == abi.STATUS_OK, sandbox.stderr_tail()
     assert result.pose[0] == FRAME[7, 9, 1] and result.pose[1] == 0.1 and result.pose[2] == 0.05
 
 
@@ -68,7 +66,7 @@ def test_empty_imu_window(engine, runtime_path, solution_dir, tmp_path):
     source = IDENTITY.replace("return np.array", "assert imu.shape == (0, 7)\n        return np.array")
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source), tmp_path)
     sandbox.init(CONFIG)
-    assert sandbox.step(0.05, FRAME, np.zeros((0, 7))).status == abi.STATUS_OK
+    sandbox.step(0.05, FRAME, np.zeros((0, 7)))
 
 
 def test_none_nan_and_bad_shape(engine, runtime_path, solution_dir, tmp_path):
@@ -83,13 +81,17 @@ class Solution:
 """
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source), tmp_path)
     sandbox.init(CONFIG)
-    assert sandbox.step(0.05, FRAME, IMU).status == abi.STATUS_NO_ESTIMATE
-    assert sandbox.step(0.10, FRAME, IMU).status == abi.STATUS_NOT_FINITE
-    assert sandbox.step(0.15, FRAME, IMU).status == abi.STATUS_EXCEPTION
-    assert "must return 7 values" in sandbox.stderr_tail()
+    with pytest.raises(SandboxError, match="step failed"):
+        sandbox.step(0.05, FRAME, IMU)
+    assert "got None" in sandbox.stderr_tail()
+    with pytest.raises(SandboxError, match="unusable pose"):  # returned fine, but the harness rejects the pose
+        sandbox.step(0.10, FRAME, IMU)
+    with pytest.raises(SandboxError, match="step failed"):
+        sandbox.step(0.15, FRAME, IMU)
+    assert "got shape (3,)" in sandbox.stderr_tail()
 
 
-def test_exception_shows_bundle_traceback_and_episode_continues(engine, runtime_path, solution_dir, tmp_path):
+def test_exception_shows_bundle_traceback(engine, runtime_path, solution_dir, tmp_path):
     source = """
 import numpy as np
 from helpers.math import blow_up
@@ -105,9 +107,9 @@ class Solution:
     helpers = {"helpers/__init__.py": "", "helpers/math.py": "def blow_up():\n    raise RuntimeError('kaboom in helper')\n"}
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source, helpers), tmp_path)
     sandbox.init(CONFIG)
-    assert sandbox.step(0.05, FRAME, IMU).status == abi.STATUS_OK
-    assert sandbox.step(0.10, FRAME, IMU).status == abi.STATUS_EXCEPTION
-    assert sandbox.step(0.15, FRAME, IMU).status == abi.STATUS_OK  # interpreter is still consistent
+    sandbox.step(0.05, FRAME, IMU)
+    with pytest.raises(SandboxError, match="step failed"):
+        sandbox.step(0.10, FRAME, IMU)
     stderr = sandbox.stderr_tail()
     assert 'File "/bundle/helpers/math.py", line 2' in stderr
     assert "raise RuntimeError('kaboom in helper')" in stderr  # source line, not just the location
@@ -134,14 +136,12 @@ class Solution:
     extra = {"model/weights.npz": weights.getvalue(), "model/meta.json": '{"layers": 2}', "mypkg/__init__.py": "", "mypkg/data.txt": "hi"}
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source, extra), tmp_path)
     sandbox.init(CONFIG)
-    result = sandbox.step(0.05, FRAME, IMU)
-    assert result.status == abi.STATUS_OK, sandbox.stderr_tail()
-    assert result.pose[0] == 15.0
+    assert sandbox.step(0.05, FRAME, IMU).pose[0] == 15.0
 
 
 def test_init_exception_reported(engine, runtime_path, solution_dir, tmp_path):
     sandbox = make_sandbox(engine, runtime_path, solution_dir("class Solution:\n    def __init__(self, config):\n        raise ValueError('bad init')\n"), tmp_path)
-    with pytest.raises(SandboxError, match="exception"):
+    with pytest.raises(SandboxError, match="init failed"):
         sandbox.init(CONFIG)
     assert "ValueError: bad init" in sandbox.stderr_tail()
 
@@ -150,8 +150,9 @@ def test_sys_exit_is_an_exception_not_a_trap(engine, runtime_path, solution_dir,
     source = IDENTITY.replace("return np.array", "import sys; sys.exit(3)\n        return np.array")
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source), tmp_path)
     sandbox.init(CONFIG)
-    assert sandbox.step(0.05, FRAME, IMU).status == abi.STATUS_EXCEPTION
-    assert sandbox.step(0.10, FRAME, IMU).status == abi.STATUS_EXCEPTION
+    with pytest.raises(SandboxError, match="step failed"):
+        sandbox.step(0.05, FRAME, IMU)
+    assert not sandbox.dead
 
 
 def test_os_exit_kills_the_instance(engine, runtime_path, solution_dir, tmp_path):
@@ -190,17 +191,19 @@ def test_deep_recursion_is_a_python_error(engine, runtime_path, solution_dir, tm
     source = IDENTITY.replace("return np.array", "def f(n): return f(n + 1)\n        f(0)\n        return np.array")
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source), tmp_path)
     sandbox.init(CONFIG)
-    assert sandbox.step(0.05, FRAME, IMU).status == abi.STATUS_EXCEPTION
-    assert "RecursionError" in sandbox.stderr_tail()
+    with pytest.raises(SandboxError, match="step failed"):
+        sandbox.step(0.05, FRAME, IMU)
+    assert not sandbox.dead and "RecursionError" in sandbox.stderr_tail()
 
 
 def test_memory_limit_is_a_python_error(engine, runtime_path, solution_dir, tmp_path):
     source = IDENTITY.replace("return np.array", "if t < 0.08: big = np.ones(400 * 2**20, np.uint8)\n        return np.array")
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source), tmp_path, limits=Limits(memory_bytes=256 << 20))
     sandbox.init(CONFIG)
-    assert sandbox.step(0.05, FRAME, IMU).status == abi.STATUS_EXCEPTION
-    assert "MemoryError" in sandbox.stderr_tail()
-    assert sandbox.step(0.10, FRAME, IMU).status == abi.STATUS_OK
+    with pytest.raises(SandboxError, match="step failed"):
+        sandbox.step(0.05, FRAME, IMU)
+    assert not sandbox.dead and "MemoryError" in sandbox.stderr_tail()
+    sandbox.step(0.10, FRAME, IMU)  # the interpreter survives: a solution may catch MemoryError itself
 
 
 def test_opencv_on_the_read_only_frame(engine, runtime_path, solution_dir, tmp_path):
@@ -227,7 +230,6 @@ class Solution:
     frame = np.repeat(blocks[:, :, None], 3, axis=2)
     for k in range(2):
         result = sandbox.step(0.05 * (k + 1), frame, IMU)
-        assert result.status == abi.STATUS_OK, sandbox.stderr_tail()
     assert result.pose[0] > 0 and result.pose[1] > 0
 
 
@@ -259,7 +261,6 @@ class Solution:
     sandbox.init(CONFIG)
     for k in range(4):  # ~512 MiB of heap growth in total, far beyond the zip
         result = sandbox.step(0.05 * (k + 1), FRAME, IMU)
-        assert result.status == abi.STATUS_OK, sandbox.stderr_tail()
         assert result.pose[0] == 1.0, "bundle bytes were corrupted by heap growth"
 
 
@@ -295,7 +296,7 @@ def test_abi_constants_match_the_guest_shim_and_the_native_header():
     repo = Path(__file__).resolve().parents[1]
     shim = (repo / "relpose" / "solution" / "runtime" / "python" / "guest" / "relpose_guest.py").read_text()
     header = (repo / "relpose" / "solution" / "runtime" / "native" / "relpose_abi.h").read_text()
-    for name in ("STATUS_OK", "STATUS_NO_ESTIMATE", "STATUS_EXCEPTION", "STATUS_PROTOCOL", "STATUS_RUNTIME", "STATUS_NO_SOLUTION", "STATUS_NOT_FINITE"):
+    for name in ("STATUS_OK", "STATUS_ERROR"):
         assert f"{name} = {getattr(abi, name)}" in shim
         assert f"#define RELPOSE_{name} {getattr(abi, name)}" in header
     assert f"#define RELPOSE_ABI_VERSION {abi.ABI_VERSION}" in header
@@ -323,7 +324,6 @@ class Solution:
     sandbox.init(default_guest_config(640, 480))
     vga = np.kron(FRAME, np.ones((2, 2, 1), dtype=np.uint8))
     result = sandbox.step(0.05, vga, IMU)
-    assert result.status == abi.STATUS_OK, sandbox.stderr_tail()
     np.testing.assert_array_equal(result.pose[:3], vga[1, 2])
     # the manifest command rewrites the section
     from relpose.tools.abi.manifest import read_manifest, write_manifest

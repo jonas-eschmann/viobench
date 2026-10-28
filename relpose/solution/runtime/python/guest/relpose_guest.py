@@ -2,7 +2,7 @@
 
 init() receives the config JSON and (when the wasm carries one) the zip of the student's directory, makes the
 zip importable, imports `solution:Solution` and constructs it. step() wraps the raw
-buffers in numpy arrays, calls Solution.step and writes the pose back. Status codes mirror relpose/abi.py.
+buffers in numpy arrays, calls Solution.step and writes the pose back. Status codes mirror relpose/tools/abi/__init__.py.
 """
 import importlib
 import importlib.abc
@@ -24,12 +24,7 @@ IMU_ROW_VALUES = 7
 POSE_VALUES = 7
 
 STATUS_OK = 0
-STATUS_NO_ESTIMATE = 1
-STATUS_EXCEPTION = -1
-STATUS_PROTOCOL = -2
-STATUS_RUNTIME = -3
-STATUS_NO_SOLUTION = -4
-STATUS_NOT_FINITE = -5
+STATUS_ERROR = -1
 
 
 class Bundle:
@@ -121,9 +116,6 @@ def init(config_view, bundle_view):
     _shape = (height, width, 3)  # always RGB (docs/ABI.md)
     frame_bytes = height * width * 3
 
-    if bundle_view is None:
-        print("runtime: no solution code (the wasm carries no bundle)", file=sys.stderr)
-        return STATUS_NO_SOLUTION, 0
     bundle = Bundle(bytes(bundle_view))
     sys.meta_path.insert(0, BundleImporter(bundle))
     _install_bundle_module(bundle)
@@ -133,7 +125,7 @@ def init(config_view, bundle_view):
         _solution = factory(config)
     except BaseException:
         traceback.print_exc()
-        return STATUS_EXCEPTION, 0
+        return STATUS_ERROR, 0
     finally:
         sys.stdout.flush()
         sys.stderr.flush()
@@ -146,15 +138,15 @@ def step(t, frame_view, imu_view, out_view):
         imu = np.frombuffer(imu_view, dtype=np.float64).reshape(-1, IMU_ROW_VALUES).copy()
         pose = _solution.step(float(t), frame, imu)
         if pose is None:
-            return STATUS_NO_ESTIMATE
+            raise ValueError("step() must return 7 values [x, y, z, qx, qy, qz, qw], got None (return the identity pose until you have an estimate)")
         values = np.asarray(pose, dtype=np.float64).reshape(-1)
         if values.shape != (POSE_VALUES,):
-            raise ValueError(f"step() must return 7 values [x, y, z, qx, qy, qz, qw] or None, got shape {values.shape}")
-        np.frombuffer(out_view, dtype=np.float64)[:] = values
-        return STATUS_OK if np.all(np.isfinite(values)) else STATUS_NOT_FINITE
+            raise ValueError(f"step() must return 7 values [x, y, z, qx, qy, qz, qw], got shape {values.shape}")
+        np.frombuffer(out_view, dtype=np.float64)[:] = values  # the harness checks that the pose is usable
+        return STATUS_OK
     except BaseException:
         traceback.print_exc()
-        return STATUS_EXCEPTION
+        return STATUS_ERROR
     finally:
         sys.stdout.flush()
         sys.stderr.flush()

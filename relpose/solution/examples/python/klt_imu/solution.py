@@ -126,7 +126,7 @@ class Solution:
             self.calibration_samples.extend(imu.tolist())
             samples = self.calibration_samples
             if len(samples) < 2 or samples[-1][0] - samples[0][0] < CALIBRATION_SECONDS:
-                return None
+                return [0, 0, 0, 0, 0, 0, 1.0]  # still calibrating at rest: identity until there is an estimate
             self._initialize(imu[-1, 0] if len(imu) else t)
             self.previous_frame = frame.copy()
             self.previous_points = self._detect(frame)

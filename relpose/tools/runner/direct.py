@@ -18,7 +18,7 @@ import numpy as np
 
 from .. import abi
 from ..abi.manifest import directory_manifest
-from .metrics import evaluate_trajectory
+from .metrics import evaluate_trajectory, valid_poses
 
 BUNDLE_MODULE = "solution_bundle"
 
@@ -90,7 +90,7 @@ class Step:
     t: float
     frame: np.ndarray
     imu: np.ndarray
-    pose: np.ndarray | None
+    pose: np.ndarray
     seconds: float
 
 
@@ -102,24 +102,26 @@ def trace(solution, episode):
         started = time.perf_counter()
         pose = estimator.step(float(t), frame, imu)
         seconds = time.perf_counter() - started
-        if pose is not None:
-            pose = np.asarray(pose, dtype=float).reshape(abi.POSE_VALUES)
+        if pose is None:
+            raise ValueError("step() must return 7 values [x, y, z, qx, qy, qz, qw], got None (return the identity pose until you have an estimate)")
+        pose = np.asarray(pose, dtype=float).reshape(abi.POSE_VALUES)
+        if not valid_poses(pose[None])[0]:
+            raise ValueError(f"step() returned an unusable pose {pose.tolist()} (NaN/inf or an all-zero quaternion)")
         yield Step(index, float(t), frame, imu, pose, seconds)
 
 
 def run(solution, dataset, output_dir=None, max_episodes=None, log=print):
-    """Runs the solution over a Dataset; returns [(episode, estimates (N, 7) with NaN for missing, TrajectoryMetrics)]."""
+    """Runs the solution over a Dataset; returns [(episode, estimates (N, 7), TrajectoryMetrics)]. A failing step raises."""
     from .run import as_dataset
 
     results = []
     for count, episode in enumerate(as_dataset(dataset)):
         if max_episodes is not None and count >= max_episodes:
             break
-        estimates = np.full((episode.num_frames, abi.POSE_VALUES), np.nan)
+        estimates = np.empty((episode.num_frames, abi.POSE_VALUES))
         seconds = []
         for step in trace(solution, episode):
-            if step.pose is not None:
-                estimates[step.index] = step.pose
+            estimates[step.index] = step.pose
             seconds.append(step.seconds)
         metrics = evaluate_trajectory(episode.ground_truth_relative(), estimates, episode.frame_times)
         if output_dir is not None:
@@ -128,7 +130,7 @@ def run(solution, dataset, output_dir=None, max_episodes=None, log=print):
             np.savetxt(directory / "estimate.tum", np.column_stack([episode.frame_times, estimates]), fmt="%.9g",
                        header="t x y z qx qy qz qw (camera k in camera 0 frame)", comments="# ")
         log(f"{episode.dataset}/{episode.name}: ATE {metrics.ate_rmse:.3f} m  RPE {metrics.rpe_translation_rmse:.3f} m/s  "
-            f"rot {np.degrees(metrics.rotation_rmse):.1f} deg  coverage {metrics.coverage:.2f}  "
+            f"rot {np.degrees(metrics.rotation_rmse):.1f} deg  held {metrics.held}  "
             f"{np.median(seconds) * 1e3:.1f} ms/frame (host, no fuel)")
         results.append((episode, estimates, metrics))
     if not results:
