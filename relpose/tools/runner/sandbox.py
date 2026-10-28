@@ -11,13 +11,22 @@ import wasmtime
 
 from .. import abi
 from ..abi import AbiError
-from ..abi.manifest import read_manifest, validate_manifest
 from ..abi.module import runtime_descriptor
-from ..abi.wasm_binary import strip_custom
 from .engine import Engine
 from .metrics import valid_poses
 
 IMU_CAPACITY_ROWS = 1024  # initial IMU buffer; grows on demand
+STDOUT_FILE = "stdout.txt"  # in the log directory
+STDERR_FILE = "stderr.txt"
+
+
+def tail(path, lines=40):
+    """The last lines of a log file ("" while it does not exist)."""
+    try:
+        text = Path(path).read_text(errors="replace")
+    except FileNotFoundError:
+        return ""
+    return "\n".join(text.splitlines()[-lines:])
 
 
 @dataclass
@@ -55,7 +64,7 @@ class Sandbox:
 
     sandbox = Sandbox("student.wasm", engine)
     sandbox.init(config)
-    result = sandbox.step(t, frame, imu)   # StepResult with status, pose, fuel, wall_seconds
+    result = sandbox.step(t, frame, imu)   # StepResult with pose, fuel, wall_seconds; SandboxError on a failed step
     Fresh instance per episode: nothing is reset between episodes, and a trap kills the instance for good.
     """
 
@@ -65,27 +74,25 @@ class Sandbox:
         self.engine = engine or Engine()
         self.dead = False
         self.initialized = False
-        wasm = self.path.read_bytes()
-        try:
-            self.manifest = validate_manifest(read_manifest(wasm))
-        except (AbiError, ValueError) as error:
-            raise SandboxError(str(error)) from None
-        self.resolution = tuple(self.manifest.get("resolution", abi.DEFAULT_RESOLUTION))  # (width, height) of the frames
-        self.descriptor = runtime_descriptor(wasm)  # None for native modules; .length == 0 for a bare Python runtime
-        base = strip_custom(wasm, abi.MANIFEST_SECTION)  # the manifest does not change the code: identical modules share a compilation
-        module = self.engine.module(base)
-        export_names = {export.name for export in module.exports}
-        missing = [name for name in abi.REQUIRED_EXPORTS if name not in export_names]
-        if missing:
-            raise SandboxError(f"{self.path.name} is not a solution module: missing exports {missing} (has {sorted(export_names)})")
-
         if log_dir is None:
             self._temporary = tempfile.TemporaryDirectory(prefix="relpose-")
             log_dir = self._temporary.name
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        self.stdout_path = self.log_dir / "stdout.txt"
-        self.stderr_path = self.log_dir / "stderr.txt"
+        self.stdout_path = self.log_dir / STDOUT_FILE
+        self.stderr_path = self.log_dir / STDERR_FILE
+        for path in (self.stdout_path, self.stderr_path):
+            path.unlink(missing_ok=True)  # an earlier run's logs must not pass for this one's
+
+        wasm = self.path.read_bytes()
+        descriptor = runtime_descriptor(wasm)  # None for native modules; .length == 0 for a bare Python runtime
+        if descriptor is not None and descriptor.length == 0:
+            raise SandboxError(f"{self.path.name} is a bare Python runtime without solution code: run `relpose bundle` first")
+        module = self.engine.module(wasm)
+        export_names = {export.name for export in module.exports}
+        missing = [name for name in abi.REQUIRED_EXPORTS if name not in export_names]
+        if missing:
+            raise SandboxError(f"{self.path.name} is not a solution module: missing exports {missing} (has {sorted(export_names)})")
 
         self.store = wasmtime.Store(self.engine.wasmtime)
         self.store.set_limits(memory_size=self.limits.memory_bytes)
@@ -114,6 +121,15 @@ class Sandbox:
             raise SandboxError(f"{self.path.name} implements ABI version {version}, the harness speaks {abi.ABI_VERSION}")
         if "_initialize" in export_names:
             self._guard(lambda: exports["_initialize"](self.store))
+        frame_width = None
+        if abi.FRAME_WIDTH in export_names:  # the Python runtime starts the interpreter and imports solution.py here
+            frame_width = self._guard(lambda: exports[abi.FRAME_WIDTH](self.store))
+            if frame_width < 0:
+                raise SandboxError(f"frame_width() failed (status {frame_width})\n--- stderr tail ---\n{self.stderr_tail()}")
+        try:
+            self.resolution = abi.resolution(frame_width)  # (width, height) of the frames
+        except AbiError as error:
+            raise SandboxError(str(error)) from None
 
     # --- plumbing -------------------------------------------------------------------------------------------
 
@@ -152,18 +168,11 @@ class Sandbox:
     def read(self, pointer, size):
         return bytes(self.memory.read(self.store, pointer, pointer + size))
 
-    def _tail(self, path, lines=40):
-        try:
-            text = path.read_text(errors="replace")
-        except FileNotFoundError:
-            return ""
-        return "\n".join(text.splitlines()[-lines:])
-
     def stderr_tail(self, lines=40):
-        return self._tail(self.stderr_path, lines)
+        return tail(self.stderr_path, lines)
 
     def stdout_tail(self, lines=40):
-        return self._tail(self.stdout_path, lines)
+        return tail(self.stdout_path, lines)
 
     # --- protocol -------------------------------------------------------------------------------------------
 
@@ -171,11 +180,9 @@ class Sandbox:
         """Hands the bundle (if any) and the config JSON to the guest; raises SandboxError on failure."""
         if self.initialized:
             raise SandboxError("init() called twice")
-        if self.descriptor is not None and self.descriptor.length == 0:
-            raise SandboxError(f"{self.path.name} is a bare Python runtime without solution code: run `relpose bundle` first")
         self.config = dict(config)
         delivered = int(self.config["width"]), int(self.config["height"])
-        if delivered != self.resolution:  # the frame size is the manifest's promise to the guest
+        if delivered != self.resolution:  # the frame size the solution declared
             raise SandboxError(f"config delivers {delivered[0]}x{delivered[1]} but the solution declares {self.resolution[0]}x{self.resolution[1]}; "
                                "adapt the episode with Episode.adapt() first")
         encoded = json.dumps(self.config).encode("utf-8")

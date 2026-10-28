@@ -4,8 +4,8 @@ The runtime (relpose/solution/runtime/python/reactor.c) keeps a 32-byte descript
 version | reserved`. The bundler appends an active data segment holding the zip just above the runtime's initial
 memory, grows the memory minimum accordingly and patches the descriptor's address/length in place. wasi-libc's
 allocator seeds its heap only up to the initial memory end and grows beyond it afterwards, so the zip is never
-touched by the heap. The module is self-contained: at init the guest shim reads the descriptor and imports from the
-zip in its own memory; the host never handles the zip.
+touched by the heap. The module is self-contained: in frame_width() the guest shim reads the descriptor and imports
+from the zip in its own memory; the host never handles the zip.
 """
 import struct
 

@@ -62,8 +62,8 @@ relpose evaluate my_solution.wasm --simulate 8 --condition blur   # fresh episod
   `cv2.dnn` forward of a small CNN costs about as much as one `goodFeaturesToTrack`.
 - Learned models: `relpose/solution/examples/python/tiny_cnn` shows PyTorch → ONNX → `cv2.dnn` inside the runtime, with a numpy fallback,
   and `train.py --generate N` trains straight from the simulator.
-- Frames: always RGB `(H, W, 3)`, 320 × 240 unless `solution.json` next to your `solution.py` says
-  `{"resolution": [640, 480]}`. Some sets are grayscale-only and arrive with R = G = B; convert to gray yourself if
+- Frames: always RGB `(H, W, 3)`, 320 × 240 unless your class declares `frame_width = 640` (then 640 × 480;
+  native solutions export `int32_t frame_width(void)`). Some sets are grayscale-only and arrive with R = G = B; convert to gray yourself if
   that is what your method uses (`cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)`). More pixels cost fuel in everything you
   run on them.
 

@@ -1,8 +1,7 @@
 """`relpose bundle`: a directory of Python code (plus data files) → one self-contained solution.wasm; `unbundle` reverses it.
 
 The directory is zipped (uncompressed, reproducible) and embedded into the Python runtime as a data segment
-(`embed.py`); its `solution.json`, if any, becomes the `relpose.manifest` custom section. Nothing is compiled, so no
-toolchain is needed beyond the runtime itself.
+(`embed.py`). Nothing is compiled, so no toolchain is needed beyond the runtime itself.
 """
 import ast
 import hashlib
@@ -12,9 +11,7 @@ import zipfile
 from pathlib import Path
 
 from relpose.tools import abi
-from relpose.tools.abi.manifest import directory_manifest, read_manifest, with_manifest
 from relpose.tools.abi.module import embedded_bundle
-from relpose.tools.abi.wasm_binary import strip_custom
 
 from . import BundleError as PackagingError
 from .embed import embed_bundle, strip_bundle
@@ -121,16 +118,15 @@ def make_zip(directory, files):
 
 
 def bundle(directory, output, runtime=None):
-    """Writes output (.wasm) and returns a summary dict. The manifest comes from solution.json in the directory."""
+    """Writes output (.wasm) and returns a summary dict."""
     directory = Path(directory)
     files = collect_files(directory)
-    manifest = {"resolution": list(abi.DEFAULT_RESOLUTION), **directory_manifest(directory)}
     warnings = validate(directory, files)
     runtime_path = Path(runtime) if runtime else default_runtime()
-    runtime_bytes = strip_custom(runtime_path.read_bytes(), abi.MANIFEST_SECTION)
+    runtime_bytes = runtime_path.read_bytes()
     payload = make_zip(directory, files)
-    result = with_manifest(embed_bundle(runtime_bytes, payload), manifest)
-    if embedded_bundle(result) != payload or read_manifest(result) != manifest:
+    result = embed_bundle(runtime_bytes, payload)
+    if embedded_bundle(result) != payload:
         raise PackagingError("internal error: the embedded bundle does not round-trip")
     output = Path(output)
     output.write_bytes(result)
@@ -139,7 +135,6 @@ def bundle(directory, output, runtime=None):
         "bytes": len(result),
         "files": [file.as_posix() for file in files],
         "bundle_bytes": len(payload),
-        "resolution": manifest["resolution"],
         "runtime": str(runtime_path),
         "runtime_sha256": hashlib.sha256(strip_bundle(runtime_bytes)).hexdigest(),
         "warnings": warnings,

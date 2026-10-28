@@ -29,8 +29,7 @@ def make_config():
 class Engine:
     """One wasmtime engine with its epoch ticker plus a per-process cache of compiled modules keyed by the binary's hash.
 
-    The bundle is a data segment, so every distinct bundle is its own compilation; only the manifest section is
-    stripped before module(), so modules that differ in nothing else share one.
+    The bundle is a data segment, so every distinct bundle is its own compilation.
     """
 
     def __init__(self):

@@ -15,5 +15,5 @@ dependency. We ship two reference recipes and the toolchain to build them. No bi
 Either way the result goes through `relpose check` (synthetic frames) and `relpose evaluate` (episodes) unchanged: the
 evaluator does not know which flavour it is running.
 
-Frames are always RGB; the one opt-in, 640 × 480 instead of 320 × 240, is declared in the manifest: `solution.json`
-next to `solution.py` for the Python flavour, `relpose manifest x.wasm --resolution 640x480` for anything else.
+Frames are always RGB; the one opt-in, 640 × 480 instead of 320 × 240, is declared in the code: `frame_width = 640`
+on the Python `Solution` class, an exported `int32_t frame_width(void)` returning 640 for anything else.

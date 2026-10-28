@@ -1,7 +1,7 @@
 """Minimal reader/writer for the section structure of a WebAssembly binary.
 
-Only what the bundler needs: walk the sections, find/strip/append a custom section (id 0). Code is never touched,
-so the compiled module is byte-identical before and after bundling except for the appended section.
+Only what the bundler and the harness need: walk the sections, read and replace the memory and data sections. Code
+is never touched, so the bundled module runs exactly the runtime's code.
 """
 from dataclasses import dataclass
 
@@ -69,32 +69,6 @@ def iter_sections(wasm):
             payload_start += name_length
         yield Section(section_id, name, start, payload_start, end)
         position = end
-
-
-def find_custom(wasm, name):
-    """Payload bytes of the (last) custom section called name, or None."""
-    payload = None
-    for section in iter_sections(wasm):
-        if section.id == CUSTOM_SECTION_ID and section.name == name:
-            payload = bytes(wasm[section.payload_start:section.end])
-    return payload
-
-
-def strip_custom(wasm, name):
-    """The binary without any custom section called name."""
-    out = bytearray(wasm[:8])
-    for section in iter_sections(wasm):
-        if section.id == CUSTOM_SECTION_ID and section.name == name:
-            continue
-        out += wasm[section.start:section.end]
-    return bytes(out)
-
-
-def append_custom(wasm, name, payload):
-    """The binary with a custom section called name appended (any existing one of that name is removed first)."""
-    encoded_name = name.encode("utf-8")
-    body = write_leb128(len(encoded_name)) + encoded_name + bytes(payload)
-    return strip_custom(wasm, name) + bytes([CUSTOM_SECTION_ID]) + write_leb128(len(body)) + body
 
 
 # --- memory / data sections (the bundler embeds the student's zip as a data segment) -----------------------------

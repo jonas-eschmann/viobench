@@ -9,6 +9,8 @@ import numpy as np
 
 
 class Solution:
+    frame_width = 320  # optional (320 is the default); 640 asks for 640x480 frames
+
     def __init__(self, config):
         # config: frame size, intrinsics, camera-IMU extrinsics (docs/ABI.md)
         self.config = config

@@ -47,6 +47,9 @@ int32_t abi_version() { return RELPOSE_ABI_VERSION; }
 
 void* alloc(uint32_t size) { return std::malloc(size ? size : 1); }
 
+// Optional (320 is the default without it); return 640 for 640x480 frames. Called once, before init().
+int32_t frame_width() { return 320; }
+
 // Called once per instance; step() is only called after init() succeeded.
 int32_t init(const char* json, uint32_t length) {
     std::setvbuf(stdout, nullptr, _IONBF, 0);  // a reactor never exits: unbuffered prints reach the host log

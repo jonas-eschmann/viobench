@@ -1,8 +1,8 @@
 """Guest-side glue between relpose/solution/runtime/python/reactor.c and the student's solution; frozen into runtime.wasm.
 
-init() receives the config JSON and (when the wasm carries one) the zip of the student's directory, makes the
-zip importable, imports `solution:Solution` and constructs it. step() wraps the raw
-buffers in numpy arrays, calls Solution.step and writes the pose back. Status codes mirror relpose/tools/abi/__init__.py.
+frame_width() receives the zip of the student's directory, makes it importable, imports `solution:Solution` and
+returns its frame_width. init() receives the config JSON and constructs the Solution. step() wraps the raw buffers in
+numpy arrays, calls Solution.step and writes the pose back. Constants mirror relpose/tools/abi/__init__.py.
 """
 import importlib
 import importlib.abc
@@ -20,6 +20,8 @@ BUNDLE_ROOT = "/bundle"  # virtual location used for __file__ of bundled modules
 BUNDLE_MODULE = "solution_bundle"  # `import solution_bundle` gives students their data files
 SOLUTION_MODULE = "solution"  # the entry point is always class Solution in solution.py (or solution/__init__.py)
 SOLUTION_CLASS = "Solution"
+FRAME_WIDTH = "frame_width"  # optional class attribute: 320 (default) or 640
+DEFAULT_FRAME_WIDTH = 320
 IMU_ROW_VALUES = 7
 POSE_VALUES = 7
 
@@ -95,6 +97,7 @@ class BundleImporter(importlib.abc.MetaPathFinder, importlib.abc.SourceLoader):
         raise OSError("bundled sources are not cached as bytecode")
 
 
+_factory = None
 _solution = None
 _shape = None
 
@@ -108,21 +111,32 @@ def _install_bundle_module(bundle):
     sys.modules[BUNDLE_MODULE] = module
 
 
-def init(config_view, bundle_view):
+def frame_width(bundle_view):
+    """Imports the solution from the bundle; returns its frame_width, or STATUS_ERROR."""
+    global _factory
+    bundle = Bundle(bytes(bundle_view))
+    sys.meta_path.insert(0, BundleImporter(bundle))
+    _install_bundle_module(bundle)
+    try:
+        _factory = getattr(importlib.import_module(SOLUTION_MODULE), SOLUTION_CLASS)
+        return getattr(_factory, FRAME_WIDTH, DEFAULT_FRAME_WIDTH)
+    except BaseException:
+        traceback.print_exc()
+        return STATUS_ERROR
+    finally:
+        sys.stdout.flush()
+        sys.stderr.flush()
+
+
+def init(config_view):
     """Returns (status, frame_bytes)."""
     global _solution, _shape
     config = json.loads(bytes(config_view).decode("utf-8"))
     height, width = int(config["height"]), int(config["width"])
     _shape = (height, width, 3)  # always RGB (docs/ABI.md)
     frame_bytes = height * width * 3
-
-    bundle = Bundle(bytes(bundle_view))
-    sys.meta_path.insert(0, BundleImporter(bundle))
-    _install_bundle_module(bundle)
     try:
-        module = importlib.import_module(SOLUTION_MODULE)
-        factory = getattr(module, SOLUTION_CLASS)
-        _solution = factory(config)
+        _solution = _factory(config)
     except BaseException:
         traceback.print_exc()
         return STATUS_ERROR, 0

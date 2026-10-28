@@ -7,8 +7,9 @@ few thousand fuel units of overhead instead of the interpreter's.
 ```bash
 relpose/solution/runtime/native/build.sh relpose/solution/examples/native/cpp_minimal        # downloads wasi-sdk 34 into build/toolchain (once), cmake → relpose/solution/examples/native/cpp_minimal/build/solution.wasm
 relpose check relpose/solution/examples/native/cpp_minimal/build/solution.wasm
-relpose manifest relpose/solution/examples/native/cpp_minimal/build/solution.wasm --resolution 640x480   # optional opt-in
 ```
+
+640 × 480 frames instead of 320 × 240: return 640 from `frame_width()` (see `solution.cpp`).
 
 Your own project: copy `relpose/solution/examples/native/cpp_minimal`, keep `#include "relpose_abi.h"` and the two CMake lines
 (`include(${RELPOSE_NATIVE_DIR}/relpose_reactor.cmake)`, `relpose_solution(<target> <sources...>)`).

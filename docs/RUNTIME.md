@@ -39,10 +39,9 @@ buffers in numpy arrays and calls `Solution.step`.
 
 ```
 my_solution/
-  solution.py          class Solution (or a package solution/__init__.py)
+  solution.py          class Solution (or a package solution/__init__.py); `frame_width = 640` in it asks for 640x480 frames
   helpers/...          any modules and packages; relative imports work; __file__ is /bundle/<path>
   net.onnx, w.npz      data files: `import solution_bundle as bundle; bundle.read_bytes("net.onnx")`, `np.load(bundle.open("w.npz"))`
-  solution.json        optional: {"resolution": [640, 480]}   (default 320x240); `relpose bundle` copies it into the manifest
 ```
 
 Zips are stored uncompressed (there is no zlib in the guest), so `np.savez` rather than `np.savez_compressed`.

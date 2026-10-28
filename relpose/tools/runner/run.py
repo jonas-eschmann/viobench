@@ -14,7 +14,7 @@ import numpy as np
 from .. import abi
 from .engine import WASMTIME_VERSION, Engine
 from .metrics import evaluate_trajectory
-from .sandbox import Limits, Sandbox, SandboxError, SandboxTrap
+from .sandbox import STDERR_FILE, Limits, Sandbox, SandboxError, SandboxTrap, tail
 
 
 @dataclass
@@ -53,7 +53,6 @@ def run_episode(wasm_path, episode, engine, limits, log_dir):
     completed = False
     fuel_init = 0
     wall_init = 0.0
-    sandbox = None
     try:
         sandbox = Sandbox(wasm_path, engine, limits=limits, log_dir=log_dir)
         config, frames = episode.adapt(sandbox.resolution)
@@ -88,7 +87,7 @@ def run_episode(wasm_path, episode, engine, limits, log_dir):
         wall_per_frame_median_ms=float(np.median(per_frame_wall) * 1e3),
         wall_per_frame_p95_ms=float(np.percentile(per_frame_wall, 95) * 1e3),
         metrics=metrics.as_dict(),
-        stderr_tail=sandbox.stderr_tail(20) if sandbox is not None else "",
+        stderr_tail=tail(Path(log_dir) / STDERR_FILE, 20),  # also when the Sandbox could not even be constructed
     ), estimates
 
 

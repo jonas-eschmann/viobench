@@ -1,9 +1,9 @@
 /* relpose solution ABI, version 1 (docs/ABI.md) — the whole contract between a solution module and the harness.
  *
  * A solution is a wasm32-wasip1 *reactor* that exports the functions declared below (plus `memory`). The harness
- * calls, per episode: _initialize (if present) -> init(config_json) -> alloc x3 -> step(...) x N. Anything may run
- * inside; this header is a convenience for C/C++ solutions, the Python runtime (relpose/solution/runtime/python/reactor.c) uses it
- * too, so status codes exist in exactly one place.
+ * calls, per episode: _initialize (if present) -> frame_width (if present) -> init(config_json) -> alloc x3 -> step(...) x N.
+ * Anything may run inside; this header is a convenience for C/C++ solutions, the Python runtime
+ * (relpose/solution/runtime/python/reactor.c) uses it too, so status codes exist in exactly one place.
  */
 #ifndef RELPOSE_ABI_H
 #define RELPOSE_ABI_H
@@ -34,6 +34,7 @@ extern "C" {
 /* Exports every solution must provide (`memory` is exported by the toolchain automatically). */
 RELPOSE_EXPORT(abi_version) int32_t abi_version(void);                   /* returns RELPOSE_ABI_VERSION */
 RELPOSE_EXPORT(alloc) void *alloc(uint32_t size);                        /* malloc; never freed by the host */
+RELPOSE_EXPORT(frame_width) int32_t frame_width(void);                  /* optional: 320 (the default without it) or 640 (640x480) */
 RELPOSE_EXPORT(init) int32_t init(const char *config_json, uint32_t length); /* once; the bytes are valid during the call */
 RELPOSE_EXPORT(step) int32_t step(double t, const uint8_t *frame, const double *imu, int32_t imu_count, double *out);
 /* frame: height*width*3 uint8 RGB (row-major), size per the config; imu: imu_count (always 10) rows of RELPOSE_IMU_ROW_VALUES

@@ -42,15 +42,15 @@ def test_direct_run_matches_the_sandbox(engine, runtime_path, tmp_path):
     np.testing.assert_allclose(estimates, sandboxed[:, 1:], atol=1e-6)
 
 
-def test_direct_manifest_and_host_solution_bundle(solution_dir, tmp_path):
-    """solution.json picks the resolution; solution.py may re-export a class from elsewhere; data files next to the code come through `solution_bundle`."""
+def test_direct_frame_width_and_host_solution_bundle(solution_dir, tmp_path):
+    """frame_width picks the resolution; solution.py may re-export a class from elsewhere; data files next to the code come through `solution_bundle`."""
     directory = solution_dir(
         "from estimator import Est as Solution\n",
         {
-            "solution.json": json.dumps({"resolution": "640x480"}),
             "estimator.py": (
                 "import numpy as np\nimport solution_bundle as bundle\n"
                 "class Est:\n"
+                "    frame_width = 640\n"
                 "    def __init__(self, config):\n"
                 "        assert config['width'] == 640 and 'channels' not in config\n"
                 "        self.offset = np.load(bundle.open('data/offset.npy'))\n"

@@ -21,7 +21,7 @@ relpose evaluate klt.wasm --simulate 8 --condition blur -o report-klt-blur      
 relpose leaderboard report-* --plot leaderboard.png
 ```
 
-`relpose --help` lists the commands by role: solution (`bundle`, `unbundle`, `manifest`), runner (`check`, `evaluate`,
+`relpose --help` lists the commands by role: solution (`bundle`, `unbundle`), runner (`check`, `evaluate`,
 `leaderboard`, `debug`, `score`), datasets (`simulate`, `convert-euroc`, `feed`). Evaluation needs only wasmtime: no
 Docker, no GPU. Debugging happens outside the sandbox, in your own process: `docs/DEBUGGING.md`.
 
@@ -38,5 +38,5 @@ grows with the length, dead reckoning's most of all):
 | `examples/python/klt_imu` (KLT + essential matrix + IMU) | 4.3 | 4.1 | 4.1 | 4.2 | 4.8 | 140–600 M |
 | `examples/python/tiny_cnn` (CNN via `cv2.dnn`, trained on 8 episodes) | 1.2 | 1.2 | 1.4 | 2.3 | 3.8 | 12 M |
 
-Frames are always RGB; a submission opts into 640 × 480 through its manifest (`solution.json` or `relpose manifest`),
-and the runner downscales every episode per submission.
+Frames are always RGB; a submission opts into 640 × 480 in its code (`frame_width = 640` on the Python class, or an
+exported `frame_width()` returning 640), and the runner downscales every episode per submission.

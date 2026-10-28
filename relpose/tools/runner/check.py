@@ -20,7 +20,7 @@ def check(wasm, frames=5, logs=None, verbose=False, log=print):
     dt = 1.0 / abi.FRAME_RATE_HZ
     imu_dt = 1.0 / abi.IMU_RATE_HZ
     rows_per_frame = abi.IMU_ROWS_PER_FRAME
-    log(f"module: frames {shape}, manifest {sandbox.manifest or '{}'}")
+    log(f"module: frames {shape}")
     try:
         sandbox.init(config)
     except SandboxError as error:

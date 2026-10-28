@@ -7,8 +7,9 @@ thousand fuel units of overhead instead of the interpreter's.
 ```bash
 relpose/solution/runtime/native/build.sh relpose/solution/examples/native/cpp_minimal         # cmake with wasi-sdk (downloaded into build/toolchain) → build/solution.wasm
 relpose check relpose/solution/examples/native/cpp_minimal/build/solution.wasm
-relpose manifest relpose/solution/examples/native/cpp_minimal/build/solution.wasm --resolution 640x480   # optional: VGA instead of 320x240
 ```
+
+`frame_width()` in `solution.cpp` picks the frame size: return 640 for 640 × 480 instead of 320 × 240.
 
 `CMakeLists.txt` is two lines of substance: `include(${RELPOSE_NATIVE_DIR}/relpose_reactor.cmake)` and
 `relpose_solution(solution solution.cpp)`. Configured with the host compiler instead (`cmake -S . -B build-host && cmake --build build-host`)

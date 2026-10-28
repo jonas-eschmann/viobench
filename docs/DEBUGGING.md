@@ -9,12 +9,12 @@ what the sandbox accepts and what it costs.
 ## Python: `relpose debug`
 
 ```bash
-relpose debug my_solution build/datasets/public/default-val --max-episodes 1  # the directory with solution.py / solution.json
+relpose debug my_solution build/datasets/public/default-val --max-episodes 1  # the directory with solution.py
 relpose debug my_solution --simulate 2 --condition blur                        # fresh HyperDrone episodes (GPU)
 relpose debug my_solution <episode dir> -o out       # writes out/<dataset>/<episode>/estimate.tum like `evaluate` does
 ```
 
-The driver imports your directory (`solution.json` is honoured: `resolution`), provides the
+The driver imports your directory (`Solution.frame_width` is honoured), provides the
 `solution_bundle` module backed by the files next to your code, adapts each episode to your resolution (RGB frames) and
 calls `Solution(config)` then `step(t, frame, imu)` per frame, exactly like the runtime. It prints the metrics line of
 `evaluate` (without fuel) per episode.
@@ -30,7 +30,7 @@ calls `Solution(config)` then `step(t, frame, imu)` per frame, exactly like the 
   from relpose.tools.runner.direct import PythonSolution, trace
 
   episode = read_episode("build/datasets/public/default-val/<name>")
-  poses = np.array([s.pose for s in trace(PythonSolution("my_solution"), episode) if s.pose is not None])
+  poses = np.array([s.pose for s in trace(PythonSolution("my_solution"), episode)])
   plt.plot(poses[:, 0], poses[:, 1], label="estimate"); gt = episode.ground_truth_relative(); plt.plot(gt[:, 0], gt[:, 1], label="truth"); plt.legend(); plt.show()
   ```
 
@@ -43,9 +43,9 @@ raw arrays, so C needs no PNG or JSON parser), calls `init` and `step` like the 
 `t_prev < t ≤ t_frame`, same buffers) and writes `estimate.tum`.
 
 ```bash
-relpose feed build/datasets/public/default-val/<name> -o build/feed          # --resolution 640x480 if your solution declares it
+relpose feed build/datasets/public/default-val/<name> -o build/feed          # --resolution 640x480 if your frame_width() returns 640
 cd my_native_solution && cmake -S . -B build-host && cmake --build build-host
-build-host/debug ../build/feed estimate.tum                 # prints per-frame failures, ms/frame and the position RMSE
+build-host/debug ../build/feed estimate.tum                 # prints where a step fails, ms/frame and the position RMSE
 relpose score build/datasets/public/default-val/<name> estimate.tum          # the full metrics line
 gdb --args build-host/debug ../build/feed                   # or lldb; VS Code: "relpose: debug native solution (gdb)"
 ```
@@ -65,7 +65,7 @@ program argument in `.vscode/launch.json` or `settings.json` (`cmake.debugConfig
 |---|---|---|
 | compute | fuel per frame, step/init limits, memory cap | host time only; no limits |
 | libraries | the runtime's numpy/OpenCV (`docs/RUNTIME.md`), or what you linked into your .wasm | whatever is installed on your machine |
-| failures | traps end the episode; exceptions become status −1 | exceptions propagate to you (that is the point) |
+| failures | traps, errors and unusable poses end the episode (marked failed) | exceptions propagate to you (that is the point) |
 | inputs | identical: `Episode.adapt` → `config`, frames, IMU windows | identical |
 
 A solution that works on the host but not in `check` is usually using a module the runtime lacks, more memory than

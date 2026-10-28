@@ -1,6 +1,6 @@
 """The `relpose` command line (also `python -m relpose`).
 
-solution     bundle, unbundle, manifest        Python runtime + directory <-> solution.wasm; declare VGA (any module)
+solution     bundle, unbundle                  Python runtime + directory <-> solution.wasm
 runner       check, evaluate, leaderboard      run a module on synthetic frames / on a dataset (disk or freshly simulated); aggregate reports
              debug, score                      run a Python solution in-process (debugger-friendly); score a pose file
 datasets     simulate, convert-euroc, feed     write episodes with HyperDrone (GPU); cut EuRoC sequences into episodes; export raw inputs for native debugging
@@ -47,8 +47,7 @@ def command_bundle(arguments):
     except (BundleError, abi.AbiError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
-    print(f"wrote {summary['output']} ({summary['bytes'] / 2**20:.1f} MiB, bundle {summary['bundle_bytes'] / 1024:.0f} KiB, {len(summary['files'])} files, "
-          f"{summary['resolution'][0]}x{summary['resolution'][1]} frames)")
+    print(f"wrote {summary['output']} ({summary['bytes'] / 2**20:.1f} MiB, bundle {summary['bundle_bytes'] / 1024:.0f} KiB, {len(summary['files'])} files)")
     for warning in summary["warnings"]:
         print(f"warning: {warning}")
     print(f"next: relpose check {summary['output']}")
@@ -65,21 +64,6 @@ def command_unbundle(arguments):
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(f"extracted {len(names)} files to {arguments.output}")
-    return 0
-
-
-def command_manifest(arguments):
-    from .abi.manifest import read_manifest, write_manifest
-
-    try:
-        updates = {}
-        if arguments.resolution is not None:
-            updates["resolution"] = arguments.resolution
-        manifest = write_manifest(arguments.wasm, updates) if updates else read_manifest(open(arguments.wasm, "rb").read())
-    except abi.AbiError as error:
-        print(f"error: {error}", file=sys.stderr)
-        return 1
-    print(manifest)
     return 0
 
 
@@ -228,11 +212,6 @@ def main(argv=None):
     unbundle.add_argument("wasm")
     unbundle.add_argument("-o", "--output", required=True, help="output directory")
     unbundle.set_defaults(function=command_unbundle)
-
-    manifest = commands.add_parser("manifest", help="[solution] show or change a module's manifest (native modules declare VGA this way)")
-    manifest.add_argument("wasm")
-    manifest.add_argument("--resolution", help="320x240 or 640x480")
-    manifest.set_defaults(function=command_manifest)
 
     check = commands.add_parser("check", help="[runner] instantiate a module and run a few synthetic frames through it")
     check.add_argument("wasm", help="solution .wasm")

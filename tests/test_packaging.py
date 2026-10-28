@@ -1,6 +1,6 @@
 import pytest
 
-from relpose.tools.abi.wasm_binary import append_custom, find_custom, iter_sections, read_leb128, strip_custom, write_leb128
+from relpose.tools.abi.wasm_binary import iter_sections, read_leb128, write_leb128
 
 # the smallest valid module: magic + version, no sections
 EMPTY_MODULE = b"\0asm\x01\0\0\0"
@@ -19,18 +19,6 @@ def test_iter_sections_reads_ids_and_names():
     assert [section.id for section in sections] == [1, 0]
     assert sections[1].name == "name"
     assert sections[1].end == len(TINY_MODULE)
-
-
-def test_append_find_strip_custom():
-    payload = bytes(range(256)) * 3
-    bundled = append_custom(TINY_MODULE, "relpose.solution.runtime.python.bundler.bundle", payload)
-    assert find_custom(bundled, "relpose.solution.runtime.python.bundler.bundle") == payload
-    assert find_custom(bundled, "name") == b""
-    assert strip_custom(bundled, "relpose.solution.runtime.python.bundler.bundle") == TINY_MODULE
-    # appending again replaces instead of duplicating
-    rebundled = append_custom(bundled, "relpose.solution.runtime.python.bundler.bundle", b"x")
-    assert find_custom(rebundled, "relpose.solution.runtime.python.bundler.bundle") == b"x"
-    assert strip_custom(rebundled, "relpose.solution.runtime.python.bundler.bundle") == TINY_MODULE
 
 
 def test_rejects_non_wasm():
@@ -54,19 +42,3 @@ def test_memory_and_data_section_roundtrip():
     grown = replace_sections(module, {MEMORY_SECTION_ID: encode_memory_section([Memory(0x01, 5, 10)])})
     assert parse_memory_section(section_payload(grown, MEMORY_SECTION_ID))[0].minimum == 5
     assert section_payload(grown, DATA_SECTION_ID) == section_payload(module, DATA_SECTION_ID)
-
-
-def test_manifest_lives_only_in_its_section(tmp_path):
-    from relpose.tools.abi import AbiError
-    from relpose.tools.abi.manifest import directory_manifest, read_manifest, write_manifest
-
-    assert read_manifest(TINY_MODULE) == {}
-    wasm = tmp_path / "m.wasm"
-    wasm.write_bytes(TINY_MODULE)
-    assert write_manifest(wasm, {"resolution": "640x480"}) == {"resolution": [640, 480]} == read_manifest(wasm.read_bytes())
-    for bad in ({"resolution": [64, 48]}, {"entry": "solution:Solution"}):
-        with pytest.raises(AbiError):
-            write_manifest(wasm, bad)
-    assert directory_manifest(tmp_path) == {}
-    (tmp_path / "solution.json").write_text('{"resolution": "640x480"}')
-    assert directory_manifest(tmp_path) == {"resolution": [640, 480]}

@@ -234,10 +234,11 @@ class Solution:
 
 
 def test_bare_runtime_without_code_is_refused(engine, runtime_path, tmp_path):
-    sandbox = Sandbox(runtime_path, engine, log_dir=tmp_path / "logs")
-    assert sandbox.descriptor is not None and sandbox.descriptor.length == 0
+    from relpose.tools.abi.module import runtime_descriptor
+
+    assert runtime_descriptor(runtime_path.read_bytes()).length == 0
     with pytest.raises(SandboxError, match="bundle"):
-        sandbox.init(CONFIG)
+        Sandbox(runtime_path, engine, log_dir=tmp_path / "logs")
 
 
 def test_embedded_bundle_survives_heap_growth(engine, runtime_path, solution_dir, tmp_path):
@@ -278,16 +279,10 @@ def test_unbundle_roundtrip(runtime_path, solution_dir, tmp_path):
     names = unbundle(wasm, tmp_path / "out")
     assert set(names) == {"solution.py", "data/w.npy", "pkg/__init__.py"}
     assert (tmp_path / "out" / "data" / "w.npy").read_bytes() == b"\x93NUMPY" + bytes(100)
-    # stripping gives back the clean runtime byte for byte (the manifest section aside), and bundling twice is idempotent
-    assert strip_custom_manifest(strip_bundle(bundled)) == strip_custom_manifest(runtime_path.read_bytes())
+    # stripping gives back the clean runtime byte for byte, and bundling twice is idempotent
+    assert strip_bundle(bundled) == runtime_path.read_bytes()
     bundle(directory, tmp_path / "again.wasm", runtime=wasm)  # an already-bundled file as the runtime is re-stripped first
     assert (tmp_path / "again.wasm").read_bytes() == bundled
-
-
-def strip_custom_manifest(wasm):
-    from relpose.tools.abi.wasm_binary import strip_custom
-
-    return strip_custom(wasm, abi.MANIFEST_SECTION)
 
 
 def test_abi_constants_match_the_guest_shim_and_the_native_header():
@@ -300,24 +295,25 @@ def test_abi_constants_match_the_guest_shim_and_the_native_header():
         assert f"{name} = {getattr(abi, name)}" in shim
         assert f"#define RELPOSE_{name} {getattr(abi, name)}" in header
     assert f"#define RELPOSE_ABI_VERSION {abi.ABI_VERSION}" in header
+    assert f'FRAME_WIDTH = "{abi.FRAME_WIDTH}"' in shim and f"DEFAULT_FRAME_WIDTH = {abi.DEFAULT_RESOLUTION[0]}" in shim
+    assert f"RELPOSE_EXPORT({abi.FRAME_WIDTH})" in header
 
 
-def test_resolution_opt_in_via_manifest(engine, runtime_path, solution_dir, tmp_path):
+def test_frame_width_opt_in(engine, runtime_path, solution_dir, tmp_path):
     source = """
 import numpy as np
 class Solution:
+    frame_width = 640
     def __init__(self, config):
         assert (config["width"], config["height"]) == (640, 480)
     def step(self, t, frame, imu):
         assert frame.shape == (480, 640, 3)
         return [float(frame[1, 2, 0]), float(frame[1, 2, 1]), float(frame[1, 2, 2]), 0, 0, 0, 1]
 """
-    directory = solution_dir(source, {"solution.json": '{"resolution": [640, 480]}'})
     wasm = tmp_path / "vga.wasm"
-    summary = bundle(directory, wasm, runtime=runtime_path)
-    assert summary["resolution"] == [640, 480]
+    bundle(solution_dir(source), wasm, runtime=runtime_path)
     sandbox = Sandbox(wasm, engine, log_dir=tmp_path / "logs")
-    assert sandbox.resolution == (640, 480) and sandbox.manifest["resolution"] == [640, 480]
+    assert sandbox.resolution == (640, 480)
     with pytest.raises(SandboxError, match="declares 640x480"):
         sandbox.init(CONFIG)  # a 320x240 config does not match the declaration
     sandbox = Sandbox(wasm, engine, log_dir=tmp_path / "logs2")
@@ -325,11 +321,14 @@ class Solution:
     vga = np.kron(FRAME, np.ones((2, 2, 1), dtype=np.uint8))
     result = sandbox.step(0.05, vga, IMU)
     np.testing.assert_array_equal(result.pose[:3], vga[1, 2])
-    # the manifest command rewrites the section
-    from relpose.tools.abi.manifest import read_manifest, write_manifest
 
-    assert write_manifest(wasm, {"resolution": "320x240"})["resolution"] == [320, 240] and read_manifest(wasm.read_bytes())["resolution"] == [320, 240]
-    with pytest.raises(Exception, match="resolution"):
-        write_manifest(wasm, {"resolution": [64, 48]})
-    with pytest.raises(Exception, match="unknown manifest keys"):  # there is no colour choice: frames are always RGB
-        write_manifest(wasm, {"channels": 3})
+
+def test_unsupported_frame_width_and_import_errors_fail_before_init(engine, runtime_path, solution_dir, tmp_path):
+    for name, source, message in (
+        ("wide", IDENTITY.replace("class Solution:", "class Solution:\n    frame_width = 800"), "frame_width must be one of"),
+        ("broken", "import no_such_module\n" + IDENTITY, "No module named 'no_such_module'"),  # traceback in the error
+    ):
+        wasm = tmp_path / f"{name}.wasm"
+        bundle(solution_dir(source, name=name), wasm, runtime=runtime_path)
+        with pytest.raises(SandboxError, match=message):
+            Sandbox(wasm, engine, log_dir=tmp_path / f"{name}-logs")

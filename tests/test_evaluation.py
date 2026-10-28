@@ -105,17 +105,20 @@ def test_evaluate_resolution_opt_in(engine, runtime_path, solution_dir, tmp_path
     write_episode(episode, dataset / episode.name)
     probe = """
 class Solution:
+{declaration}
     def __init__(self, config):
         self.config = config
     def step(self, t, frame, imu):
         return [frame.shape[1], frame.shape[0], self.config["fx"], 0, 0, 0, 1]
 """
-    # only the two supported resolutions are accepted by the manifest validation
-    with pytest.raises(Exception, match="resolution"):
-        bundle(solution_dir(probe, {"solution.json": '{"resolution": [128, 96]}'}, name="bad"), tmp_path / "bad.wasm", runtime=runtime_path)
-    for name, manifest, size in (("qvga", "{}", (320, 240)), ("vga", '{"resolution": "640x480"}', (640, 480))):
+    # only the two supported widths are accepted: anything else fails the episode before init, with the reason
+    wasm = tmp_path / "bad.wasm"
+    bundle(solution_dir(probe.format(declaration="    frame_width = 128"), name="bad"), wasm, runtime=runtime_path)
+    report = evaluate(wasm, [dataset], output_dir=tmp_path / "bad", engine=engine, log=lambda *a: None)
+    assert report["episodes"][0]["failure"].startswith("frame_width must be one of")
+    for name, declaration, size in (("qvga", "", (320, 240)), ("vga", "    frame_width = 640", (640, 480))):
         wasm = tmp_path / f"{name}.wasm"
-        assert bundle(solution_dir(probe, {"solution.json": manifest}, name=name), wasm, runtime=runtime_path)["resolution"] == list(size)
+        bundle(solution_dir(probe.format(declaration=declaration), name=name), wasm, runtime=runtime_path)
         report = evaluate(wasm, [dataset], output_dir=tmp_path / name, engine=engine, log=lambda *a: None)
         estimate = np.loadtxt(tmp_path / name / "logs" / "set" / episode.name / "estimate.tum")
         assert (estimate[0, 1], estimate[0, 2]) == size and report["summary"]["overall"]["completed"] == 1

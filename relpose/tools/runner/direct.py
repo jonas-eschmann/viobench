@@ -1,7 +1,7 @@
 """`relpose debug`: run a Python solution directory in-process — no sandbox — on episodes, for debuggers and plots.
 
 The solution is imported and driven exactly like the runtime drives it (`Solution(config)` then `step(t, frame, imu)`
-per frame, inputs adapted to the resolution of its `solution.json`), so a `breakpoint()` in `step` stops
+per frame, inputs adapted to its `Solution.frame_width`), so a `breakpoint()` in `step` stops
 under pdb or VS Code and the returned poses can be plotted. Same metrics and `estimate.tum` as `relpose evaluate`,
 but no fuel and the host's numpy/OpenCV: `relpose check` remains the authority on what the sandbox accepts.
 """
@@ -17,7 +17,6 @@ from pathlib import Path
 import numpy as np
 
 from .. import abi
-from ..abi.manifest import directory_manifest
 from .metrics import evaluate_trajectory, valid_poses
 
 BUNDLE_MODULE = "solution_bundle"
@@ -66,12 +65,10 @@ def install_solution_bundle(directory):
 
 
 class PythonSolution:
-    """A solution directory loaded on the host: its manifest (resolution) and a factory for instances."""
+    """A solution directory loaded on the host: a factory for instances and the resolution its frame_width declares."""
 
     def __init__(self, directory):
         self.directory = Path(directory).resolve()
-        self.manifest = directory_manifest(self.directory)
-        self.resolution = tuple(self.manifest.get("resolution", abi.DEFAULT_RESOLUTION))
         install_solution_bundle(self.directory)
         if str(self.directory) not in sys.path:
             sys.path.insert(0, str(self.directory))
@@ -79,6 +76,7 @@ class PythonSolution:
         if cached is not None and not str(getattr(cached, "__file__", "") or "").startswith(str(self.directory)):
             del sys.modules[abi.SOLUTION_MODULE]  # a same-named module from another solution directory (one process, several solutions)
         self.factory = getattr(importlib.import_module(abi.SOLUTION_MODULE), abi.SOLUTION_CLASS)
+        self.resolution = abi.resolution(getattr(self.factory, abi.FRAME_WIDTH, None))
 
     def create(self, config):
         return self.factory(config)
@@ -142,7 +140,7 @@ def add_arguments(parser):
     """The `relpose debug` options."""
     from ..datasets.generate.simulation import add_simulation_arguments
 
-    parser.add_argument("solution", help="solution directory (with solution.py / solution.json)")
+    parser.add_argument("solution", help="solution directory (with solution.py)")
     parser.add_argument("datasets", nargs="*", help="episode directories or directories of episodes")
     parser.add_argument("--simulate", type=int, metavar="N", help="also run on N fresh HyperDrone episodes (GPU; options below)")
     parser.add_argument("--max-episodes", type=int, help="stop after this many episodes")

@@ -13,11 +13,13 @@ and Rust solutions implement it directly (`relpose/solution/examples/native/cpp_
 | `_initialize` | `() → ()` | – | emitted by wasi-libc for reactors; the harness calls it once if present |
 | `abi_version` | `() → i32` | `int32_t abi_version(void)` | must return `1` |
 | `alloc` | `(i32) → i32` | `void *alloc(uint32_t size)` | `malloc`; ≥ 8-byte aligned; the harness never frees |
+| `frame_width` | `() → i32` | `int32_t frame_width(void)` | optional: `320` (the default without it) or `640`, see "Frame format"; negative: an error |
 | `init` | `(i32, i32) → i32` | `int32_t init(const char *json, uint32_t size)` | once, before any `step` |
 | `step` | `(f64, i32, i32, i32, i32) → i32` | `int32_t step(double t, const uint8_t *frame, const double *imu, int32_t imu_count, double *out)` | once per frame |
 
-Call sequence per episode: `instantiate → _initialize → init → alloc × 3 → step × N → drop`. The harness guarantees
-this order (`step` only after a successful `init`), so a solution need not check it.
+Call sequence per episode: `instantiate → _initialize → frame_width → init → alloc × 3 → step × N → drop` (exports
+that are absent are skipped). The harness guarantees this order (`step` only after a successful `init`), so a solution
+need not check it. All calls before the first `step` share the init fuel budget.
 There is no `reset`: every episode gets a fresh instance (instantiation costs ~0.1 s, Python init ~0.1 s). The host
 treats Python and native modules identically; it does not know what runs inside.
 
@@ -25,9 +27,9 @@ treats Python and native modules identically; it does not know what runs inside.
 
 The student's directory is zipped and embedded into `runtime.wasm` as a **data segment** placed just above the
 runtime's initial memory (the memory minimum grows by the zip's size), and a 32-byte descriptor inside the runtime
-(`magic "RELPOSEBUNDLEv1", address, length`) is patched to point at it. The module is therefore self-contained: at
-`init` the embedded shim reads the descriptor, opens the zip in its own memory and imports `solution:Solution`
-from it. The bundler is pure Python section surgery; no compiler is involved, and the zip can be as large as the
+(`magic "RELPOSEBUNDLEv1", address, length`) is patched to point at it. The module is therefore self-contained: in
+`frame_width` the embedded shim reads the descriptor, opens the zip in its own memory and imports `solution:Solution`
+from it (import errors surface there, with the traceback on stderr); `init` constructs it. The bundler is pure Python section surgery; no compiler is involved, and the zip can be as large as the
 memory cap allows. `relpose unbundle` extracts it again.
 
 ## Frame format
@@ -36,15 +38,15 @@ Frames are always **RGB**, `uint8`, `height × width × 3`, and the only choice 
 **320 × 240** (default) or **640 × 480**. Nothing else about the format varies between episodes or sets, and the
 config does not say where an episode comes from.
 
-- **Resolution**: the solution selects the resolution it consumes (see the manifest below), e.g. the lower one to save
-  compute: more pixels cost fuel in everything a solution runs on them. Any up- or downscaling from the resolution a
-  set is stored at is left to the harness, which rescales the intrinsics to match (pixel-centre convention).
+- **Resolution**: the solution selects the resolution it consumes (see below), e.g. the lower one to save compute:
+  more pixels cost fuel in everything a solution runs on them. Any up- or downscaling from the resolution a set is
+  stored at is left to the harness, which rescales the intrinsics to match (pixel-centre convention).
 - **Camera**: rectified pinhole without distortion.
 
-**Requesting the resolution: the manifest.** An optional JSON object in the module's custom section
-`relpose.manifest`, read by the harness *before* `init`: `{"resolution": [640, 480]}`; without it frames are
-320 × 240. Unknown keys and other resolutions are rejected. Python solutions put it in `solution.json` next to
-`solution.py` and `relpose bundle` copies it in; native modules use `relpose manifest solution.wasm --resolution 640x480`.
+**Requesting the resolution: `frame_width`.** The solution declares it in its code, and the harness asks *before*
+`init`: `640` gives 640 × 480 frames, `320` or no declaration 320 × 240; anything else fails the episode. Native
+modules export `int32_t frame_width(void)`; Python solutions set a class attribute, `class Solution: frame_width = 640`
+(the Python runtime exports the function and returns it).
 
 ## Buffers
 
@@ -98,7 +100,7 @@ any exception (an error); `os._exit()` is a trap.
 }
 ```
 
-`width`/`height` are the delivered frame size (what the manifest asked for), `fx, fy, cx, cy` the pinhole intrinsics
+`width`/`height` are the delivered frame size (what `frame_width` asked for), `fx, fy, cx, cy` the pinhole intrinsics
 at that size in pixels, `T_cam_imu` the 4 × 4 transform from IMU coordinates to camera coordinates (rows of the
 matrix; camera axes as in OpenCV: x right, y down, z forward). The intrinsics vary per episode, so read them.
 
@@ -118,6 +120,7 @@ surfaces as an allocation failure inside the guest (Python: `MemoryError`), not 
 
 ```python
 class Solution:
+    frame_width: int = 320  # optional; 640 for 640 x 480 frames
     def __init__(self, config: dict): ...
     def step(self, t: float, frame: np.ndarray, imu: np.ndarray) -> Sequence[float]:
         """frame: uint8 (H, W, 3) RGB, read-only view valid until the next step;

@@ -8,7 +8,7 @@ compute they spend per frame, so the leaderboard is a curve, not a number.
 
 | | |
 |---|---|
-| Frames | `uint8` RGB, `(H, W, 3)`, at 320 × 240 by default or 640 × 480 if `solution.json` asks for it (`{"resolution": [640, 480]}`, see `docs/ABI.md`, "Frame format"); nothing else about the format varies. Some sets are grayscale-only and arrive with R = G = B, unannounced. Pinhole camera without distortion, intrinsics in the config (`fx, fy, cx, cy`; the horizontal field of view varies between roughly 48° and 80° across episodes), global or rolling shutter (unannounced, no readout time), timestamp = mid-exposure of the centre row |
+| Frames | `uint8` RGB, `(H, W, 3)`, at 320 × 240 by default or 640 × 480 if the solution declares `frame_width = 640` (see `docs/ABI.md`, "Frame format"); nothing else about the format varies. Some sets are grayscale-only and arrive with R = G = B, unannounced. Pinhole camera without distortion, intrinsics in the config (`fx, fy, cx, cy`; the horizontal field of view varies between roughly 48° and 80° across episodes), global or rolling shutter (unannounced, no readout time), timestamp = mid-exposure of the centre row |
 | Frame rate | nominally 20 Hz; use the timestamps |
 | IMU | nominally 200 Hz: specific force in m/s² (gravity included: a resting IMU reads ≈ 9.81 along the direction opposite to gravity) and angular rate in rad/s, in the IMU frame. Expect a consumer MEMS IMU with white noise, turn-on biases and slow bias drift; no noise model is given, and the initial orientation w.r.t. gravity is not given either. |
 | Extrinsics | `T_cam_imu` (4 × 4): IMU coordinates → camera coordinates (OpenCV: x right, y down, z forward); exact for the episode |
