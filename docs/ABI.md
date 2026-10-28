@@ -86,7 +86,6 @@ In Python, `sys.exit()` is caught like any exception (status `-1`); `os._exit()`
 
 ```json
 {
-  "abi_version": 1,
   "width": 320, "height": 240,
   "fx": 190.7, "fy": 190.7, "cx": 159.5, "cy": 119.5,
   "T_cam_imu": [[0, -1, 0, 0], [0, 0, -1, 0], [1, 0, 0, 0], [0, 0, 0, 1]]

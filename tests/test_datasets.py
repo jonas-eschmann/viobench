@@ -8,7 +8,7 @@ from relpose.tools.abi.config import make_config
 from relpose.tools.datasets.episode import Episode, FrameSequence, interpolate_poses
 from relpose.tools.datasets.storage import list_episodes, read_episode, write_episode
 from relpose.tools.datasets.generate.camera import SensorParams, apply, integrate_exposure, linear_to_srgb, srgb_to_linear
-from relpose.tools.runner.metrics import matrices_to_poses, poses_to_matrices, quaternion_to_matrix
+from relpose.tools.geometry import poses_to_matrices, quaternion_to_matrix
 
 
 def synthetic_episode(n_frames=8, rate=20.0, imu_rate=200.0, width=32, height=24, channels=1, lead_in=0.0):
@@ -129,19 +129,18 @@ def test_write_episode_detaches_existing_hardlinks(tmp_path, frames):
     np.testing.assert_array_equal(np.asarray(read_episode(destination).frames), np.asarray(rewritten.frames))
 
 
-@pytest.mark.parametrize("channels", [1, 3])
 @pytest.mark.parametrize("cross_volume", [False, True])
-def test_write_episode_exports_spool_and_survives_cleanup(tmp_path, monkeypatch, channels, cross_volume):
+def test_write_episode_exports_spool_and_survives_cleanup(tmp_path, monkeypatch, cross_volume):
     import errno
 
     from relpose.tools.datasets.generate.simulation import Spool, spooled_frames
 
-    episode = synthetic_episode(n_frames=4, width=16, height=12, channels=channels)
+    episode = synthetic_episode(n_frames=4, width=16, height=12, channels=3)  # the simulator spools RGB
     expected = episode.frames.copy()
     spool = Spool(tmp_path / "spool")
     spool_path = spool.path
     stored = read_episode(write_episode(episode, spool.path / "episode"))
-    episode.frames = spooled_frames(stored.frames.paths, channels, expected.shape[1:], spool)
+    episode.frames = spooled_frames(stored.frames.paths, expected.shape[1:], spool)
     mapped = episode.frames.map(np.copy)
     assert mapped.paths is None and not mapped.link_paths
     del mapped, spool
@@ -197,7 +196,7 @@ def test_simulation_spool_lives_as_long_as_its_frames(tmp_path):
     spool = Spool(tmp_path / "spool")
     path = spool.path
     assert path.is_dir() and path.parent == tmp_path / "spool"
-    frames = spooled_frames([], 1, (2, 2), spool)
+    frames = spooled_frames([], (2, 2, 3), spool)
     del spool
     gc.collect()
     assert path.is_dir(), "the frame sequence keeps the spool alive"
@@ -224,7 +223,7 @@ def test_isp_identity_and_effects():
     linear = integrate_exposure(srgb)
     np.testing.assert_allclose(linear_to_srgb(srgb_to_linear(srgb)), srgb, atol=1e-5)
     clean = apply(linear, SensorParams(full_well=np.inf, read_noise=0.0), rng)
-    assert clean.shape == (16, 16) and clean.dtype == np.uint8
+    assert clean.shape == (16, 16, 3) and clean.dtype == np.uint8
     dark = apply(linear, SensorParams(exposure_scale=0.05, full_well=np.inf, read_noise=0.0), rng)
     bright = apply(linear, SensorParams(exposure_scale=20.0, full_well=np.inf, read_noise=0.0), rng)
     assert dark.mean() < clean.mean() < bright.mean() and (bright == 255).mean() > 0.9
@@ -240,7 +239,7 @@ def test_adapt_always_delivers_rgb():
     assert frames.shape == (3, 240, 320, 3)
     for channel in range(3):
         np.testing.assert_array_equal(frames[..., channel], episode.frames)  # replicated, and nothing announces it
-    assert set(config) == {"abi_version", "width", "height", "fx", "fy", "cx", "cy", "T_cam_imu"}
+    assert set(config) == {"width", "height", "fx", "fy", "cx", "cy", "T_cam_imu"}
     np.testing.assert_allclose(np.asarray(config["T_cam_imu"]) @ episode.T_body_camera, np.eye(4), atol=1e-12)
     rgb = synthetic_episode(n_frames=3, width=320, height=240, channels=3)
     assert rgb.adapt()[1] is rgb.frames  # RGB at the stored resolution passes through untouched

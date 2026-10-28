@@ -3,7 +3,6 @@
 import json
 import shutil
 import subprocess
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -132,13 +131,3 @@ def test_native_host_debug_build(tmp_path):
     np.testing.assert_allclose(estimates, np.tile([0, 0, 0, 0, 0, 0, 1.0], (5, 1)))
     metrics = score(tmp_path / "set" / episode.name, tum, log=lambda *a: None)
     assert metrics.coverage == 1.0
-
-
-def test_python_example_footers_are_inert_when_imported():
-    """Importing an example (as the runtime does) must not start the debug driver."""
-    for name in ("minimal", "dead_reckoning", "klt_imu"):
-        source = (EXAMPLES / "python" / name / "solution.py").read_text()
-        assert 'if __name__ == "__main__":' in source and "main(Solution)" in source
-    result = subprocess.run([sys.executable, "-c", "import sys; sys.path.insert(0, sys.argv[1]); import solution; print(solution.Solution.__name__)",
-                             str(EXAMPLES / "python" / "minimal")], capture_output=True, text=True)
-    assert result.returncode == 0 and result.stdout.strip() == "Solution"

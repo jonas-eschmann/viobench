@@ -11,7 +11,7 @@
                 "debug",
                 "${workspaceFolder}/relpose/solution/examples/python/dead_reckoning",
                 "${workspaceFolder}/build/datasets/public/default-val",
-                "--episode-limit", "1"
+                "--max-episodes", "1"
             ],
             "cwd": "${workspaceFolder}",
             "console": "integratedTerminal",

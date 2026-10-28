@@ -47,7 +47,6 @@ def evaluate_submission(store, submission, datasets, log=print):
         store.finish(submission["id"], error=f"evaluate exited with {completed.returncode}:\n{tail}")
         return
     report = json.loads(report_path.read_text())
-    report["label"] = submission["label"]
     store.finish(submission["id"], summary=report["summary"])
     log(f"submission {submission['id']}: done ({report['summary']['overall']['completed']}/{report['summary']['overall']['episodes']} episodes)")
 

@@ -13,12 +13,13 @@ from pathlib import Path
 
 from relpose.tools import abi
 from relpose.tools.abi.manifest import directory_manifest, read_manifest, with_manifest
+from relpose.tools.abi.module import embedded_bundle
 from relpose.tools.abi.wasm_binary import strip_custom
 
 from . import BundleError as PackagingError
-from .embed import embed_bundle, extract_bundle, strip_bundle
+from .embed import embed_bundle, strip_bundle
 
-IGNORED_DIRECTORIES = {"__pycache__", ".git", ".hg", ".svn", ".venv", "venv", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".idea", ".vscode", "node_modules"}
+IGNORED_DIRECTORIES = {"__pycache__", "venv", "node_modules"}  # plus every directory starting with "."
 IGNORED_SUFFIXES = {".pyc", ".pyo"}
 SIZE_WARNING_BYTES = 64 << 20
 RUNTIME_VARIABLE = "RELPOSE_RUNTIME"
@@ -129,7 +130,7 @@ def bundle(directory, output, runtime=None):
     runtime_bytes = strip_custom(runtime_path.read_bytes(), abi.MANIFEST_SECTION)
     payload = make_zip(directory, files)
     result = with_manifest(embed_bundle(runtime_bytes, payload), manifest)
-    if extract_bundle(result) != payload or read_manifest(result) != manifest:
+    if embedded_bundle(result) != payload or read_manifest(result) != manifest:
         raise PackagingError("internal error: the embedded bundle does not round-trip")
     output = Path(output)
     output.write_bytes(result)
@@ -147,7 +148,7 @@ def bundle(directory, output, runtime=None):
 
 def unbundle(wasm_path, output_directory):
     """Extracts the embedded directory (for inspection); returns the list of files."""
-    payload = extract_bundle(Path(wasm_path).read_bytes())
+    payload = embedded_bundle(Path(wasm_path).read_bytes())
     if payload is None:
         raise PackagingError(f"{wasm_path} carries no embedded bundle")
     output_directory = Path(output_directory)

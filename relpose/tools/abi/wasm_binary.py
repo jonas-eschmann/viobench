@@ -97,11 +97,6 @@ def append_custom(wasm, name, payload):
     return strip_custom(wasm, name) + bytes([CUSTOM_SECTION_ID]) + write_leb128(len(body)) + body
 
 
-def split_bundle(wasm, name):
-    """(binary without the section, payload or None) in one pass."""
-    return strip_custom(wasm, name), find_custom(wasm, name)
-
-
 # --- memory / data sections (the bundler embeds the student's zip as a data segment) -----------------------------
 
 MEMORY_SECTION_ID = 5

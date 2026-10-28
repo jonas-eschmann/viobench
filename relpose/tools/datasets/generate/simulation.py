@@ -12,6 +12,7 @@ stored or rescaled (Episode.adapt). The episode length is `SimConfig.duration_se
 minute); developed frames are spooled to a temporary directory while a batch renders, so memory does not grow with it.
 """
 import hashlib
+import itertools
 import json
 import os
 import shutil
@@ -30,7 +31,7 @@ from ...abi.config import make_config, pinhole_intrinsics
 from ...geometry import matrix_to_quaternion, quaternion_to_matrix
 from ..episode import Episode, FrameSequence
 from ..storage import read_png
-from .camera import apply, luminance, srgb_to_linear
+from .camera import apply, srgb_to_linear
 from .conditions import sample as sample_condition
 
 TEMPLATE = Path(__file__).with_name("hyperdrone_world.h.in")
@@ -51,8 +52,6 @@ class SimConfig:
     waypoints: int | None = None  # route length; None scales it with the duration (num_waypoints), the route cycles when exhausted
     fov_range: float = 15.0  # horizontal FOV = nominal (63.8 deg) + U(-fov_range, fov_range) degrees per episode
     hold_seconds: float = 1.0  # hover before the route starts
-    aa_grid: int = 1
-    channels: int = 3  # stored frames; the harness converts to what a solution asks for (grayscale by default)
     spool: str | None = None  # directory for the frames while a batch renders (default: $RELPOSE_SPOOL or the system temp dir)
 
     @property
@@ -64,7 +63,7 @@ class SimConfig:
 
     def render_header(self, imu_rate_hz):
         text = TEMPLATE.read_text()
-        values = {"INSTANCES": self.instances, "WIDTH": self.width, "HEIGHT": self.height, "AA_GRID": self.aa_grid,
+        values = {"INSTANCES": self.instances, "WIDTH": self.width, "HEIGHT": self.height,
                   "FOV_RANGE": repr(float(self.fov_range)), "HOLD_STEPS": int(round(self.hold_seconds * imu_rate_hz)),
                   "WAYPOINTS": self.num_waypoints}
         for key, value in values.items():
@@ -150,9 +149,9 @@ class Spool:
         self._finalizer()
 
 
-def spooled_frames(paths, channels, frame_shape, spool):
-    """FrameSequence over PNGs in a Spool; the loader keeps the spool alive."""
-    return FrameSequence(lambda index, _spool=spool: read_png(paths[index], channels), len(paths), frame_shape, paths=paths, link_paths=True)
+def spooled_frames(paths, frame_shape, spool):
+    """FrameSequence over RGB PNGs in a Spool; the loader keeps the spool alive."""
+    return FrameSequence(lambda index, _spool=spool: read_png(paths[index], abi.CHANNELS), len(paths), frame_shape, paths=paths, link_paths=True)
 
 
 def _block(vector, layout, name):
@@ -160,7 +159,7 @@ def _block(vector, layout, name):
     return vector[:, offset:offset + size]
 
 
-def simulate(sim, seeds, scenes=None, condition="default", scene_names=None, log=print):
+def simulate(sim, seeds, scenes=None, condition="default", log=print):
     """Yields Episodes: for each seed one batch of `sim.instances` flights in one scene (round-robin over scenes).
 
     scenes: {name: reference} (default: ProcTHOR Train200). Terminated flights (collisions) are skipped.
@@ -168,7 +167,7 @@ def simulate(sim, seeds, scenes=None, condition="default", scene_names=None, log
     import hyperdrone
 
     if scenes is None:
-        scenes = procthor_scenes(scene_names)
+        scenes = procthor_scenes()
     scene_items = list(scenes.items())
     header = None
     env = None
@@ -225,17 +224,15 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
         (spool.path / f"{instance:02d}").mkdir()
 
     def to_linear(rendered):
-        convert = (lambda x: luminance(srgb_to_linear(x))) if sim.channels == 1 else srgb_to_linear
-        return np.stack(list(pool.map(convert, rendered)))
+        return np.stack(list(pool.map(srgb_to_linear, rendered)))
 
     def develop(instance, index):
         """ISP for one instance's frame, written straight to the spool (PNG, BGR like storage.write_episode); returns the path."""
         params, k = isp[instance]
         stack = [linear[instance] for linear in list(ring)[-k:]]
-        frame = apply(np.mean(stack, axis=0) if len(stack) > 1 else stack[-1], params, instance_rngs[instance], grayscale=False)
+        frame = apply(np.mean(stack, axis=0) if len(stack) > 1 else stack[-1], params, instance_rngs[instance])
         path = spool.path / f"{instance:02d}" / f"{index:05d}.png"
-        image = frame if frame.ndim == 2 else cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-        if not cv2.imwrite(str(path), image, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
+        if not cv2.imwrite(str(path), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_PNG_COMPRESSION, 1]):
             raise OSError(f"could not write {path}")
         return path
 
@@ -270,7 +267,7 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
     imu_rows = np.stack(imu_rows)  # (steps, total, 7)
     ground_truth = np.stack(ground_truth)  # (steps + 1, total, 8)
     frame_times = np.asarray(frame_times)
-    frame_shape = (sim.height, sim.width) + (() if sim.channels == 1 else (sim.channels,))
+    frame_shape = (sim.height, sim.width, abi.CHANNELS)
     for instance in range(total):
         if terminated[instance]:
             continue
@@ -280,7 +277,7 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
         fov = float(camera["fov"])
         T_body_camera = mount_to_body_camera(camera["mount"])
         intrinsics = pinhole_intrinsics(sim.width, sim.height, fov)
-        config = make_config(width=sim.width, height=sim.height, channels=sim.channels, frame_rate_hz=sim.frame_rate_hz,
+        config = make_config(width=sim.width, height=sim.height, channels=abi.CHANNELS, frame_rate_hz=sim.frame_rate_hz,
                              num_frames=len(frame_times), hover_seconds=sim.hold_seconds, T_body_camera=T_body_camera,
                              intrinsics=intrinsics, episode_name=f"{condition}-{scene_name}-{seed:05d}-{instance:02d}")
         config["camera"]["horizontal_fov_degrees"] = fov
@@ -291,7 +288,7 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
             name=config["episode"]["name"],
             config=config,
             frame_times=times,
-            frames=spooled_frames(frame_paths[instance], sim.channels, frame_shape, spool),
+            frames=spooled_frames(frame_paths[instance], frame_shape, spool),
             imu=imu_rows[:, instance, :],
             ground_truth=ground_truth[:, instance, :],
             T_body_camera=T_body_camera,
@@ -316,29 +313,22 @@ def _versions():
 def add_simulation_arguments(parser):
     """Adds the generator's options to an argparse parser (names match SimConfig and simulate())."""
     parser.add_argument("--seed", type=int, default=0, help="first seed; seeds also pick the scene round-robin")
-    parser.add_argument("--batches", type=int, default=1_000_000, help="maximum number of seeds/batches to run")
     parser.add_argument("--condition", default="default", choices=["default", "blur", "lowlight", "oversaturated"])
     parser.add_argument("--scenes", default="procthor-train", choices=["procthor-train", "hssd-train", "hssd-val"])
     parser.add_argument("--scene-names", nargs="*", help="restrict to these scene names")
-    parser.add_argument("--render-resolution", dest="render_resolution", default="640x480", choices=[f"{w}x{h}" for w, h in abi.SUPPORTED_RESOLUTIONS],
-                        help="stored resolution; the runner rescales to whatever a solution declares")
     parser.add_argument("--instances", type=int, default=8, help="flights per batch")
     parser.add_argument("--frame-rate", type=float, default=20.0)
     parser.add_argument("--duration", type=float, default=60.0, help="seconds of flight per episode (frames = duration x frame rate)")
     parser.add_argument("--waypoints", type=int, help="route length (default: scales with --duration, 48 for a minute)")
     parser.add_argument("--fov-range", type=float, default=15.0, help="horizontal FOV = 63.8 + U(-range, range) degrees")
     parser.add_argument("--hover", type=float, default=1.0, help="seconds of hover at the start of each episode")
-    parser.add_argument("--aa-grid", type=int, default=1)
-    parser.add_argument("--render-channels", dest="render_channels", type=int, default=3, choices=(1, 3), help="render RGB (default) or grayscale")
     parser.add_argument("--spool", help="directory for the frames while a batch renders (default: $RELPOSE_SPOOL or the system temp dir)")
 
 
 def dataset_from_arguments(arguments):
     """The ad-hoc Dataset provider configured from add_simulation_arguments() options."""
-    width, height = (int(value) for value in arguments.render_resolution.split("x"))
-    sim = SimConfig(width=width, height=height, instances=arguments.instances, frame_rate_hz=arguments.frame_rate,
-                    duration_seconds=arguments.duration, waypoints=arguments.waypoints, fov_range=arguments.fov_range,
-                    hold_seconds=arguments.hover, aa_grid=arguments.aa_grid, channels=arguments.render_channels, spool=arguments.spool)
+    sim = SimConfig(instances=arguments.instances, frame_rate_hz=arguments.frame_rate, duration_seconds=arguments.duration,
+                    waypoints=arguments.waypoints, fov_range=arguments.fov_range, hold_seconds=arguments.hover, spool=arguments.spool)
     scenes = {"procthor-train": lambda: procthor_scenes(arguments.scene_names), "hssd-val": lambda: hssd_scenes("val", arguments.scene_names),
               "hssd-train": lambda: hssd_scenes("train", arguments.scene_names)}[arguments.scenes]()
-    return simulate(sim, range(arguments.seed, arguments.seed + arguments.batches), scenes=scenes, condition=arguments.condition)
+    return simulate(sim, itertools.count(arguments.seed), scenes=scenes, condition=arguments.condition)

@@ -42,7 +42,7 @@ def log_uniform(rng, low, high):
     return float(np.exp(rng.uniform(np.log(low), np.log(high))))
 
 
-def sample(condition, rng, imu_rate_hz=200.0, nominal_mean=0.18):
+def sample(condition, rng, imu_rate_hz=200.0):
     """Draw (SensorParams, sub_frames) for one episode of the condition."""
     spec = CONDITIONS[condition] if isinstance(condition, str) else condition
     exposure = rng.uniform(*spec.exposure_seconds)

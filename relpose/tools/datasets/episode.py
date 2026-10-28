@@ -137,24 +137,15 @@ class Episode:
         for index in range(self.num_frames):
             yield self.frame_times[index], frames[index], self.imu_window(index)
 
-    def camera_poses_world(self, times=None):
-        """(N, 7) pose of the camera in the world frame at the given times (default: frame times)."""
-        times = self.frame_times if times is None else np.asarray(times, dtype=float)
-        body = interpolate_poses(self.ground_truth[:, 0], self.ground_truth[:, 1:8], times)
+    def camera_poses_world(self):
+        """(N, 7) pose of the camera in the world frame at the frame times."""
+        body = interpolate_poses(self.ground_truth[:, 0], self.ground_truth[:, 1:8], self.frame_times)
         return matrices_to_poses(poses_to_matrices(body) @ self.T_body_camera)
 
     def ground_truth_relative(self):
         """(N, 7) pose of camera k in the frame of camera 0 (T_c0_ck): what a perfect solution returns."""
         T_wc = poses_to_matrices(self.camera_poses_world())
         return matrices_to_poses(invert(T_wc[0]) @ T_wc)
-
-    def rotation_body_camera(self):
-        return self.T_body_camera[:3, :3]
-
-    @staticmethod
-    def config_extrinsics(T_body_camera):
-        T_body_camera = np.asarray(T_body_camera, dtype=float)
-        return {"T_cam_imu": invert(T_body_camera).reshape(-1).tolist(), "T_imu_cam": T_body_camera.reshape(-1).tolist()}
 
     def adapt(self, resolution=None):
         """(guest config, frames) for a solution that declared 320x240 or 640x480 (docs/ABI.md, "Frame format").
@@ -197,7 +188,7 @@ class Episode:
 
     def check_consistency(self):
         image = self.config["image"]
-        expected = (image["height"], image["width"]) + (() if image.get("channels", 1) == 1 else (image["channels"],))
+        expected = (image["height"], image["width"]) + (() if image["channels"] == 1 else (image["channels"],))
         assert tuple(self.frames.shape[1:]) == expected, f"frames {self.frames.shape[1:]} vs config {expected}"
         assert np.dtype(self.frames.dtype) == np.uint8
         np.testing.assert_allclose(np.asarray(self.config["imu"]["T_imu_cam"]).reshape(4, 4), self.T_body_camera, atol=1e-9)

@@ -47,7 +47,7 @@ def null_pose_estimates(n):
     return np.full((n, abi.POSE_VALUES), np.nan)
 
 
-def run_episode(wasm_path, episode, engine, limits, log_dir, progress=None):
+def run_episode(wasm_path, episode, engine, limits, log_dir):
     """One episode through a fresh Sandbox; returns (EpisodeReport, estimates (N, 7) with NaN rows for missing frames)."""
     estimates = null_pose_estimates(episode.num_frames)
     fuel = np.zeros(episode.num_frames)
@@ -75,8 +75,6 @@ def run_episode(wasm_path, episode, engine, limits, log_dir, progress=None):
             if consecutive >= MAX_CONSECUTIVE_FAILURES:
                 failure = f"abandoned after {consecutive} consecutive failing steps (last: {name})"
                 break
-            if progress:
-                progress(index, episode.num_frames, result)
         else:
             completed = True
     except SandboxTrap as trap:
@@ -115,14 +113,14 @@ def summarize(reports):
         return {
             "episodes": len(group),
             "completed": len(completed),
-            "duration_s_median": float(np.median([r.duration_s for r in group])) if group else float("nan"),
-            "ate_rmse_median": float(np.median([r.metrics["ate_rmse"] for r in group])) if group else float("nan"),
-            "rpe_translation_rmse_median": float(np.nanmedian([r.metrics["rpe_translation_rmse"] for r in group])) if group else float("nan"),
-            "rotation_rmse_median": float(np.nanmedian([r.metrics["rotation_rmse"] for r in group])) if group else float("nan"),
-            "coverage_mean": float(np.mean([r.metrics["coverage"] for r in group])) if group else float("nan"),
-            "fuel_per_frame_median": float(np.median([r.fuel_per_frame_median for r in group])) if group else float("nan"),
-            "fuel_per_frame_p95": float(np.median([r.fuel_per_frame_p95 for r in group])) if group else float("nan"),
-            "wall_per_frame_median_ms": float(np.median([r.wall_per_frame_median_ms for r in group])) if group else float("nan"),
+            "duration_s_median": float(np.median([r.duration_s for r in group])),
+            "ate_rmse_median": float(np.median([r.metrics["ate_rmse"] for r in group])),
+            "rpe_translation_rmse_median": float(np.nanmedian([r.metrics["rpe_translation_rmse"] for r in group])),
+            "rotation_rmse_median": float(np.nanmedian([r.metrics["rotation_rmse"] for r in group])),
+            "coverage_mean": float(np.mean([r.metrics["coverage"] for r in group])),
+            "fuel_per_frame_median": float(np.median([r.fuel_per_frame_median for r in group])),
+            "fuel_per_frame_p95": float(np.median([r.fuel_per_frame_p95 for r in group])),
+            "wall_per_frame_median_ms": float(np.median([r.wall_per_frame_median_ms for r in group])),
         }
 
     datasets = sorted({r.dataset for r in reports})
@@ -141,8 +139,7 @@ def as_dataset(dataset):
     return dataset
 
 
-def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_episodes=None,
-             save_estimates=True, progress=None, log=print):
+def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_episodes=None, log=print):
     """dataset: episode directories / dataset roots, or any iterable of Episodes. Returns the report dict (also written as report.json)."""
     wasm_path = Path(wasm_path)
     engine = engine or Engine()
@@ -155,11 +152,10 @@ def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_
         if max_episodes is not None and count >= max_episodes:
             break
         log_dir = output_dir / "logs" / episode.dataset / episode.name
-        report, estimates = run_episode(wasm_path, episode, engine, limits, log_dir, progress=progress)
+        report, estimates = run_episode(wasm_path, episode, engine, limits, log_dir)
         reports.append(report)
-        if save_estimates:
-            np.savetxt(log_dir / "estimate.tum", np.column_stack([episode.frame_times, estimates]), fmt="%.9g",
-                       header="t x y z qx qy qz qw (camera k in camera 0 frame)", comments="# ")
+        np.savetxt(log_dir / "estimate.tum", np.column_stack([episode.frame_times, estimates]), fmt="%.9g",
+                   header="t x y z qx qy qz qw (camera k in camera 0 frame)", comments="# ")
         m = report.metrics
         log(f"{episode.dataset}/{episode.name}: {'ok' if report.completed else 'FAILED'} ATE {m['ate_rmse']:.3f} m  RPE {m['rpe_translation_rmse']:.3f} m/s  "
             f"rot {np.degrees(m['rotation_rmse']):.1f} deg  coverage {m['coverage']:.2f}  fuel/frame {report.fuel_per_frame_median:,.0f} (p95 {report.fuel_per_frame_p95:,.0f})  "

@@ -18,7 +18,6 @@ class Descriptor:
     memory_address: int  # linear-memory address of the descriptor
     address: int  # linear-memory address of the embedded zip (0 = none)
     length: int  # bytes of the embedded zip (0 = none)
-    version: int
 
 
 def runtime_descriptor(wasm):
@@ -34,8 +33,8 @@ def runtime_descriptor(wasm):
                 raise AbiError("the module contains more than one bundle descriptor")
             if segment.offset is None:
                 raise AbiError("the bundle descriptor lives in a segment with a non-constant offset")
-            address, length, version, _ = struct.unpack_from("<IIII", segment.data, position + len(BUNDLE_MAGIC))
-            found = Descriptor(index, position, segment.offset + position, address, length, version)
+            address, length = struct.unpack_from("<II", segment.data, position + len(BUNDLE_MAGIC))
+            found = Descriptor(index, position, segment.offset + position, address, length)
             position = segment.data.find(BUNDLE_MAGIC, position + 1)
     return found
 

@@ -32,7 +32,7 @@ def quaternion_from_matrix(R):
 
 class Solution:
     def __init__(self, config):
-        import solution_bundle as bundle  # the files next to this one (in the runtime, or on the host under `python solution.py`)
+        import solution_bundle as bundle  # the files next to this one (in the runtime, or on the host under `relpose debug`)
 
         self.meta = json.loads(bundle.read_text("meta.json"))
         self.size = (int(self.meta["input_width"]), int(self.meta["input_height"]))
@@ -77,8 +77,3 @@ class Solution:
         self.T = self.T @ delta
         self.previous = small
         return np.concatenate([self.T[:3, 3], quaternion_from_matrix(self.T[:3, :3])])
-
-if __name__ == "__main__":  # debug outside the sandbox: python solution.py <episode dirs...>  (docs/DEBUGGING.md)
-    from relpose.tools.runner.direct import main
-
-    main(Solution)

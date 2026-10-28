@@ -1,7 +1,8 @@
 import numpy as np
 import pytest
 
-from relpose.tools.runner.metrics import evaluate_trajectory, invert, matrices_to_poses, matrix_to_quaternion, poses_to_matrices, quaternion_to_matrix, umeyama_sim3
+from relpose.tools.geometry import invert, matrices_to_poses, matrix_to_quaternion, poses_to_matrices, quaternion_to_matrix
+from relpose.tools.runner.metrics import evaluate_trajectory, umeyama_sim3
 
 
 def random_poses(rng, n):

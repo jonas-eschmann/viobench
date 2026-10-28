@@ -13,7 +13,7 @@ def load_reports(paths):
         files = [path] if path.is_file() else sorted(path.rglob("report.json"))
         for file in files:
             report = json.loads(file.read_text())
-            label = report.get("label") or Path(report.get("solution", file.parent.name)).stem
+            label = Path(report["solution"]).stem
             reports.append((label, report))
     return reports
 
@@ -28,7 +28,7 @@ def rows(reports):
                 "dataset": dataset,
                 "episodes": summary["episodes"],
                 "completed": summary["completed"],
-                "seconds": summary.get("duration_s_median", float("nan")),  # older reports have no duration
+                "seconds": summary["duration_s_median"],
                 "ate_m": summary["ate_rmse_median"],
                 "rpe_m_per_s": summary["rpe_translation_rmse_median"],
                 "rot_deg": float(np.degrees(summary["rotation_rmse_median"])) if summary["rotation_rmse_median"] == summary["rotation_rmse_median"] else float("nan"),

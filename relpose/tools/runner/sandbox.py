@@ -16,6 +16,8 @@ from ..abi.module import runtime_descriptor
 from ..abi.wasm_binary import strip_custom
 from .engine import Engine
 
+IMU_CAPACITY_ROWS = 1024  # initial IMU buffer; grows on demand
+
 
 @dataclass
 class Limits:
@@ -24,7 +26,6 @@ class Limits:
     memory_bytes: int = 2 << 30
     init_wall_seconds: float = 300.0  # wall-clock safety nets only (fuel is the metric)
     step_wall_seconds: float = 60.0
-    imu_capacity: int = 1024  # rows; grows on demand
 
 
 @dataclass
@@ -112,23 +113,20 @@ class Sandbox:
         self._alloc = exports["alloc"]
         self._init = exports["init"]
         self._step = exports["step"]
-        if "abi_version" in export_names:
-            version = self._guard(lambda: exports["abi_version"](self.store))
-            if version != abi.ABI_VERSION:
-                raise SandboxError(f"{self.path.name} implements ABI version {version}, the harness speaks {abi.ABI_VERSION}")
+        version = self._guard(lambda: exports["abi_version"](self.store))
+        if version != abi.ABI_VERSION:
+            raise SandboxError(f"{self.path.name} implements ABI version {version}, the harness speaks {abi.ABI_VERSION}")
         if "_initialize" in export_names:
             self._guard(lambda: exports["_initialize"](self.store))
 
     # --- plumbing -------------------------------------------------------------------------------------------
 
     def _arm(self, fuel, wall_seconds):
-        if self.engine.fuel:
-            self.store.set_fuel(fuel)
-        if self.engine.epochs:
-            self.store.set_epoch_deadline(self.engine.ticks(wall_seconds))
+        self.store.set_fuel(fuel)
+        self.store.set_epoch_deadline(self.engine.ticks(wall_seconds))
 
     def _consumed(self, fuel):
-        return fuel - self.store.get_fuel() if self.engine.fuel else 0
+        return fuel - self.store.get_fuel()
 
     def _guard(self, call):
         try:
@@ -180,7 +178,6 @@ class Sandbox:
         if self.descriptor is not None and self.descriptor.length == 0:
             raise SandboxError(f"{self.path.name} is a bare Python runtime without solution code: run `relpose bundle` first")
         self.config = dict(config)
-        self.config.setdefault("abi_version", abi.ABI_VERSION)
         delivered = int(self.config["width"]), int(self.config["height"])
         if delivered != self.resolution:  # the frame size is the manifest's promise to the guest
             raise SandboxError(f"config delivers {delivered[0]}x{delivered[1]} but the solution declares {self.resolution[0]}x{self.resolution[1]}; "
@@ -198,7 +195,7 @@ class Sandbox:
         self.frame_bytes = self.height * self.width * abi.CHANNELS
         self.frame_pointer = self.alloc(self.frame_bytes)
         self.out_pointer = self.alloc(abi.POSE_VALUES * abi.F64_BYTES)
-        self.imu_capacity = self.limits.imu_capacity
+        self.imu_capacity = IMU_CAPACITY_ROWS
         self.imu_pointer = self.alloc(self.imu_capacity * abi.IMU_ROW_VALUES * abi.F64_BYTES)
         self.initialized = True
 

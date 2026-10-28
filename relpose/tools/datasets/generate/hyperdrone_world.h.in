@@ -27,8 +27,8 @@ namespace hyperdrone_user {
         static constexpr TI CAM_WIDTH = @WIDTH@;
         static constexpr TI CAM_HEIGHT = @HEIGHT@;
         using SHADING = rl_tools::hyperlux::High;
-        static constexpr bool ENABLE_ANTI_ALIASING = @AA_GRID@ > 1;
-        static constexpr TI ANTI_ALIASING_GRID_SIZE = @AA_GRID@;
+        static constexpr bool ENABLE_ANTI_ALIASING = false;
+        static constexpr TI ANTI_ALIASING_GRID_SIZE = 1;
         static constexpr bool ENABLE_MOTION_BLUR = false;  // exposure is integrated over rendered sub-frames in Python
         static constexpr TI MOTION_BLUR_SAMPLES = 1;
         static constexpr bool SELF_VISIBLE = false;  // like the C++ visual-inertial localization harness

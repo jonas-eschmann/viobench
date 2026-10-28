@@ -10,7 +10,7 @@ zip in its own memory; the host never handles the zip.
 import struct
 
 from relpose.tools import abi
-from relpose.tools.abi.module import Descriptor, embedded_bundle, runtime_descriptor  # noqa: F401 (re-exported for callers)
+from relpose.tools.abi.module import runtime_descriptor
 from relpose.tools.abi.wasm_binary import (DATA_COUNT_SECTION_ID, DATA_SECTION_ID, MEMORY_SECTION_ID, PAGE_BYTES, DataSegment, encode_data_section,
                                            encode_memory_section, parse_data_section, parse_memory_section, replace_sections, section_payload,
                                            write_leb128)
@@ -55,9 +55,6 @@ def strip_bundle(wasm):
     memories[0].minimum = descriptor.address // PAGE_BYTES
     _patched_descriptor(kept, descriptor, 0, 0)
     return _rebuild(wasm, memories, kept)
-
-
-extract_bundle = embedded_bundle
 
 
 def embed_bundle(wasm, payload):

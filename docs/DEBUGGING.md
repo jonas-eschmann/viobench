@@ -6,12 +6,11 @@ an ordinary host process** where `breakpoint()`, gdb, prints and matplotlib work
 limits, your host's numpy/OpenCV instead of the runtime's. `relpose check` and `relpose evaluate` stay the authority on
 what the sandbox accepts and what it costs.
 
-## Python: `relpose debug` / `python solution.py`
+## Python: `relpose debug`
 
 ```bash
-relpose debug my_solution build/datasets/public/default-val --episode-limit 1       # the directory with solution.py / solution.json
-python my_solution/solution.py build/datasets/public/default-val --episode-limit 1  # the same, through the examples' footer
-relpose debug my_solution --simulate 2 --condition blur                             # fresh HyperDrone episodes (GPU)
+relpose debug my_solution build/datasets/public/default-val --max-episodes 1  # the directory with solution.py / solution.json
+relpose debug my_solution --simulate 2 --condition blur                        # fresh HyperDrone episodes (GPU)
 relpose debug my_solution <episode dir> -o out       # writes out/<dataset>/<episode>/estimate.tum like `evaluate` does
 ```
 
@@ -34,17 +33,6 @@ calls `Solution(config)` then `step(t, frame, imu)` per frame, exactly like the 
   poses = np.array([s.pose for s in trace(PythonSolution("my_solution"), episode) if s.pose is not None])
   plt.plot(poses[:, 0], poses[:, 1], label="estimate"); gt = episode.ground_truth_relative(); plt.plot(gt[:, 0], gt[:, 1], label="truth"); plt.legend(); plt.show()
   ```
-
-The footer that makes `python solution.py …` work is three lines at the end of every example and costs nothing inside
-the wasm (the runtime imports the module, it never runs it as `__main__`). One caveat for that form: the module body
-runs before the footer registers `solution_bundle`, so a solution with data files imports it inside `__init__` (as
-`tiny_cnn` does); `relpose debug <dir>` has no such constraint.
-
-```python
-if __name__ == "__main__":
-    from relpose.tools.runner.direct import main
-    main(Solution)
-```
 
 ## Native: the `debug` CMake target
 

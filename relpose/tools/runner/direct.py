@@ -4,16 +4,8 @@ The solution is imported and driven exactly like the runtime drives it (`Solutio
 per frame, inputs adapted to the resolution of its `solution.json`), so a `breakpoint()` in `step` stops
 under pdb or VS Code and the returned poses can be plotted. Same metrics and `estimate.tum` as `relpose evaluate`,
 but no fuel and the host's numpy/OpenCV: `relpose check` remains the authority on what the sandbox accepts.
-
-Every example ends with
-    if __name__ == "__main__":
-        from relpose.tools.runner.direct import main
-        main(Solution)
-so `python solution.py <episode dirs>` debugs it directly.
 """
-import argparse
 import importlib
-import inspect
 import itertools
 import os
 import sys
@@ -76,25 +68,17 @@ def install_solution_bundle(directory):
 class PythonSolution:
     """A solution directory loaded on the host: its manifest (resolution) and a factory for instances."""
 
-    def __init__(self, directory, solution_class=None):
+    def __init__(self, directory):
         self.directory = Path(directory).resolve()
         self.manifest = directory_manifest(self.directory)
         self.resolution = tuple(self.manifest.get("resolution", abi.DEFAULT_RESOLUTION))
         install_solution_bundle(self.directory)
         if str(self.directory) not in sys.path:
             sys.path.insert(0, str(self.directory))
-        if solution_class is not None:
-            self.factory = solution_class
-        else:
-            cached = sys.modules.get(abi.SOLUTION_MODULE)
-            if cached is not None and not str(getattr(cached, "__file__", "") or "").startswith(str(self.directory)):
-                del sys.modules[abi.SOLUTION_MODULE]  # a same-named module from another solution directory (one process, several solutions)
-            self.factory = getattr(importlib.import_module(abi.SOLUTION_MODULE), abi.SOLUTION_CLASS)
-
-    @classmethod
-    def from_class(cls, solution_class):
-        """For the examples' `main(Solution)` footer: the directory is the one holding the class's source file."""
-        return cls(Path(inspect.getfile(solution_class)).resolve().parent, solution_class=solution_class)
+        cached = sys.modules.get(abi.SOLUTION_MODULE)
+        if cached is not None and not str(getattr(cached, "__file__", "") or "").startswith(str(self.directory)):
+            del sys.modules[abi.SOLUTION_MODULE]  # a same-named module from another solution directory (one process, several solutions)
+        self.factory = getattr(importlib.import_module(abi.SOLUTION_MODULE), abi.SOLUTION_CLASS)
 
     def create(self, config):
         return self.factory(config)
@@ -123,13 +107,13 @@ def trace(solution, episode):
         yield Step(index, float(t), frame, imu, pose, seconds)
 
 
-def run(solution, dataset, output_dir=None, episode_limit=None, log=print):
+def run(solution, dataset, output_dir=None, max_episodes=None, log=print):
     """Runs the solution over a Dataset; returns [(episode, estimates (N, 7) with NaN for missing, TrajectoryMetrics)]."""
     from .run import as_dataset
 
     results = []
     for count, episode in enumerate(as_dataset(dataset)):
-        if episode_limit is not None and count >= episode_limit:
+        if max_episodes is not None and count >= max_episodes:
             break
         estimates = np.full((episode.num_frames, abi.POSE_VALUES), np.nan)
         seconds = []
@@ -152,25 +136,24 @@ def run(solution, dataset, output_dir=None, episode_limit=None, log=print):
     return results
 
 
-def add_arguments(parser, solution_class=None):
-    """The `relpose debug` options; without a solution_class the solution directory is the first positional."""
+def add_arguments(parser):
+    """The `relpose debug` options."""
     from ..datasets.generate.simulation import add_simulation_arguments
 
-    if solution_class is None:
-        parser.add_argument("solution", help="solution directory (with solution.py / solution.json)")
+    parser.add_argument("solution", help="solution directory (with solution.py / solution.json)")
     parser.add_argument("datasets", nargs="*", help="episode directories or directories of episodes")
     parser.add_argument("--simulate", type=int, metavar="N", help="also run on N fresh HyperDrone episodes (GPU; options below)")
-    parser.add_argument("--episode-limit", type=int, help="stop after this many episodes")
+    parser.add_argument("--max-episodes", type=int, help="stop after this many episodes")
     parser.add_argument("-o", "--output", help="write estimate.tum per episode under this directory")
     add_simulation_arguments(parser)
 
 
-def run_arguments(arguments, solution_class=None):
+def run_arguments(arguments):
     from ..datasets.storage import episodes
 
     if not arguments.datasets and not arguments.simulate:
         raise SystemExit("debug needs episode directories and/or --simulate N")
-    solution = PythonSolution.from_class(solution_class) if solution_class is not None else PythonSolution(arguments.solution)
+    solution = PythonSolution(arguments.solution)
 
     def dataset():
         if arguments.datasets:
@@ -180,13 +163,5 @@ def run_arguments(arguments, solution_class=None):
 
             yield from itertools.islice(dataset_from_arguments(arguments), arguments.simulate)
 
-    run(solution, dataset(), output_dir=arguments.output, episode_limit=arguments.episode_limit)
+    run(solution, dataset(), output_dir=arguments.output, max_episodes=arguments.max_episodes)
     return 0
-
-
-def main(solution_class=None, argv=None):
-    """`python solution.py <episodes...>` (the examples' footer passes their class, so the target is implied)."""
-    parser = argparse.ArgumentParser(prog="relpose debug" if solution_class is None else Path(sys.argv[0]).name,
-                                     description="run a Python solution in this process (no sandbox) on episodes: breakpoints, prints and plots work")
-    add_arguments(parser, solution_class)
-    return run_arguments(parser.parse_args(argv), solution_class)

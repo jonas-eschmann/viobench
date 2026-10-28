@@ -22,7 +22,7 @@ from preintegrate import exp_so3, log_so3, preintegrate  # noqa: E402  (shared w
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[4]))  # repository root
 from relpose.tools.datasets.storage import list_episodes, read_episode  # noqa: E402
-from relpose.tools.runner.metrics import invert, poses_to_matrices  # noqa: E402
+from relpose.tools.geometry import invert, poses_to_matrices  # noqa: E402
 
 INPUT_WIDTH, INPUT_HEIGHT = 64, 48
 

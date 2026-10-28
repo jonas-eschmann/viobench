@@ -34,7 +34,7 @@ def _nanoseconds(seconds, origin_ns=0):
     return np.rint(np.asarray(seconds, dtype=float) * 1e9).astype(np.int64) + np.int64(origin_ns)
 
 
-def write_episode(episode, directory, origin_ns=0, png_compression=1):
+def write_episode(episode, directory, origin_ns=0):
     """Writes the episode; origin_ns is added to all timestamps (0 for simulated data)."""
     directory = Path(directory)
     cam = directory / "mav0" / "cam0"
@@ -64,7 +64,7 @@ def write_episode(episode, directory, origin_ns=0, png_compression=1):
             else:
                 frame = episode.frames[index]
                 image = frame if frame.ndim == 2 or frame.shape[2] == 1 else cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
-                if not cv2.imwrite(str(staged), image, [cv2.IMWRITE_PNG_COMPRESSION, png_compression]):
+                if not cv2.imwrite(str(staged), image, [cv2.IMWRITE_PNG_COMPRESSION, 1]):
                     raise OSError(f"could not write {target}")
             staged.replace(target)
             lines.append(f"{stamp},{name}")
@@ -91,10 +91,10 @@ def write_episode(episode, directory, origin_ns=0, png_compression=1):
         "T_BS": {"cols": 4, "rows": 4, "data": [float(v) for v in episode.T_body_camera.reshape(-1)]},
         "rate_hz": float(episode.config["episode"]["frame_rate_hz"]),
         "resolution": [int(image["width"]), int(image["height"])],
-        "camera_model": camera.get("model", "pinhole"),
+        "camera_model": camera["model"],
         "intrinsics": [float(camera["fx"]), float(camera["fy"]), float(camera["cx"]), float(camera["cy"])],
         "distortion_model": "radial-tangential",
-        "distortion_coefficients": [float(v) for v in camera.get("distortion", [])] or [0.0, 0.0, 0.0, 0.0],
+        "distortion_coefficients": [float(v) for v in camera["distortion"]] or [0.0, 0.0, 0.0, 0.0],
     }
     (cam / "sensor.yaml").write_text(yaml.safe_dump(cam_yaml, sort_keys=False))
     imu_block = episode.config["imu"]
@@ -104,10 +104,10 @@ def write_episode(episode, directory, origin_ns=0, png_compression=1):
         "comment": "body/IMU frame; per-sample noise std in episode.json, continuous-time densities here (std / sqrt(rate))",
         "T_BS": {"cols": 4, "rows": 4, "data": [float(v) for v in np.eye(4).reshape(-1)]},
         "rate_hz": rate,
-        "gyroscope_noise_density": float(imu_block.get("gyro_noise_std", 0.0) / np.sqrt(rate)),
-        "gyroscope_random_walk": float(imu_block.get("gyro_bias_random_walk", 0.0) * np.sqrt(rate)),
-        "accelerometer_noise_density": float(imu_block.get("accel_noise_std", 0.0) / np.sqrt(rate)),
-        "accelerometer_random_walk": float(imu_block.get("accel_bias_random_walk", 0.0) * np.sqrt(rate)),
+        "gyroscope_noise_density": float(imu_block["gyro_noise_std"] / np.sqrt(rate)),
+        "gyroscope_random_walk": float(imu_block["gyro_bias_random_walk"] * np.sqrt(rate)),
+        "accelerometer_noise_density": float(imu_block["accel_noise_std"] / np.sqrt(rate)),
+        "accelerometer_random_walk": float(imu_block["accel_bias_random_walk"] * np.sqrt(rate)),
     }
     (imu / "sensor.yaml").write_text(yaml.safe_dump(imu_yaml, sort_keys=False))
 
@@ -164,12 +164,12 @@ def read_episode(directory, frames="lazy", dataset=None):
     if manifest.get("format") != FORMAT:
         raise ValueError(f"{directory}: unsupported episode format {manifest.get('format')}")
     config = manifest["config"]
-    origin_ns = int(manifest.get("origin_ns", 0))
+    origin_ns = int(manifest["origin_ns"])
     cam = directory / "mav0" / "cam0"
     names = np.genfromtxt(cam / "data.csv", delimiter=",", comments="#", dtype=str, ndmin=2)
     frame_ns = names[:, 0].astype(np.int64)
     frame_times = (frame_ns - origin_ns) / 1e9
-    channels = int(config["image"].get("channels", 1))
+    channels = int(config["image"]["channels"])
     paths = [cam / "data" / name for name in names[:, 1]]
     shape = (int(config["image"]["height"]), int(config["image"]["width"])) + (() if channels == 1 else (channels,))
     if frames == "none":
@@ -187,10 +187,10 @@ def read_episode(directory, frames="lazy", dataset=None):
 
     cam_yaml = yaml.safe_load((cam / "sensor.yaml").read_text())
     T_body_camera = np.asarray(cam_yaml["T_BS"]["data"], dtype=float).reshape(4, 4)
-    meta = dict(manifest.get("meta", {}))
+    meta = dict(manifest["meta"])
     meta["dataset"] = dataset or directory.parent.name
     meta["path"] = str(directory)
-    return Episode(manifest.get("name", directory.name), config, frame_times, frame_data, imu, ground_truth, T_body_camera, meta)
+    return Episode(manifest["name"], config, frame_times, frame_data, imu, ground_truth, T_body_camera, meta)
 
 
 def list_episodes(root):

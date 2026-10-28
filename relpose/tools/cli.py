@@ -94,13 +94,7 @@ def command_check(arguments):
 
 def command_evaluate(arguments):
     from .runner.run import evaluate
-    from .runner.sandbox import Limits
 
-    limits = Limits()
-    if arguments.step_fuel:
-        limits.step_fuel = arguments.step_fuel
-    if arguments.memory_mib:
-        limits.memory_bytes = arguments.memory_mib << 20
     if not arguments.datasets and not arguments.simulate:
         raise SystemExit("evaluate needs dataset directories and/or --simulate N")
     max_episodes = arguments.max_episodes
@@ -116,7 +110,7 @@ def command_evaluate(arguments):
             yield from itertools.islice(dataset_from_arguments(arguments), arguments.simulate)
 
     def run():
-        result = evaluate(arguments.wasm, dataset(), output_dir=arguments.output, limits=limits, max_episodes=max_episodes)
+        result = evaluate(arguments.wasm, dataset(), output_dir=arguments.output, max_episodes=max_episodes)
         summary = result["summary"]["overall"]
         print(f"overall: {summary['completed']}/{summary['episodes']} episodes completed, ATE median {summary['ate_rmse_median']:.3f} m, "
               f"fuel/frame median {summary['fuel_per_frame_median']:,.0f}")
@@ -191,7 +185,7 @@ def command_feed(arguments):
         episode = next(iter(dataset_from_arguments(arguments)))
     else:
         raise SystemExit("feed needs an episode directory or --simulate")
-    resolution = tuple(int(v) for v in arguments.resolution.lower().split("x")) if arguments.resolution else abi.DEFAULT_RESOLUTION
+    resolution = tuple(int(v) for v in arguments.resolution.split("x"))
     directory = write_feed(episode, arguments.output, resolution=resolution)
     print(f"feed of {episode.name} ({episode.num_frames} frames at {resolution[0]}x{resolution[1]}) in {directory}")
     return 0
@@ -252,8 +246,6 @@ def main(argv=None):
     evaluate.add_argument("datasets", nargs="*", help="episode directories or directories of episodes")
     evaluate.add_argument("-o", "--output", help="report directory (default: ./report-<name>)")
     evaluate.add_argument("--max-episodes", type=int)
-    evaluate.add_argument("--step-fuel", type=int, help="fuel budget per step (default from Limits)")
-    evaluate.add_argument("--memory-mib", type=int, help="guest memory cap in MiB")
     evaluate.add_argument("--simulate", type=int, metavar="N", help="also evaluate on N fresh HyperDrone episodes (GPU; options below)")
     add_simulation_arguments(evaluate)
     evaluate.set_defaults(function=command_evaluate)
@@ -283,7 +275,8 @@ def main(argv=None):
     feed.add_argument("episode", nargs="?", help="episode directory (or use --simulate)")
     feed.add_argument("-o", "--output", required=True, help="feed directory")
     feed.add_argument("--simulate", action="store_true", help="feed a fresh HyperDrone episode instead (GPU; options below)")
-    feed.add_argument("--resolution", help="what your solution declares (default 320x240)")
+    feed.add_argument("--resolution", default="x".join(map(str, abi.DEFAULT_RESOLUTION)), choices=[f"{w}x{h}" for w, h in abi.SUPPORTED_RESOLUTIONS],
+                      help="what your solution declares")
     add_simulation_arguments(feed)
     feed.set_defaults(function=command_feed)
 

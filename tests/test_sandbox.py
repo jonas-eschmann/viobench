@@ -51,7 +51,7 @@ def test_frame_and_imu_arrive_intact(engine, runtime_path, solution_dir, tmp_pat
 import numpy as np
 class Solution:
     def __init__(self, config):
-        assert set(config) == {"abi_version", "width", "height", "fx", "fy", "cx", "cy", "T_cam_imu"} and config["width"] == 320
+        assert set(config) == {"width", "height", "fx", "fy", "cx", "cy", "T_cam_imu"} and config["width"] == 320
     def step(self, t, frame, imu):
         assert frame.shape == (240, 320, 3) and frame.dtype == np.uint8 and not frame.flags.writeable
         assert imu.shape == (10, 7) and abs(imu[-1, 0] - 0.05) < 1e-12 and abs(imu[3, 3] - 9.81) < 1e-12
@@ -265,14 +265,15 @@ class Solution:
 
 def test_unbundle_roundtrip(runtime_path, solution_dir, tmp_path):
     from relpose.solution.runtime.python.bundler.bundle import unbundle
-    from relpose.solution.runtime.python.bundler.embed import extract_bundle, runtime_descriptor, strip_bundle
+    from relpose.solution.runtime.python.bundler.embed import strip_bundle
+    from relpose.tools.abi.module import embedded_bundle, runtime_descriptor
 
     directory = solution_dir(IDENTITY, {"data/w.npy": b"\x93NUMPY" + bytes(100), "pkg/__init__.py": "X = 1\n"})
     wasm = tmp_path / "s.wasm"
     bundle(directory, wasm, runtime=runtime_path)
     bundled = wasm.read_bytes()
     descriptor = runtime_descriptor(bundled)
-    assert descriptor.length == len(extract_bundle(bundled)) and descriptor.address % 65536 == 0
+    assert descriptor.length == len(embedded_bundle(bundled)) and descriptor.address % 65536 == 0
     names = unbundle(wasm, tmp_path / "out")
     assert set(names) == {"solution.py", "data/w.npy", "pkg/__init__.py"}
     assert (tmp_path / "out" / "data" / "w.npy").read_bytes() == b"\x93NUMPY" + bytes(100)

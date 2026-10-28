@@ -82,8 +82,7 @@ def load_sequence(sequence):
     }
 
 
-def convert(sequence, width=640, height=480, snippet_seconds=60.0, max_snippets=None, start_seconds=0.0, stride_seconds=None,
-            hover_seconds_first=1.0, log=print):
+def convert(sequence, width=640, height=480, snippet_seconds=60.0, max_snippets=None, start_seconds=0.0, stride_seconds=None, log=print):
     """Yields Episodes cut from the sequence. Only frames inside the ground-truth time span are used."""
     raw = load_sequence(sequence)
     map_x, map_y, new_K = rectification(raw["cam_sensor"], width, height)
@@ -127,7 +126,7 @@ def convert(sequence, width=640, height=480, snippet_seconds=60.0, max_snippets=
         imu = np.column_stack([imu_t[imu_mask], raw["imu"][imu_mask]])
         gt_mask = (gt_t >= times[0] - 2.0) & (gt_t <= times[-1] + 0.5)
         ground_truth = np.column_stack([gt_t[gt_mask], raw["gt"][gt_mask]])
-        hover = hover_seconds_first if count == 0 and start_seconds == 0.0 else 0.0
+        hover = 1.0 if count == 0 and start_seconds == 0.0 else 0.0
         name = f"euroc-{raw['name']}-{count:02d}"
         config = make_config(width=width, height=height, channels=1, frame_rate_hz=frame_rate, num_frames=len(selected), hover_seconds=hover,
                              T_body_camera=T_body_camera, imu=imu_noise, episode_name=name,

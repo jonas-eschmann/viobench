@@ -41,8 +41,7 @@ relpose evaluate my_solution.wasm --simulate 8 --condition blur   # fresh episod
 `check` catches crashes and protocol errors; `evaluate` gives ATE/RPE and fuel per frame on real episodes
 (`report-my_solution/report.json`, per-episode `estimate.tum` for plotting with `evo`). Tracebacks name your files
 `/bundle/<path>`. To step through your code with a debugger, or to iterate without bundling, run it outside the sandbox:
-`relpose debug my_solution build/datasets/public/default-val --episode-limit 1` (or `python my_solution/solution.py …`),
-see `docs/DEBUGGING.md`.
+`relpose debug my_solution build/datasets/public/default-val --max-episodes 1`, see `docs/DEBUGGING.md`.
 
 ## 3. Iterate
 

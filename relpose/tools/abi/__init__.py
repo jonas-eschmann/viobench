@@ -3,7 +3,6 @@
 ABI_VERSION = 1
 
 BUNDLE_MAGIC = b"RELPOSEBUNDLEv1\0"  # 16-byte head of the runtime's bundle descriptor (see relpose/solution/runtime/python/reactor.c)
-BUNDLE_DESCRIPTOR_BYTES = 32  # magic[16] | address u32 | length u32 | version u32 | reserved u32
 MANIFEST_SECTION = "relpose.manifest"  # wasm custom section with the manifest JSON (read by the harness before init)
 BUNDLE_MANIFEST = "solution.json"  # optional file in the directory: {"resolution": [w, h]}
 CHANNELS = 3  # frames are always RGB (H, W, 3); a grayscale-only set arrives with its gray value in all three channels
@@ -16,8 +15,7 @@ IMU_ROW_VALUES = 7  # [t_s, ax, ay, az, gx, gy, gz]
 POSE_VALUES = 7  # [x, y, z, qx, qy, qz, qw]
 F64_BYTES = 8
 
-REQUIRED_EXPORTS = ("memory", "alloc", "init", "step")
-OPTIONAL_EXPORTS = ("_initialize", "abi_version")
+REQUIRED_EXPORTS = ("memory", "abi_version", "alloc", "init", "step")  # plus `_initialize`, called if the toolchain emitted it
 
 STATUS_OK = 0
 STATUS_NO_ESTIMATE = 1

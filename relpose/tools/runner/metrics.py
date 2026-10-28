@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 
 import numpy as np
 
-from ..geometry import invert, matrices_to_poses, matrix_to_quaternion, poses_to_matrices, quaternion_to_matrix, rotation_angles  # noqa: F401 (re-exported)
+from ..geometry import invert, poses_to_matrices, rotation_angles
 
 MAX_ERROR_ROTATION = np.pi
 

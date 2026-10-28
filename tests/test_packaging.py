@@ -1,6 +1,6 @@
 import pytest
 
-from relpose.tools.abi.wasm_binary import append_custom, find_custom, iter_sections, read_leb128, split_bundle, strip_custom, write_leb128
+from relpose.tools.abi.wasm_binary import append_custom, find_custom, iter_sections, read_leb128, strip_custom, write_leb128
 
 # the smallest valid module: magic + version, no sections
 EMPTY_MODULE = b"\0asm\x01\0\0\0"
@@ -27,7 +27,6 @@ def test_append_find_strip_custom():
     assert find_custom(bundled, "relpose.solution.runtime.python.bundler.bundle") == payload
     assert find_custom(bundled, "name") == b""
     assert strip_custom(bundled, "relpose.solution.runtime.python.bundler.bundle") == TINY_MODULE
-    assert split_bundle(bundled, "relpose.solution.runtime.python.bundler.bundle") == (TINY_MODULE, payload)
     # appending again replaces instead of duplicating
     rebundled = append_custom(bundled, "relpose.solution.runtime.python.bundler.bundle", b"x")
     assert find_custom(rebundled, "relpose.solution.runtime.python.bundler.bundle") == b"x"

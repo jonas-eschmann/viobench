@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from ..abi import AbiError
 from ..abi.module import runtime_descriptor
 from ..abi.wasm_binary import iter_sections
+from ..runner.leaderboard import pareto_front
 from .store import DAILY_QUOTA, MAX_UPLOAD_BYTES, Store
 
 app = FastAPI(title="relpose challenge")
@@ -36,8 +37,8 @@ def authenticate(token):
 
 
 @app.post("/submit")
-async def submit(file: UploadFile = File(...), label: str = Form(""), x_token: str | None = Header(default=None), token: str = Form("")):
-    user = authenticate(x_token or token)
+async def submit(file: UploadFile = File(...), label: str = Form(""), x_token: str | None = Header(default=None)):
+    user = authenticate(x_token)
     if get_store().submissions_today(user) >= DAILY_QUOTA:
         raise HTTPException(status_code=429, detail=f"daily quota of {DAILY_QUOTA} submissions reached")
     data = await file.read()
@@ -121,13 +122,7 @@ def leaderboard():
              f"<p>{len(get_store().list(limit=100000))} submissions, {len(get_store().list(status='queued'))} queued, {len(get_store().list(status='running'))} running. ",
              "Submit with <code>curl -F file=@solution.wasm -F label=v1 -H 'X-Token: ...' /submit</code>.</p>"]
     for dataset, rows in sorted(points.items()):
-        rows = sorted(rows, key=lambda r: (r["fuel"], r["ate"]))
-        best = float("inf")
-        front = set()
-        for row in rows:
-            if row["ate"] < best:
-                front.add(row["id"])
-                best = row["ate"]
+        front = {rows[i]["id"] for i in pareto_front([(row["fuel"], row["ate"]) for row in rows])}
         parts.append(f"<h2>{html.escape(dataset)}</h2><table><tr><th>user</th><th>label</th><th>ATE [m]</th><th>RPE [m/s]</th>"
                      "<th>fuel/frame</th><th>fuel p95</th><th>ms/frame</th><th>episodes</th><th>id</th><th>when</th></tr>")
         for row in sorted(rows, key=lambda r: r["ate"]):
