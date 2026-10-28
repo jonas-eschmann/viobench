@@ -23,8 +23,8 @@ buffers in numpy arrays and calls `Solution.step`.
 
 - `init` runs once per episode; a fresh instance is created for every episode (no state leaks between episodes).
 - Exceptions in `Solution.__init__`/`step` are caught by the shim: traceback to stderr (shown by `check` and kept in
-  the evaluation logs), status `-1`, the episode ends and is marked failed. Returning `None`, a wrong shape or a pose
-  with NaN/inf does the same.
+  the evaluation logs), status `-1`, the episode ends and is marked failed. Returning `None`, a wrong shape (anything but 13
+  values) or a state with NaN/inf does the same.
 - `sys.exit()` is an exception like any other. `os._exit()`, a C-level `abort()` or a memory fault trap the instance:
   episode failed.
 - Running out of fuel in one `step` (`Limits.step_fuel`) or exceeding the wall-clock deadline traps: episode failed.

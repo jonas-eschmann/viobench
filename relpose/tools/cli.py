@@ -2,7 +2,7 @@
 
 solution     bundle, unbundle                  Python runtime + directory <-> solution.wasm
 runner       check, evaluate, leaderboard      run a module on synthetic frames / on a dataset (disk or freshly simulated); aggregate reports
-             debug, score                      run a Python solution in-process (debugger-friendly); score a pose file
+             debug, score                      run a Python solution in-process (debugger-friendly); score an estimate
 datasets     simulate, feed                    write episodes with HyperDrone (GPU); export raw inputs for native debugging
 
 The CLI is the one host component that also reaches into the guest side (for `bundle`); the runner library never does.
@@ -96,7 +96,7 @@ def command_evaluate(arguments):
     def run():
         result = evaluate(arguments.wasm, dataset(), output_dir=arguments.output, max_episodes=max_episodes)
         summary = result["summary"]["overall"]
-        print(f"overall: {summary['completed']}/{summary['episodes']} episodes completed, ATE median {summary['ate_rmse_median']:.3f} m, "
+        print(f"overall: {summary['completed']}/{summary['episodes']} episodes completed, RPE median {summary['rpe_translation_rmse_median']:.3f} m/1 s, "
               f"fuel/frame median {summary['fuel_per_frame_median']:,.0f}")
         return 0 if summary["completed"] == summary["episodes"] else 1
 
@@ -215,15 +215,15 @@ def main(argv=None):
     add_debug_arguments(debug)
     debug.set_defaults(function=command_debug)
 
-    score = commands.add_parser("score", help="[runner] metrics of a pose file (TUM: t x y z qx qy qz qw) against an episode")
+    score = commands.add_parser("score", help="[runner] metrics of an estimate (estimate.tum + twist.txt next to it) against an episode")
     score.add_argument("episode", help="episode directory")
-    score.add_argument("tum", help="estimate.tum written by a debug build or your own script")
+    score.add_argument("tum", help="estimate.tum (TUM: t x y z qx qy qz qw) written by a debug build or your own script; twist.txt (t vx vy vz wx wy wz) must sit next to it")
     score.set_defaults(function=command_score)
 
-    leaderboard = commands.add_parser("leaderboard", help="[runner] aggregate report.json files into the ATE-vs-fuel table (and plot)")
+    leaderboard = commands.add_parser("leaderboard", help="[runner] aggregate report.json files into the RPE-vs-fuel table (and plot)")
     leaderboard.add_argument("reports", nargs="+", help="report.json files or directories containing them")
     leaderboard.add_argument("-o", "--output", help="write the markdown table here")
-    leaderboard.add_argument("--plot", help="write an ATE-vs-fuel PNG here (needs matplotlib)")
+    leaderboard.add_argument("--plot", help="write an RPE-vs-fuel PNG here (needs matplotlib)")
     leaderboard.set_defaults(function=command_leaderboard)
 
     simulate = commands.add_parser("simulate", help="[datasets] write episodes generated with HyperDrone (needs a GPU and pip install relpose[sim])")

@@ -37,8 +37,8 @@ relpose evaluate my_solution.wasm data/val
 relpose evaluate my_solution.wasm --simulate 8                    # fresh episodes, GPU, nothing on disk
 ```
 
-`check` catches crashes and protocol errors; `evaluate` gives ATE/RPE and fuel per frame on episodes
-(`report-my_solution/report.json`, per-episode `estimate.tum` for plotting with `evo`). Tracebacks name your files
+`check` catches crashes and protocol errors; `evaluate` gives RPE (the headline), ATE and fuel per frame on episodes
+(`report-my_solution/report.json`, per-episode `estimate.tum` for plotting with `evo` and `twist.txt` next to it). Tracebacks name your files
 `/bundle/<path>`. To step through your code with a debugger, or to iterate without bundling, run it outside the sandbox:
 `relpose debug my_solution data/val --max-episodes 1`, see `docs/DEBUGGING.md`.
 
@@ -88,7 +88,8 @@ OpenCV's static libraries behind if you want them. Configured with your host com
 | `ModuleNotFoundError: scipy` | not available in the reference runtime; numpy + OpenCV only (`docs/RUNTIME.md`), or build your own |
 | `trap OUT_OF_FUEL` | one step exceeded the fuel budget: reduce work per frame (resolution, feature count, iterations) |
 | `MemoryError` | the 2 GiB cap; avoid keeping every frame |
-| `step returned an unusable pose` | NaN/inf or an all-zero quaternion in the pose: guard divisions and normalise quaternions |
+| `step returned an unusable state` | NaN/inf in the pose or the twist, or an all-zero quaternion: guard divisions and normalise quaternions |
+| `step() must return 13 values` | a pose alone is not enough: append the twist `[vx, vy, vz, wx, wy, wz]` (`docs/ABI.md`, `out`) |
 | frames look identical | you kept a view of the frame buffer; `frame.copy()` |
 | `np.load` fails on `.npz` | compressed archive: save with `np.savez`, not `np.savez_compressed` |
 | the IMU looks "upside down" | the IMU frame need not be gravity-aligned at the start; estimate gravity from the measurements |

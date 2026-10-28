@@ -6,7 +6,8 @@ Per frame pair:
   2. features tracked from the previous frame (goodFeaturesToTrack + calcOpticalFlowPyrLK) give an essential matrix,
      recoverPose yields the unit translation direction of the camera motion;
   3. the IMU displacement over the frame interval (dead reckoning with the current velocity) provides the scale and
-     the fallback when tracking fails; the fused displacement updates the velocity so dead-reckoning drift is damped.
+     the fallback when tracking fails; the fused displacement updates the velocity so dead-reckoning drift is damped;
+  4. the twist is that velocity and the latest gyroscope reading, moved to the camera centre (as in dead_reckoning).
 It is a baseline, not a VIO system: no bundle adjustment, no bias estimation beyond the start. Fuel per frame is
 dominated by the OpenCV calls, which run as SIMD wasm.
 """
@@ -49,6 +50,7 @@ class Solution:
         self.R_wb = np.eye(3)
         self.v = np.zeros(3)
         self.p = np.zeros(3)
+        self.omega = np.zeros(3)  # latest angular velocity of the IMU/body frame, body axes
         self.gyro_bias = np.zeros(3)
         self.gravity_world = np.array([0.0, 0.0, -GRAVITY])
         self.last_t = None
@@ -77,6 +79,7 @@ class Solution:
         start = self.p.copy()
         for row in imu:
             t, accel, gyro = row[0], row[1:4], row[4:7]
+            self.omega = gyro - self.gyro_bias
             dt = t - self.last_t
             if dt > 0:
                 self.R_wb = self.R_wb @ cv2.Rodrigues((gyro - self.gyro_bias) * dt)[0]
@@ -91,6 +94,13 @@ class Solution:
         T_wb[:3, :3] = self.R_wb
         T_wb[:3, 3] = self.p
         return T_wb @ self.T_imu_cam
+
+    def _state(self):
+        """Pose of the camera in the first camera frame, then its twist in camera axes (camera centre: v + w x r)."""
+        T_c0_c = np.linalg.inv(self.T_w_c0) @ self._pose_camera()
+        R_cam_imu, r = self.T_cam_imu[:3, :3], self.T_imu_cam[:3, 3]
+        velocity = R_cam_imu @ (self.R_wb.T @ self.v + np.cross(self.omega, r))
+        return np.concatenate([T_c0_c[:3, 3], matrix_to_quaternion(T_c0_c[:3, :3]), velocity, R_cam_imu @ self.omega])
 
     # --- vision ------------------------------------------------------------------------------------------------
 
@@ -126,12 +136,11 @@ class Solution:
             self.calibration_samples.extend(imu.tolist())
             samples = self.calibration_samples
             if len(samples) < 2 or samples[-1][0] - samples[0][0] < CALIBRATION_SECONDS:
-                return [0, 0, 0, 0, 0, 0, 1.0]  # still calibrating at rest: identity until there is an estimate
+                return [0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0]  # still calibrating at rest: identity, standing still
             self._initialize(imu[-1, 0] if len(imu) else t)
             self.previous_frame = frame.copy()
             self.previous_points = self._detect(frame)
-            T_c0_c = np.linalg.inv(self.T_w_c0) @ self._pose_camera()
-            return np.concatenate([T_c0_c[:3, 3], matrix_to_quaternion(T_c0_c[:3, :3])])
+            return self._state()
 
         R_wb_before = self.R_wb.copy()
         displacement_imu = self._integrate(imu)
@@ -147,5 +156,4 @@ class Solution:
             self.v = 0.5 * self.v + 0.5 * displacement / dt  # damp dead-reckoning drift with the visual direction
         self.previous_frame = frame.copy()
         self.previous_points = self._detect(frame)
-        T_c0_c = np.linalg.inv(self.T_w_c0) @ self._pose_camera()
-        return np.concatenate([T_c0_c[:3, 3], matrix_to_quaternion(T_c0_c[:3, :3])])
+        return self._state()

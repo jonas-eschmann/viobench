@@ -18,10 +18,16 @@ compute they spend per frame, so the leaderboard is a curve, not a number.
 
 ## Output
 
-`[x, y, z, qx, qy, qz, qw]`: translation (metres) and unit quaternion (scalar last) of `T_c0_ck`, the pose of the
-current camera frame in the first camera frame (`p_c0 = R p_ck + t`). Metric scale is expected: the IMU makes it
-observable. Every step must return a usable pose: one that raises or returns none ends the episode as failed, so
-until you have an estimate return your best guess (at rest: identity).
+`[x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]`, the state of the current camera frame:
+
+- its pose: translation (metres) and unit quaternion (scalar last) of `T_c0_ck`, the pose of the current camera frame
+  in the first camera frame (`p_c0 = R p_ck + t`);
+- its twist in its own axes: the velocity of the camera centre (m/s) and the angular velocity (rad/s), `v = Rᵀ dt/dt`
+  and `[w]× = Rᵀ dR/dt` of the same `T_c0_ck` (`docs/ABI.md`, `out`, has an example and the conversion from IMU states).
+
+Metric scale is expected: the IMU makes it observable. Every step must return a usable state, all 13 values: one that
+raises, returns anything else or a value that is not finite ends the episode as failed, so until you have an estimate
+return your best guess (at rest: identity and zero twist).
 
 Everything is **causal**: at step `k` you have seen frames `0..k` and IMU samples up to `t_k`, nothing later. The
 estimate for frame `k` is final once `step` returns.
@@ -30,11 +36,16 @@ estimate for frame `k` is final once `step` returns.
 
 Per episode (`relpose.tools.runner.metrics`):
 
+- **RPE** (the headline) – for every pair of frames one second apart, compare your motion between them with the true
+  motion, `E = (T_gt,i⁻¹ T_gt,j)⁻¹ (T_est,i⁻¹ T_est,j)`; the translational RPE is the RMSE of `|trans(E)|` over all
+  such pairs, in metres per one-second window. It measures how well you track motion over the last second, so an
+  early mistake costs only the windows it affects, not the rest of the episode; the rotational RPE (geodesic angle of
+  `E`) is reported next to it;
 - **ATE** – RMSE of the position error over all frames, in the frame-0 coordinates, *without* any alignment (frame 0
-  defines the frame);
+  defines the frame): the accumulated drift;
 - rotation RMSE (geodesic angle);
-- **RPE** at Δ = 1 s – RMSE of the relative pose error between frames one second apart (drift rate, robust to a single
-  early mistake);
+- **twist** – RMSE of the velocity (m/s) and of the angular velocity (rad/s) against the ground-truth twist (central
+  differences of the ground-truth camera poses);
 - diagnostics: Sim(3)-aligned ATE and the fitted scale (separates "wrong scale" from "wrong shape"), final
   drift per metre travelled, held frames (after a failure).
 
@@ -44,9 +55,11 @@ Compute (`relpose.tools.runner.run`):
   (host calls are free, the interpreter's own work is not). It is identical on your laptop and on the server.
 - wall time per frame (for intuition only; it depends on the machine).
 
-Each dataset of the evaluation is summarised by the median ATE and median fuel per frame over its episodes. A
-submission is a point in the (fuel/frame, ATE) plane per dataset; your submissions together form your curve. A failure (an error from `init` or `step`, an unusable pose, a trap)
-ends the episode and marks it failed: the frames from there on repeat the last pose, and it stays on the record.
+Each dataset of the evaluation is summarised by the median RPE and median fuel per frame over its episodes. A
+submission is a point in the (fuel/frame, RPE) plane per dataset; your submissions together form your curve. A
+failure (an error from `init` or `step`, an unusable state, a trap) ends the episode and marks it failed: the frames
+from there on repeat the last pose, standing still, so every window after it costs the distance actually flown in it,
+and the episode stays on the record.
 
 ## Limits (default `Limits` in `relpose.tools.runner.sandbox`)
 

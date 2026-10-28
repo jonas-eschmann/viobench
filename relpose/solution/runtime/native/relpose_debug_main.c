@@ -3,7 +3,8 @@
  * Linked with your solution's sources by relpose_reactor.cmake whenever the configure is not WASI
  * (`cmake -S . -B build-host && cmake --build build-host` -> build-host/debug). It reads a feed directory written by
  * `relpose feed <episode> -o <dir>` (raw arrays, no PNG/JSON parsing needed), calls init() and step() exactly like the
- * sandbox would, writes estimate.tum and prints the position RMSE. Score it fully with `relpose score <episode> estimate.tum`.
+ * sandbox would, writes estimate.tum and twist.txt next to it and prints the position RMSE. Score it fully with
+ * `relpose score <episode> estimate.tum`.
  * Run under gdb/lldb:  gdb --args build-host/debug <feed dir>
  */
 #include "relpose_abi.h"
@@ -16,12 +17,12 @@
 
 #define TIME_TOLERANCE 1e-6 /* seconds: the same slack the host harness uses when selecting IMU rows */
 
-/* The harness's test for a usable pose: finite, with a non-zero quaternion. */
-static int usable(const double *pose) {
-    for (int i = 0; i < RELPOSE_POSE_VALUES; i++) {
-        if (!isfinite(pose[i])) return 0;
+/* The harness's test for a usable state (pose and twist): all finite, with a non-zero quaternion. */
+static int usable(const double *state) {
+    for (int i = 0; i < RELPOSE_STATE_VALUES; i++) {
+        if (!isfinite(state[i])) return 0;
     }
-    return pose[3] != 0 || pose[4] != 0 || pose[5] != 0 || pose[6] != 0;
+    return state[3] != 0 || state[4] != 0 || state[5] != 0 || state[6] != 0;
 }
 
 static void *read_file(const char *directory, const char *name, size_t *size) {
@@ -86,13 +87,18 @@ int main(int argc, char **argv) {
         return 1;
     }
 
+    char twist_output[4096]; /* twist.txt next to the pose file */
+    const char *slash = strrchr(output, '/');
+    snprintf(twist_output, sizeof twist_output, "%.*stwist.txt", slash ? (int)(slash - output + 1) : 0, output);
     FILE *tum = fopen(output, "w");
-    if (tum == NULL) {
-        fprintf(stderr, "cannot write %s\n", output);
+    FILE *twist = fopen(twist_output, "w");
+    if (tum == NULL || twist == NULL) {
+        fprintf(stderr, "cannot write %s\n", tum == NULL ? output : twist_output);
         return 2;
     }
     fprintf(tum, "# t x y z qx qy qz qw (camera k in camera 0 frame)\n");
-    double pose[RELPOSE_POSE_VALUES];
+    fprintf(twist, "# t vx vy vz wx wy wz (velocity and angular velocity of camera k in camera k axes)\n");
+    double state[RELPOSE_STATE_VALUES];
     double previous = -INFINITY;
     long window_start = 0;
     long k = 0;
@@ -103,24 +109,28 @@ int main(int argc, char **argv) {
         while (window_start < imu_rows && imu[window_start * RELPOSE_IMU_ROW_VALUES] <= previous + TIME_TOLERANCE) window_start++;
         long window_end = window_start;
         while (window_end < imu_rows && imu[window_end * RELPOSE_IMU_ROW_VALUES] <= t + TIME_TOLERANCE) window_end++;
+        for (int i = 0; i < RELPOSE_STATE_VALUES; i++) state[i] = NAN; /* like the host: a value not written fails the step */
         double started = now_seconds();
-        status = step(t, pixels + (size_t)k * frame_bytes, imu + window_start * RELPOSE_IMU_ROW_VALUES, (int32_t)(window_end - window_start), pose);
+        status = step(t, pixels + (size_t)k * frame_bytes, imu + window_start * RELPOSE_IMU_ROW_VALUES, (int32_t)(window_end - window_start), state);
         double seconds = now_seconds() - started;
-        if (status != RELPOSE_STATUS_OK || !usable(pose)) {
+        if (status != RELPOSE_STATUS_OK || !usable(state)) {
             printf("frame %ld: %s; the harness ends the episode here and marks it failed\n", k,
-                   status != RELPOSE_STATUS_OK ? "step returned an error" : "pose not usable (NaN/inf or all-zero quaternion)");
+                   status != RELPOSE_STATUS_OK ? "step returned an error"
+                                               : "state not usable (not all 13 values written, NaN/inf, or all-zero quaternion)");
             break;
         }
         total_seconds += seconds;
-        fprintf(tum, "%.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g\n", t, pose[0], pose[1], pose[2], pose[3], pose[4], pose[5], pose[6]);
+        fprintf(tum, "%.9g %.9g %.9g %.9g %.9g %.9g %.9g %.9g\n", t, state[0], state[1], state[2], state[3], state[4], state[5], state[6]);
+        fprintf(twist, "%.9g %.9g %.9g %.9g %.9g %.9g %.9g\n", t, state[7], state[8], state[9], state[10], state[11], state[12]);
         const double *truth = ground_truth + k * RELPOSE_POSE_VALUES;
-        double dx = pose[0] - truth[0], dy = pose[1] - truth[1], dz = pose[2] - truth[2];
+        double dx = state[0] - truth[0], dy = state[1] - truth[1], dz = state[2] - truth[2];
         squared_error += dx * dx + dy * dy + dz * dz;
         previous = t;
         window_start = window_end;
     }
     fclose(tum);
-    printf("%ld/%ld frames ok, position RMSE over them %.3f m, %.2f ms/frame (host, no fuel); poses in %s\n", k, frames,
-           sqrt(squared_error / (double)k), 1e3 * total_seconds / (double)k, output);
+    fclose(twist);
+    printf("%ld/%ld frames ok, position RMSE over them %.3f m, %.2f ms/frame (host, no fuel); poses in %s, twists in %s\n", k, frames,
+           sqrt(squared_error / (double)k), 1e3 * total_seconds / (double)k, output, twist_output);
     return k < frames;
 }

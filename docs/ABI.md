@@ -1,7 +1,8 @@
 # Solution ABI (version 1)
 
 A submission is one WebAssembly file (`wasm32-wasip1`, *reactor*: no `_start`). The harness instantiates it once per
-episode, calls `init` with a JSON config, then `step` once per camera frame, and reads a pose back after each step.
+episode, calls `init` with a JSON config, then `step` once per camera frame, and reads the state of the camera (pose
+and twist) back after each step.
 State lives inside the module between steps. The Python runtime (`runtime.wasm`) implements this ABI for you; C, C++
 and Rust solutions implement it directly (`relpose/solution/examples/native/cpp_minimal`).
 
@@ -64,8 +65,17 @@ All numbers are little-endian; integers are `i32`, floats `f64`.
   repeats of the previous sample, and an IMU recorded at another rate is linearly interpolated. Spacing between rows
   is only nominal (≈ 5 ms); go by the timestamps. Also reused next step.
 - **`t`**: timestamp of the frame in seconds (mid-exposure of the centre row), same clock as the IMU rows.
-- **`out`**: 7 `f64` `[x, y, z, qx, qy, qz, qw]` — the pose of the *current camera frame* expressed in the
-  *first camera frame* (`T_c0_ck`: `p_c0 = R p_ck + t`), unit quaternion with scalar last. Written on status `0`.
+- **`out`**: 13 `f64` `[x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]` — the state of the *current camera frame*
+  at `t`, all 13 written on status `0` (the host fills `out` with NaN before every call, so a value left out fails the
+  step):
+  - `[x, y, z, qx, qy, qz, qw]`: its pose expressed in the *first camera frame* (`T_c0_ck`: `p_c0 = R p_ck + t`), unit
+    quaternion with scalar last;
+  - `[vx, vy, vz, wx, wy, wz]`: its twist in its *own* axes (x right, y down, z forward), the derivative of the same
+    `T_c0_ck`: `v = Rᵀ dt/dt` is the velocity of the camera centre in m/s and `w` (with `[w]× = Rᵀ dR/dt`) the angular
+    velocity in rad/s. Flying straight ahead at 2 m/s while yawing left at 0.5 rad/s is `v = (0, 0, 2)`,
+    `w = (0, −0.5, 0)`, however the camera is oriented relative to frame 0. A filter that tracks the IMU's velocity
+    `v_w` in a world frame converts with `v = R_cam_imu (R_wiᵀ v_w + w_i × r)` and `w = R_cam_imu w_i`, where `w_i`
+    is the IMU's angular velocity and `r = −R_cam_imuᵀ t_cam_imu` the camera centre in IMU coordinates (lever arm).
 
 The harness writes `frame`/`imu` into memory it obtained from `alloc`, calls `step`, then reads `out`. The guest
 owns nothing the host passes except the right to read it during the call; the config bytes given to `init` are
@@ -76,15 +86,16 @@ call because the memory may grow and move.
 
 | code | from `init` | from `step` |
 |---|---|---|
-| `0` | ready | `out` holds the pose |
+| `0` | ready | `out` holds the pose and the twist |
 | anything else (return `-1`) | error | error |
 
 Explain an error on stderr (the Python runtime prints the traceback there).
 
-**Every step must deliver a usable pose.** An error from `init` or `step`, a pose that is not finite or has an
-all-zero quaternion, or a trap ends the episode there and marks it failed. It is still scored: the frames from the
-failure on repeat the last pose (identity if there was none). There is no "no estimate": until you have one, return
-your best guess (at rest: identity).
+**Every step must deliver a usable state.** An error from `init` or `step`, a state with a value that is not finite
+(one left unwritten included) or a pose with an all-zero quaternion, or a trap ends the episode there and marks it
+failed. It is still scored: the frames from the failure on repeat the last pose, standing still (identity and zero
+twist if there was none). There is no "no estimate": until you have one, return your best guess (at rest: identity
+and zero twist).
 
 **Traps** (`unreachable`, out-of-bounds memory access, stack overflow, running out of fuel, wall-clock deadline,
 `exit()`/`proc_exit`) kill the instance; the next episode gets a new instance. In Python, `sys.exit()` is caught like
@@ -124,8 +135,9 @@ class Solution:
     def __init__(self, config: dict): ...
     def step(self, t: float, frame: np.ndarray, imu: np.ndarray) -> Sequence[float]:
         """frame: uint8 (H, W, 3) RGB, read-only view valid until the next step;
-        imu: float64 (N, 7) rows [t, ax, ay, az, gx, gy, gz]. Return [x, y, z, qx, qy, qz, qw]; anything else
-        (None included) or raising is an error and ends the episode."""
+        imu: float64 (N, 7) rows [t, ax, ay, az, gx, gy, gz]. Return the 13 values of `out`
+        [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz]; anything else (None or a pose alone included) or raising
+        is an error and ends the episode."""
 ```
 
 The entry point is always `Solution` in `solution.py` (or `solution/__init__.py`) at the root of the bundled

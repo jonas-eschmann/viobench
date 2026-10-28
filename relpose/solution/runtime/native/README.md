@@ -16,7 +16,7 @@ Your own project: copy `relpose/solution/examples/native/cpp_minimal`, keep `#in
 
 **Debugging on the host** (`docs/DEBUGGING.md`): the same `relpose_solution(...)` call, configured with your host compiler
 instead of the wasi-sdk toolchain, builds an executable `debug` = your sources + `relpose_debug_main.c` (`-g -O1`) that
-replays one episode's inputs through `init`/`step` exactly like the sandbox and writes `estimate.tum`:
+replays one episode's inputs through `init`/`step` exactly like the sandbox and writes `estimate.tum` and `twist.txt`:
 
 ```bash
 relpose feed data/val/<name> -o build/feed      # raw arrays: config.json, frames.u8, imu.f64, ...

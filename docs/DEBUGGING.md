@@ -11,7 +11,7 @@ what the sandbox accepts and what it costs.
 ```bash
 relpose debug my_solution data/val --max-episodes 1  # the directory with solution.py
 relpose debug my_solution --simulate 2                                         # fresh HyperDrone episodes (GPU)
-relpose debug my_solution <episode dir> -o out       # writes out/<dataset>/<episode>/estimate.tum like `evaluate` does
+relpose debug my_solution <episode dir> -o out       # writes out/<dataset>/<episode>/estimate.tum and twist.txt like `evaluate` does
 ```
 
 The driver imports your directory (`Solution.frame_width` is honoured), provides the
@@ -22,7 +22,7 @@ calls `Solution(config)` then `step(t, frame, imu)` per frame, exactly like the 
 - **Breakpoints**: put `breakpoint()` anywhere in `step`; pdb opens in the terminal. In VS Code pick the
   *relpose: debug Python solution* launch configuration (`.vscode/launch.json`, edit the paths), set breakpoints, F5.
 - **Prints** go to your terminal, uncaptured.
-- **Plots and custom loops**: `trace` yields one record per frame (`t`, `frame`, `imu`, `pose`, host seconds):
+- **Plots and custom loops**: `trace` yields one record per frame (`t`, `frame`, `imu`, `pose`, `twist`, host seconds):
 
   ```python
   import numpy as np, matplotlib.pyplot as plt
@@ -40,13 +40,13 @@ calls `Solution(config)` then `step(t, frame, imu)` per frame, exactly like the 
 wasi-sdk toolchain (`runtime/native/build.sh`) and, when configured with your host compiler, an executable `debug`:
 your sources plus `relpose_debug_main.c`, compiled with `-g -O1`. That driver reads a *feed* (one episode's inputs as
 raw arrays, so C needs no PNG or JSON parser), calls `init` and `step` like the sandbox (same IMU windows
-`t_prev < t ≤ t_frame`, same buffers) and writes `estimate.tum`.
+`t_prev < t ≤ t_frame`, same buffers) and writes `estimate.tum` and `twist.txt`.
 
 ```bash
 relpose feed data/val/<name> -o build/feed          # --resolution 640x480 if your frame_width() returns 640
 cd my_native_solution && cmake -S . -B build-host && cmake --build build-host
 build-host/debug ../build/feed estimate.tum                 # prints where a step fails, ms/frame and the position RMSE
-relpose score data/val/<name> estimate.tum          # the full metrics line
+relpose score data/val/<name> estimate.tum          # the full metrics line (reads twist.txt next to estimate.tum)
 gdb --args build-host/debug ../build/feed                   # or lldb; VS Code: "relpose: debug native solution (gdb)"
 ```
 
@@ -65,7 +65,7 @@ program argument in `.vscode/launch.json` or `settings.json` (`cmake.debugConfig
 |---|---|---|
 | compute | fuel per frame, step/init limits, memory cap | host time only; no limits |
 | libraries | the runtime's numpy/OpenCV (`docs/RUNTIME.md`), or what you linked into your .wasm | whatever is installed on your machine |
-| failures | traps, errors and unusable poses end the episode (marked failed) | exceptions propagate to you (that is the point) |
+| failures | traps, errors and unusable states end the episode (marked failed) | exceptions propagate to you (that is the point) |
 | inputs | identical: `Episode.adapt` → `config`, frames, IMU windows | identical |
 
 A solution that works on the host but not in `check` is usually using a module the runtime lacks, more memory than

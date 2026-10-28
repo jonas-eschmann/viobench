@@ -1,31 +1,38 @@
-"""Trajectory error metrics for poses given relative to the first camera frame.
+"""Trajectory error metrics for states given relative to the first camera frame.
 
-Poses are (N, 7) arrays [x, y, z, qx, qy, qz, qw] (scalar-last quaternions), one row per frame. A row without a usable
-pose (NaN/inf, as recorded for the frames after an episode failed, or a zero quaternion) repeats the previous pose,
-identity before the first, so every metric runs over the complete trajectory. Because the task fixes the reference
-frame (frame 0), ATE is computed *without* alignment; a Sim(3)-aligned ATE is reported as a diagnostic that separates
-scale/gravity errors from structural ones.
+States are (N, 13) arrays [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz], one row per frame: the pose T_c0_ck
+(scalar-last quaternion), then the twist of camera k in camera-k axes. A row without a usable state (NaN/inf, as
+recorded for the frames after an episode failed, or a zero quaternion) repeats the previous pose and stands still
+(zero twist), identity before the first, so every metric runs over the complete trajectory.
+
+The headline is the translational RPE over one-second windows: local, so it does not accumulate drift, and averaged
+over every window of an episode. Because the task fixes the reference frame (frame 0), ATE is computed *without*
+alignment; a Sim(3)-aligned ATE is reported as a diagnostic that separates scale/gravity errors from structural ones.
 """
 from dataclasses import asdict, dataclass
 
 import numpy as np
 
+from .. import abi
 from ..geometry import invert, poses_to_matrices, rotation_angles
 
-IDENTITY_POSE = np.array([0, 0, 0, 0, 0, 0, 1.0])
+IDENTITY_STATE = np.array([0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0])
 
 
-def valid_poses(poses):
-    """(N,) mask of the rows of (N, 7) poses that are usable: finite, with a non-zero quaternion."""
-    poses = np.asarray(poses, dtype=float)
-    return np.all(np.isfinite(poses), axis=1) & np.any(poses[:, 3:] != 0, axis=1)
+def valid_states(states):
+    """(N,) mask of the rows of (N, 13) states that are usable: finite, with a non-zero quaternion."""
+    states = np.asarray(states, dtype=float)
+    return np.all(np.isfinite(states), axis=1) & np.any(states[:, 3:7] != 0, axis=1)
 
 
-def hold_last_pose(poses):
-    """Rows that are not usable poses repeat the previous usable row (identity before the first)."""
-    poses = np.asarray(poses, dtype=float)
-    source = np.maximum.accumulate(np.where(valid_poses(poses), np.arange(len(poses)), -1))
-    return np.vstack([IDENTITY_POSE, poses])[source + 1]
+def hold_last_state(states):
+    """Rows that are not usable states repeat the previous usable pose with zero twist (identity before the first)."""
+    states = np.asarray(states, dtype=float)
+    valid = valid_states(states)
+    source = np.maximum.accumulate(np.where(valid, np.arange(len(states)), -1))
+    held = np.vstack([IDENTITY_STATE, states])[source + 1]
+    held[~valid, abi.POSE_VALUES:] = 0  # a held pose stands still
+    return held
 
 
 def umeyama_sim3(source, target):
@@ -50,12 +57,14 @@ def umeyama_sim3(source, target):
 class TrajectoryMetrics:
     frames: int
     held: int  # diagnostic: frames without a usable pose (they repeat the previous one)
+    rpe_translation_rmse: float  # m over windows of delta_seconds: the headline
+    rpe_rotation_rmse: float  # rad over windows of delta_seconds
+    rpe_pairs: int  # windows (frame pairs delta_seconds apart)
     ate_rmse: float  # m, no alignment
     rotation_rmse: float  # rad
     rotation_max: float  # rad
-    rpe_translation_rmse: float  # m per delta_seconds
-    rpe_rotation_rmse: float  # rad per delta_seconds
-    rpe_pairs: int
+    velocity_rmse: float  # m/s, velocity of the camera centre in camera-k axes
+    angular_velocity_rmse: float  # rad/s, in camera-k axes
     sim3_scale: float  # diagnostic: scale factor that best aligns the estimate to ground truth
     sim3_ate_rmse: float  # m, after Sim(3) alignment
     distance_travelled: float  # m, ground truth
@@ -67,14 +76,14 @@ class TrajectoryMetrics:
 
 
 def evaluate_trajectory(ground_truth, estimate, timestamps, delta_seconds=1.0):
-    """ground_truth, estimate: (N, 7) poses relative to frame 0; estimate rows without a usable pose repeat the previous one."""
+    """ground_truth, estimate: (N, 13) states relative to frame 0; estimate rows without a usable state repeat the previous pose."""
     ground_truth = np.asarray(ground_truth, dtype=float)
     estimate = np.asarray(estimate, dtype=float)
     timestamps = np.asarray(timestamps, dtype=float)
     n = len(ground_truth)
-    assert estimate.shape == (n, 7) and timestamps.shape == (n,)
-    held = int(n - valid_poses(estimate).sum())
-    estimate = hold_last_pose(estimate)
+    assert ground_truth.shape == estimate.shape == (n, abi.STATE_VALUES) and timestamps.shape == (n,)
+    held = int(n - valid_states(estimate).sum())
+    estimate = hold_last_state(estimate)
     T_gt = poses_to_matrices(ground_truth)
     T_est = poses_to_matrices(estimate)
     steps = np.linalg.norm(np.diff(ground_truth[:, :3], axis=0), axis=1)
@@ -86,20 +95,19 @@ def evaluate_trajectory(ground_truth, estimate, timestamps, delta_seconds=1.0):
     ate_rmse = float(np.sqrt(np.mean(position_error ** 2)))
     rotation_rmse = float(np.sqrt(np.mean(rotation_error ** 2)))
     rotation_max = float(rotation_error.max())
+    twist_error = estimate[:, abi.POSE_VALUES:] - ground_truth[:, abi.POSE_VALUES:]
+    velocity_rmse = float(np.sqrt(np.mean(np.sum(twist_error[:, :3] ** 2, axis=1))))
+    angular_velocity_rmse = float(np.sqrt(np.mean(np.sum(twist_error[:, 3:] ** 2, axis=1))))
 
-    # relative pose error over pairs (i, j) with t_j - t_i ≈ delta_seconds
-    rpe_translation, rpe_rotation = [], []
-    for i in range(n):
-        j = i + int(np.searchsorted(timestamps[i:], timestamps[i] + delta_seconds))
-        if j >= n:
-            continue
-        relative_gt = invert(T_gt[i]) @ T_gt[j]
-        relative_est = invert(T_est[i]) @ T_est[j]
-        error = invert(relative_gt) @ relative_est
-        rpe_translation.append(np.linalg.norm(error[:3, 3]))
-        rpe_rotation.append(rotation_angles(error[:3, :3]))
-    rpe_translation = np.asarray(rpe_translation)
-    rpe_rotation = np.asarray(rpe_rotation)
+    # relative pose error over pairs (i, j) with t_j - t_i = delta_seconds, to within half a frame interval (the
+    # timestamps are floats: without the slack, rounding sometimes picks the frame after)
+    slack = 0.5 * float(np.median(np.diff(timestamps))) if n > 1 else 0.0
+    j = np.searchsorted(timestamps, timestamps + delta_seconds - slack)
+    i = np.flatnonzero(j < n)
+    j = j[i]
+    error = invert(invert(T_gt[i]) @ T_gt[j]) @ (invert(T_est[i]) @ T_est[j])
+    rpe_translation = np.linalg.norm(error[:, :3, 3], axis=1)
+    rpe_rotation = rotation_angles(error[:, :3, :3])
 
     sim3_scale, sim3_ate = float("nan"), float("nan")
     if n >= 3:
@@ -112,12 +120,14 @@ def evaluate_trajectory(ground_truth, estimate, timestamps, delta_seconds=1.0):
     return TrajectoryMetrics(
         frames=n,
         held=held,
-        ate_rmse=ate_rmse,
-        rotation_rmse=rotation_rmse,
-        rotation_max=rotation_max,
         rpe_translation_rmse=float(np.sqrt(np.mean(rpe_translation ** 2))) if len(rpe_translation) else float("nan"),
         rpe_rotation_rmse=float(np.sqrt(np.mean(rpe_rotation ** 2))) if len(rpe_rotation) else float("nan"),
         rpe_pairs=int(len(rpe_translation)),
+        ate_rmse=ate_rmse,
+        rotation_rmse=rotation_rmse,
+        rotation_max=rotation_max,
+        velocity_rmse=velocity_rmse,
+        angular_velocity_rmse=angular_velocity_rmse,
         sim3_scale=sim3_scale,
         sim3_ate_rmse=sim3_ate,
         distance_travelled=distance,

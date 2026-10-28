@@ -14,7 +14,7 @@
 
 #define ABI_VERSION RELPOSE_ABI_VERSION
 #define IMU_ROW_VALUES RELPOSE_IMU_ROW_VALUES
-#define POSE_VALUES RELPOSE_POSE_VALUES
+#define STATE_VALUES RELPOSE_STATE_VALUES
 #define STATUS_OK RELPOSE_STATUS_OK
 #define STATUS_ERROR RELPOSE_STATUS_ERROR
 
@@ -130,11 +130,11 @@ int32_t init(const char *config, uint32_t config_length) {
 }
 
 // frame: height*width*3 uint8 RGB; imu: imu_count rows of [t, ax, ay, az, gx, gy, gz] float64 with
-// t_prev < t <= t_frame; out: [x, y, z, qx, qy, qz, qw] float64 written on STATUS_OK.
+// t_prev < t <= t_frame; out: [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz] float64 written on STATUS_OK.
 int32_t step(double t, const uint8_t *frame, const double *imu, int32_t imu_count, double *out) {
     PyObject *frame_view = PyMemoryView_FromMemory((char *)frame, frame_bytes, PyBUF_READ);
     PyObject *imu_view = PyMemoryView_FromMemory((char *)imu, (Py_ssize_t)imu_count * IMU_ROW_VALUES * (Py_ssize_t)sizeof(double), PyBUF_READ);
-    PyObject *out_view = PyMemoryView_FromMemory((char *)out, POSE_VALUES * (Py_ssize_t)sizeof(double), PyBUF_WRITE);
+    PyObject *out_view = PyMemoryView_FromMemory((char *)out, STATE_VALUES * (Py_ssize_t)sizeof(double), PyBUF_WRITE);
     int32_t code = STATUS_ERROR;
     if (frame_view != NULL && imu_view != NULL && out_view != NULL) {
         PyObject *result = PyObject_CallFunction(shim_step, "dOOO", t, frame_view, imu_view, out_view);

@@ -40,7 +40,8 @@ def check(wasm, frames=5, logs=None, verbose=False, log=print):
             log(f"step {k}: {error}")
             return 1
         pose = np.array2string(result.pose, precision=3, suppress_small=True)
-        log(f"step {k}: fuel {result.fuel:>14,} wall {result.wall_seconds * 1e3:8.2f} ms pose {pose}")
+        twist = np.array2string(result.twist, precision=3, suppress_small=True)
+        log(f"step {k}: fuel {result.fuel:>14,} wall {result.wall_seconds * 1e3:8.2f} ms pose {pose} twist {twist}")
     if not verbose:
         out, err = sandbox.stdout_tail(), sandbox.stderr_tail()
         if out:

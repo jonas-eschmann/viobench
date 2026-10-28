@@ -2,7 +2,7 @@
 
 The solution is imported and driven exactly like the runtime drives it (`Solution(config)` then `step(t, frame, imu)`
 per frame, inputs adapted to its `Solution.frame_width`), so a `breakpoint()` in `step` stops
-under pdb or VS Code and the returned poses can be plotted. Same metrics and `estimate.tum` as `relpose evaluate`,
+under pdb or VS Code and the returned states can be plotted. Same metrics and estimate files as `relpose evaluate`,
 but no fuel and the host's numpy/OpenCV: `relpose check` remains the authority on what the sandbox accepts.
 """
 import importlib
@@ -17,7 +17,8 @@ from pathlib import Path
 import numpy as np
 
 from .. import abi
-from .metrics import evaluate_trajectory, valid_poses
+from .metrics import evaluate_trajectory, valid_states
+from .score import write_estimates
 
 BUNDLE_MODULE = "solution_bundle"
 
@@ -89,6 +90,7 @@ class Step:
     frame: np.ndarray
     imu: np.ndarray
     pose: np.ndarray
+    twist: np.ndarray
     seconds: float
 
 
@@ -98,37 +100,37 @@ def trace(solution, episode):
     estimator = solution.create(config)
     for index, (t, frame, imu) in enumerate(episode.steps(frames)):
         started = time.perf_counter()
-        pose = estimator.step(float(t), frame, imu)
+        state = estimator.step(float(t), frame, imu)
         seconds = time.perf_counter() - started
-        if pose is None:
-            raise ValueError("step() must return 7 values [x, y, z, qx, qy, qz, qw], got None (return the identity pose until you have an estimate)")
-        pose = np.asarray(pose, dtype=float).reshape(abi.POSE_VALUES)
-        if not valid_poses(pose[None])[0]:
-            raise ValueError(f"step() returned an unusable pose {pose.tolist()} (NaN/inf or an all-zero quaternion)")
-        yield Step(index, float(t), frame, imu, pose, seconds)
+        if state is None:
+            raise ValueError("step() must return 13 values [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz], got None "
+                             "(return the identity pose and zero twist until you have an estimate)")
+        state = np.asarray(state, dtype=float).reshape(-1)
+        if state.shape != (abi.STATE_VALUES,):
+            raise ValueError(f"step() must return 13 values [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz], got shape {state.shape}")
+        if not valid_states(state[None])[0]:
+            raise ValueError(f"step() returned an unusable state {state.tolist()} (NaN/inf or an all-zero quaternion)")
+        yield Step(index, float(t), frame, imu, state[:abi.POSE_VALUES], state[abi.POSE_VALUES:], seconds)
 
 
 def run(solution, dataset, output_dir=None, max_episodes=None, log=print):
-    """Runs the solution over a Dataset; returns [(episode, estimates (N, 7), TrajectoryMetrics)]. A failing step raises."""
+    """Runs the solution over a Dataset; returns [(episode, estimates (N, 13), TrajectoryMetrics)]. A failing step raises."""
     from .run import as_dataset
 
     results = []
     for count, episode in enumerate(as_dataset(dataset)):
         if max_episodes is not None and count >= max_episodes:
             break
-        estimates = np.empty((episode.num_frames, abi.POSE_VALUES))
+        estimates = np.empty((episode.num_frames, abi.STATE_VALUES))
         seconds = []
         for step in trace(solution, episode):
-            estimates[step.index] = step.pose
+            estimates[step.index] = np.concatenate([step.pose, step.twist])
             seconds.append(step.seconds)
-        metrics = evaluate_trajectory(episode.ground_truth_relative(), estimates, episode.frame_times)
+        metrics = evaluate_trajectory(episode.ground_truth_state(), estimates, episode.frame_times)
         if output_dir is not None:
-            directory = Path(output_dir) / episode.dataset / episode.name
-            directory.mkdir(parents=True, exist_ok=True)
-            np.savetxt(directory / "estimate.tum", np.column_stack([episode.frame_times, estimates]), fmt="%.9g",
-                       header="t x y z qx qy qz qw (camera k in camera 0 frame)", comments="# ")
-        log(f"{episode.dataset}/{episode.name}: ATE {metrics.ate_rmse:.3f} m  RPE {metrics.rpe_translation_rmse:.3f} m/s  "
-            f"rot {np.degrees(metrics.rotation_rmse):.1f} deg  held {metrics.held}  "
+            write_estimates(Path(output_dir) / episode.dataset / episode.name, episode.frame_times, estimates)
+        log(f"{episode.dataset}/{episode.name}: RPE {metrics.rpe_translation_rmse:.3f} m/1 s  ATE {metrics.ate_rmse:.3f} m  "
+            f"rot {np.degrees(metrics.rotation_rmse):.1f} deg  vel {metrics.velocity_rmse:.3f} m/s  held {metrics.held}  "
             f"{np.median(seconds) * 1e3:.1f} ms/frame (host, no fuel)")
         results.append((episode, estimates, metrics))
     if not results:
@@ -144,7 +146,7 @@ def add_arguments(parser):
     parser.add_argument("datasets", nargs="*", help="episode directories or directories of episodes")
     parser.add_argument("--simulate", type=int, metavar="N", help="also run on N fresh HyperDrone episodes (GPU; options below)")
     parser.add_argument("--max-episodes", type=int, help="stop after this many episodes")
-    parser.add_argument("-o", "--output", help="write estimate.tum per episode under this directory")
+    parser.add_argument("-o", "--output", help="write estimate.tum and twist.txt per episode under this directory")
     add_simulation_arguments(parser)
 
 

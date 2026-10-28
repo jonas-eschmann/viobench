@@ -22,9 +22,11 @@
 /* Buffer layouts: everything little-endian; pointers are offsets into the module's linear memory. */
 #define RELPOSE_IMU_ROW_VALUES 7 /* [t_s, ax, ay, az, gx, gy, gz] as double */
 #define RELPOSE_POSE_VALUES 7    /* [x, y, z, qx, qy, qz, qw] as double, camera k in camera 0 */
+#define RELPOSE_TWIST_VALUES 6   /* [vx, vy, vz, wx, wy, wz] as double, velocity and angular velocity of camera k in its own axes */
+#define RELPOSE_STATE_VALUES 13  /* out[]: the pose, then the twist */
 
 /* Status codes returned by init() and step(): anything but OK is an error (explain it on stderr). */
-#define RELPOSE_STATUS_OK 0     /* init: ready; step: out[] holds the pose */
+#define RELPOSE_STATUS_OK 0     /* init: ready; step: out[] holds the pose and the twist */
 #define RELPOSE_STATUS_ERROR -1 /* the episode ends and is marked failed */
 
 #ifdef __cplusplus
@@ -38,8 +40,9 @@ RELPOSE_EXPORT(frame_width) int32_t frame_width(void);                  /* optio
 RELPOSE_EXPORT(init) int32_t init(const char *config_json, uint32_t length); /* once; the bytes are valid during the call */
 RELPOSE_EXPORT(step) int32_t step(double t, const uint8_t *frame, const double *imu, int32_t imu_count, double *out);
 /* frame: height*width*3 uint8 RGB (row-major), size per the config; imu: imu_count (always 10) rows of RELPOSE_IMU_ROW_VALUES
- * doubles with t_prev_frame < t <= t_frame; out: RELPOSE_POSE_VALUES doubles, written on RELPOSE_STATUS_OK. The frame and IMU
- * buffers are reused for the next step: copy what you want to keep. */
+ * doubles with t_prev_frame < t <= t_frame; out: RELPOSE_STATE_VALUES doubles, all written on RELPOSE_STATUS_OK (the host fills
+ * them with NaN before the call, so a value left out fails the step). The frame and IMU buffers are reused for the next
+ * step: copy what you want to keep. */
 
 #ifdef __cplusplus
 }

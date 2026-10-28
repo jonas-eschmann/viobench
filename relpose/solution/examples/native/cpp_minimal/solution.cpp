@@ -1,5 +1,5 @@
 // Minimal native solution: a wasm32-wasip1 reactor implementing the relpose ABI (relpose/solution/runtime/native/relpose_abi.h) without
-// Python. It reports the identity pose and shows where to put state and how to read the config.
+// Python. It reports the identity pose and a zero twist and shows where to put state and how to read the config.
 // Build:  relpose/solution/runtime/native/build.sh relpose/solution/examples/native/cpp_minimal   ->   build/solution.wasm
 #include "relpose_abi.h"
 
@@ -37,6 +37,8 @@ struct State {
     std::vector<uint8_t> previous_frame;  // keep the previous frame: the host reuses its buffer every step
     double position[3] = {0, 0, 0};
     double quaternion[4] = {0, 0, 0, 1};  // x, y, z, w
+    double velocity[3] = {0, 0, 0};       // of the camera centre, in camera axes
+    double angular_velocity[3] = {0, 0, 0};  // in camera axes
 };
 
 State state;
@@ -71,7 +73,8 @@ int32_t init(const char* json, uint32_t length) {
     return RELPOSE_STATUS_OK;
 }
 
-// frame: height*width*3 uint8 RGB; imu: imu_count rows [t, ax, ay, az, gx, gy, gz]; out: [x, y, z, qx, qy, qz, qw]
+// frame: height*width*3 uint8 RGB; imu: imu_count rows [t, ax, ay, az, gx, gy, gz];
+// out: [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz] (all 13 values, every step)
 int32_t step(double t, const uint8_t* frame, const double* imu, int32_t imu_count, double* out) {
     state.frames++;
     double mean = 0;
@@ -84,8 +87,11 @@ int32_t step(double t, const uint8_t* frame, const double* imu, int32_t imu_coun
     }
     if (state.frames == 1) std::printf("first frame t=%.3f mean=%.1f imu rows=%d\n", t, mean, imu_count);
     std::memcpy(state.previous_frame.data(), frame, state.previous_frame.size());
-    // identity pose: replace with your estimate of the current camera frame in the first camera frame
+    // identity pose, standing still: replace with your estimate of the current camera frame in the first camera frame
+    // and of its twist
     for (int i = 0; i < 3; i++) out[i] = state.position[i];
     for (int i = 0; i < 4; i++) out[3 + i] = state.quaternion[i];
+    for (int i = 0; i < 3; i++) out[7 + i] = state.velocity[i];
+    for (int i = 0; i < 3; i++) out[10 + i] = state.angular_velocity[i];
     return RELPOSE_STATUS_OK;
 }

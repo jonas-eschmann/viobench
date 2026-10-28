@@ -117,7 +117,7 @@ class Store:
         return self.reports / str(submission_id)
 
     def leaderboard(self):
-        """Best (lowest ATE) completed submission per user and dataset, plus every point for the curve."""
+        """Every completed submission's point per dataset (RPE, fuel, ...) for the curve."""
         points = {}
         for row in self.list(status="done", limit=100000):
             summary = json.loads(row["summary"] or "{}")

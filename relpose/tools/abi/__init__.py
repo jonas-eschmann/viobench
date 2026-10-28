@@ -14,12 +14,14 @@ IMU_ROW_VALUES = 7  # [t_s, ax, ay, az, gx, gy, gz]
 FRAME_RATE_HZ = 20.0  # every set is delivered at these rates (relpose.tools.datasets.regularize)
 IMU_RATE_HZ = 200.0
 IMU_ROWS_PER_FRAME = 10  # IMU_RATE_HZ / FRAME_RATE_HZ: imu_count of every step
-POSE_VALUES = 7  # [x, y, z, qx, qy, qz, qw]
+POSE_VALUES = 7  # [x, y, z, qx, qy, qz, qw]: T_c0_ck, camera k in camera 0
+TWIST_VALUES = 6  # [vx, vy, vz, wx, wy, wz]: velocity and angular velocity of camera k, in camera-k axes
+STATE_VALUES = POSE_VALUES + TWIST_VALUES  # what step writes to `out`: the pose, then the twist
 F64_BYTES = 8
 
 REQUIRED_EXPORTS = ("memory", "abi_version", "alloc", "init", "step")  # plus `_initialize`, called if the toolchain emitted it
 
-STATUS_OK = 0  # init: ready; step: `out` holds the pose
+STATUS_OK = 0  # init: ready; step: `out` holds the pose and the twist
 STATUS_ERROR = -1  # what our guests return on an error; any status but STATUS_OK is one (explained on stderr)
 
 

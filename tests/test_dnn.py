@@ -24,7 +24,7 @@ class Solution:
         self.net.setInput(image, "image")
         self.net.setInput(self.imu_vector[None].astype(np.float32), "imu")
         out = self.net.forward()
-        return [float(out[0, 0]), float(out[0, 1]), float(out[0, 2]), 0, 0, 0, 1]
+        return [float(out[0, 0]), float(out[0, 1]), float(out[0, 2]), 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
 """
 
 

@@ -12,7 +12,7 @@ from relpose.tools.cli import main as cli
 from relpose.tools.datasets.feed import write_feed
 from relpose.tools.datasets.storage import write_episode
 from relpose.tools.runner import direct
-from relpose.tools.runner.score import load_tum, score
+from relpose.tools.runner.score import load_estimates, score
 from tests.test_datasets import synthetic_episode
 
 REPO = Path(__file__).resolve().parent.parent
@@ -30,16 +30,17 @@ def test_direct_run_matches_the_sandbox(engine, runtime_path, tmp_path):
     solution = direct.PythonSolution(EXAMPLES / "python" / "dead_reckoning")
     assert solution.resolution == (320, 240)
     [(_, estimates, metrics)] = direct.run(solution, [dataset], output_dir=tmp_path / "direct", log=lambda *a: None)
-    assert estimates.shape == (30, 7) and metrics.held == 0
-    np.testing.assert_array_equal(estimates[0], [0, 0, 0, 0, 0, 0, 1])
-    written = np.loadtxt(tmp_path / "direct" / "set" / episode.name / "estimate.tum")
-    np.testing.assert_allclose(written[:, 1:], estimates, atol=1e-8)
+    assert estimates.shape == (30, 13) and metrics.held == 0
+    np.testing.assert_array_equal(estimates[0], [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0])
+    assert np.abs(estimates[-1, 7:]).max() > 0  # dead reckoning reports its twist once it has calibrated
+    written = load_estimates(tmp_path / "direct" / "set" / episode.name / "estimate.tum", episode.frame_times)
+    np.testing.assert_allclose(written, estimates, atol=1e-8)
 
     wasm = tmp_path / "dr.wasm"
     bundle(EXAMPLES / "python" / "dead_reckoning", wasm, runtime=runtime_path)
     evaluate(wasm, [dataset], output_dir=tmp_path / "report", engine=engine, log=lambda *a: None)
-    sandboxed = np.loadtxt(tmp_path / "report" / "logs" / "set" / episode.name / "estimate.tum")
-    np.testing.assert_allclose(estimates, sandboxed[:, 1:], atol=1e-6)
+    sandboxed = load_estimates(tmp_path / "report" / "logs" / "set" / episode.name / "estimate.tum", episode.frame_times)
+    np.testing.assert_allclose(estimates, sandboxed, atol=1e-6)
 
 
 def test_direct_frame_width_and_host_solution_bundle(solution_dir, tmp_path):
@@ -57,7 +58,7 @@ def test_direct_frame_width_and_host_solution_bundle(solution_dir, tmp_path):
                 "        assert bundle.exists('data/offset.npy') and bundle.listdir('data') == ['offset.npy'] and bundle.read_text('note.txt') == 'hi'\n"
                 "    def step(self, t, frame, imu):\n"
                 "        assert frame.shape == (480, 640, 3)\n"
-                "        return np.concatenate([self.offset, [0, 0, 0, 1]])\n"
+                "        return np.concatenate([self.offset, [0, 0, 0, 1], np.zeros(6)])\n"
             ),
             "note.txt": "hi",
         },
@@ -83,6 +84,7 @@ def test_direct_cli(tmp_path, capsys):
     assert cli(["debug", str(EXAMPLES / "python" / "minimal"), str(tmp_path / "set"), "-o", str(tmp_path / "out")]) == 0
     assert "ATE" in capsys.readouterr().out
     assert (tmp_path / "out" / "set" / episode.name / "estimate.tum").is_file()
+    assert (tmp_path / "out" / "set" / episode.name / "twist.txt").is_file()
 
 
 def test_feed_and_score(tmp_path, capsys):
@@ -98,15 +100,16 @@ def test_feed_and_score(tmp_path, capsys):
     np.testing.assert_allclose(imu, episode.delivered_imu())
     gt = np.fromfile(feed / "gt.f64").reshape(6, 7)
     np.testing.assert_allclose(gt, episode.ground_truth_relative())
-    # a perfect pose file scores zero; a frame missing from the file repeats the previous pose (identity for the first)
+    # a perfect estimate scores zero; a frame missing from the files repeats the previous pose (identity for the first)
     tum = tmp_path / "perfect.tum"
     np.savetxt(tum, np.column_stack([episode.frame_times, gt]), fmt="%.12g")
+    np.savetxt(tmp_path / "twist.txt", np.column_stack([episode.frame_times, episode.ground_truth_twist()]), fmt="%.12g")
     metrics = score(tmp_path / "set" / episode.name, tum)
-    assert metrics.ate_rmse < 1e-9 and metrics.held == 0
+    assert metrics.ate_rmse < 1e-9 and metrics.velocity_rmse < 1e-6 and metrics.held == 0
     assert "ATE 0.000" in capsys.readouterr().out
     rows = np.column_stack([episode.frame_times, gt])[1:]  # first frame missing
     np.savetxt(tum, rows, fmt="%.12g")
-    assert np.isnan(load_tum(tum, episode.frame_times)[0]).all()
+    assert np.isnan(load_estimates(tum, episode.frame_times)[0, :7]).all()
     assert score(tmp_path / "set" / episode.name, tum, log=lambda *a: None).held == 1
     assert cli(["score", str(tmp_path / "set" / episode.name), str(tum)]) == 0
 
@@ -129,7 +132,7 @@ def test_native_host_debug_build(tmp_path):
     run = subprocess.run([str(build / "debug"), str(feed), str(tum)], capture_output=True, text=True)
     assert run.returncode == 0, run.stderr
     assert "5/5 frames ok" in run.stdout
-    estimates = load_tum(tum, episode.frame_times)
-    np.testing.assert_allclose(estimates, np.tile([0, 0, 0, 0, 0, 0, 1.0], (5, 1)))
+    estimates = load_estimates(tum, episode.frame_times)
+    np.testing.assert_allclose(estimates, np.tile([0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0], (5, 1)))
     metrics = score(tmp_path / "set" / episode.name, tum, log=lambda *a: None)
     assert metrics.held == 0

@@ -122,15 +122,15 @@ def leaderboard():
              f"<p>{len(get_store().list(limit=100000))} submissions, {len(get_store().list(status='queued'))} queued, {len(get_store().list(status='running'))} running. ",
              "Submit with <code>curl -F file=@solution.wasm -F label=v1 -H 'X-Token: ...' /submit</code>.</p>"]
     for dataset, rows in sorted(points.items()):
-        front = {rows[i]["id"] for i in pareto_front([(row["fuel"], row["ate"]) for row in rows])}
-        parts.append(f"<h2>{html.escape(dataset)}</h2><table><tr><th>user</th><th>label</th><th>ATE [m]</th><th>RPE [m/s]</th>"
+        front = {rows[i]["id"] for i in pareto_front([(row["fuel"], row["rpe"]) for row in rows])}
+        parts.append(f"<h2>{html.escape(dataset)}</h2><table><tr><th>user</th><th>label</th><th>RPE [m/1 s]</th><th>ATE [m]</th>"
                      "<th>fuel/frame</th><th>fuel p95</th><th>ms/frame</th><th>episodes</th><th>id</th><th>when</th></tr>")
-        for row in sorted(rows, key=lambda r: r["ate"]):
+        for row in sorted(rows, key=lambda r: r["rpe"]):
             when = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["created"]))
             css = " class='pareto'" if row["id"] in front else ""
-            parts.append(f"<tr{css}><td>{html.escape(row['user'])}</td><td>{html.escape(row['label'] or '')}</td><td>{row['ate']:.3f}</td>"
-                         f"<td>{row['rpe']:.3f}</td><td>{row['fuel']:,.0f}</td><td>{row['fuel_p95']:,.0f}</td><td>{row['ms']:.1f}</td>"
+            parts.append(f"<tr{css}><td>{html.escape(row['user'])}</td><td>{html.escape(row['label'] or '')}</td><td>{row['rpe']:.3f}</td>"
+                         f"<td>{row['ate']:.3f}</td><td>{row['fuel']:,.0f}</td><td>{row['fuel_p95']:,.0f}</td><td>{row['ms']:.1f}</td>"
                          f"<td>{row['completed']}/{row['episodes']}</td><td>{row['id']}</td><td>{when}</td></tr>")
         parts.append("</table>")
-    parts.append("<p>Bold rows are on the Pareto front (no other submission has both lower fuel and lower ATE).</p></body></html>")
+    parts.append("<p>Bold rows are on the Pareto front (no other submission has both lower fuel and lower RPE).</p></body></html>")
     return "".join(parts)

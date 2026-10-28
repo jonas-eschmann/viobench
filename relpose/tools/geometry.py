@@ -65,6 +65,15 @@ def rotation_angles(R):
     return np.arccos(np.clip((trace - 1.0) / 2.0, -1.0, 1.0))
 
 
+def rotation_vectors(R):
+    """Rotation vector (axis times angle, the SO(3) logarithm) of each (..., 3, 3) matrix; exact up to angles near pi."""
+    R = np.asarray(R, dtype=float)
+    skew = 0.5 * np.stack([R[..., 2, 1] - R[..., 1, 2], R[..., 0, 2] - R[..., 2, 0], R[..., 1, 0] - R[..., 0, 1]], -1)
+    sine = np.linalg.norm(skew, axis=-1)
+    angle = np.arctan2(sine, (np.einsum("...ii->...", R) - 1.0) / 2.0)
+    return skew * np.where(sine > 0, angle / np.where(sine > 0, sine, 1.0), 1.0)[..., None]
+
+
 def slerp(q0, q1, fraction):
     """Vectorised quaternion slerp, [x, y, z, w]; q0, q1 (N, 4), fraction (N,)."""
     dot = np.sum(q0 * q1, axis=1)

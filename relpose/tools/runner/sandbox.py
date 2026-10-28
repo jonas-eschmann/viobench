@@ -13,9 +13,10 @@ from .. import abi
 from ..abi import AbiError
 from ..abi.module import runtime_descriptor
 from .engine import Engine
-from .metrics import valid_poses
+from .metrics import valid_states
 
 IMU_CAPACITY_ROWS = 1024  # initial IMU buffer; grows on demand
+UNWRITTEN = np.full(abi.STATE_VALUES, np.nan)  # `out` before every step: whatever the step does not write is unusable
 STDOUT_FILE = "stdout.txt"  # in the log directory
 STDERR_FILE = "stderr.txt"
 
@@ -40,13 +41,14 @@ class Limits:
 
 @dataclass
 class StepResult:
-    pose: np.ndarray  # [x, y, z, qx, qy, qz, qw], a usable pose
+    pose: np.ndarray  # [x, y, z, qx, qy, qz, qw]
+    twist: np.ndarray  # [vx, vy, vz, wx, wy, wz]
     fuel: int
     wall_seconds: float
 
 
 class SandboxError(Exception):
-    """The solution failed: init or a step returned an error, a step returned an unusable pose, or the protocol was broken."""
+    """The solution failed: init or a step returned an error, a step returned an unusable state, or the protocol was broken."""
 
 
 class SandboxTrap(SandboxError):
@@ -64,7 +66,7 @@ class Sandbox:
 
     sandbox = Sandbox("student.wasm", engine)
     sandbox.init(config)
-    result = sandbox.step(t, frame, imu)   # StepResult with pose, fuel, wall_seconds; SandboxError on a failed step
+    result = sandbox.step(t, frame, imu)   # StepResult with pose, twist, fuel, wall_seconds; SandboxError on a failed step
     Fresh instance per episode: nothing is reset between episodes, and a trap kills the instance for good.
     """
 
@@ -197,7 +199,7 @@ class Sandbox:
         self.width, self.height = self.resolution
         self.frame_bytes = self.height * self.width * abi.CHANNELS
         self.frame_pointer = self.alloc(self.frame_bytes)
-        self.out_pointer = self.alloc(abi.POSE_VALUES * abi.F64_BYTES)
+        self.out_pointer = self.alloc(abi.STATE_VALUES * abi.F64_BYTES)
         self.imu_capacity = IMU_CAPACITY_ROWS
         self.imu_pointer = self.alloc(self.imu_capacity * abi.IMU_ROW_VALUES * abi.F64_BYTES)
         self.initialized = True
@@ -217,6 +219,7 @@ class Sandbox:
         self.write(self.frame_pointer, frame)
         if len(imu):
             self.write(self.imu_pointer, imu)
+        self.write(self.out_pointer, UNWRITTEN)
         self._arm(self.limits.step_fuel, self.limits.step_wall_seconds)
         started = time.perf_counter()
         status = self._guard(lambda: self._step(self.store, float(t), self.frame_pointer, self.imu_pointer, len(imu), self.out_pointer))
@@ -224,7 +227,8 @@ class Sandbox:
         fuel = self._consumed(self.limits.step_fuel)
         if status != abi.STATUS_OK:
             raise SandboxError(f"step failed (status {status})\n--- stderr tail ---\n{self.stderr_tail()}")
-        pose = np.frombuffer(self.read(self.out_pointer, abi.POSE_VALUES * abi.F64_BYTES), dtype=np.float64).copy()
-        if not valid_poses(pose[None])[0]:
-            raise SandboxError(f"step returned an unusable pose {pose.tolist()} (NaN/inf or an all-zero quaternion)")
-        return StepResult(pose, fuel, wall)
+        state = np.frombuffer(self.read(self.out_pointer, abi.STATE_VALUES * abi.F64_BYTES), dtype=np.float64).copy()
+        if not valid_states(state[None])[0]:
+            raise SandboxError(f"step returned an unusable state {state.tolist()} (not all {abi.STATE_VALUES} values written, NaN/inf, "
+                               "or an all-zero quaternion)")
+        return StepResult(state[:abi.POSE_VALUES], state[abi.POSE_VALUES:], fuel, wall)

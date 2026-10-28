@@ -3,8 +3,10 @@
 Nothing says how an episode starts, so the first half second of IMU calibrates: the mean accelerometer reading gives
 the gravity direction in the body frame (and absorbs the accelerometer bias along it) and, if both sensors only show
 noise there (the platform was at rest), the mean gyroscope reading gives the gyro bias; a moving start keeps it at
-zero. Everything is expressed in the camera frame of the first frame via the camera-IMU extrinsics from the config.
-Expect the position to drift within a few seconds; that is the baseline every visual method has to beat.
+zero. Everything is expressed in the camera frame of the first frame via the camera-IMU extrinsics from the config;
+the twist is the integrated velocity and the latest bias-corrected gyroscope reading, moved from the IMU to the camera
+centre (lever arm) and into camera axes. Expect the position to drift within a few seconds; that is the baseline every
+visual method has to beat.
 """
 import numpy as np
 
@@ -59,6 +61,7 @@ class Solution:
         self.R_wb = np.eye(3)
         self.v = np.zeros(3)
         self.p = np.zeros(3)
+        self.omega = np.zeros(3)  # latest angular velocity of the IMU/body frame, body axes
         self.gyro_bias = np.zeros(3)
         self.gravity_world = np.array([0.0, 0.0, -GRAVITY])
         self.last_t = None
@@ -84,6 +87,7 @@ class Solution:
     def _integrate(self, imu):
         for row in imu:
             t, accel, gyro = row[0], row[1:4], row[4:7]
+            self.omega = gyro - self.gyro_bias
             if self.last_t is not None:
                 dt = t - self.last_t
                 if dt > 0:
@@ -99,16 +103,22 @@ class Solution:
         T_wb[:3, 3] = self.p
         return T_wb @ self.T_imu_cam
 
+    def _twist_camera(self):
+        """[v, w] of the camera in camera axes: the camera centre sits at r in IMU coordinates, so it moves with v + w x r."""
+        R_cam_imu, r = self.T_cam_imu[:3, :3], self.T_imu_cam[:3, 3]
+        velocity = R_cam_imu @ (self.R_wb.T @ self.v + np.cross(self.omega, r))
+        return np.concatenate([velocity, R_cam_imu @ self.omega])
+
     def step(self, t, frame, imu):
         if not self.initialized:
             self.calibration_samples.extend(imu.tolist())
             samples = self.calibration_samples
             if len(samples) < 2 or samples[-1][0] - samples[0][0] < CALIBRATION_SECONDS:
-                return [0, 0, 0, 0, 0, 0, 1.0]  # still calibrating at rest: identity until there is an estimate
+                return [0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0]  # still calibrating at rest: identity, standing still
             self._initialize()
             self.last_t = imu[-1, 0] if len(imu) else t
             self.T_w_c0 = self._pose_camera()
         else:
             self._integrate(imu)
         T_c0_c = np.linalg.inv(self.T_w_c0) @ self._pose_camera()
-        return np.concatenate([T_c0_c[:3, 3], matrix_to_quaternion(T_c0_c[:3, :3])])
+        return np.concatenate([T_c0_c[:3, 3], matrix_to_quaternion(T_c0_c[:3, :3]), self._twist_camera()])

@@ -29,8 +29,8 @@ def rows(reports):
                 "episodes": summary["episodes"],
                 "completed": summary["completed"],
                 "seconds": summary["duration_s_median"],
+                "rpe_m": summary["rpe_translation_rmse_median"],  # the headline: m over 1 s windows
                 "ate_m": summary["ate_rmse_median"],
-                "rpe_m_per_s": summary["rpe_translation_rmse_median"],
                 "rot_deg": float(np.degrees(summary["rotation_rmse_median"])),
                 "fuel_per_frame": summary["fuel_per_frame_median"],
                 "fuel_p95": summary["fuel_per_frame_p95"],
@@ -40,7 +40,7 @@ def rows(reports):
 
 
 def pareto_front(points):
-    """Indices of the non-dominated (lower fuel, lower ATE) points."""
+    """Indices of the non-dominated (lower fuel, lower RPE) points."""
     order = sorted(range(len(points)), key=lambda i: (points[i][0], points[i][1]))
     front, best = [], float("inf")
     for i in order:
@@ -51,16 +51,16 @@ def pareto_front(points):
 
 
 def markdown_table(table):
-    header = "| submission | dataset | episodes | s/episode | ATE [m] | RPE [m/s] | rot [deg] | fuel/frame | fuel p95 | ms/frame |\n|---|---|---|---|---|---|---|---|---|---|\n"
+    header = "| submission | dataset | episodes | s/episode | RPE [m/1 s] | ATE [m] | rot [deg] | fuel/frame | fuel p95 | ms/frame |\n|---|---|---|---|---|---|---|---|---|---|\n"
     lines = []
-    for row in sorted(table, key=lambda r: (r["dataset"], r["ate_m"])):
-        lines.append(f"| {row['submission']} | {row['dataset']} | {row['completed']}/{row['episodes']} | {row['seconds']:.0f} | {row['ate_m']:.3f} | {row['rpe_m_per_s']:.3f} | "
+    for row in sorted(table, key=lambda r: (r["dataset"], r["rpe_m"])):
+        lines.append(f"| {row['submission']} | {row['dataset']} | {row['completed']}/{row['episodes']} | {row['seconds']:.0f} | {row['rpe_m']:.3f} | {row['ate_m']:.3f} | "
                      f"{row['rot_deg']:.1f} | {row['fuel_per_frame']:,.0f} | {row['fuel_p95']:,.0f} | {row['ms_per_frame']:.1f} |")
     return header + "\n".join(lines) + "\n"
 
 
 def plot(table, path):
-    """ATE vs fuel per frame, one panel per dataset (needs matplotlib)."""
+    """RPE vs fuel per frame, one panel per dataset (needs matplotlib)."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -69,15 +69,15 @@ def plot(table, path):
     datasets = sorted({row["dataset"] for row in table})
     figure, axes = plt.subplots(1, len(datasets), figsize=(4.5 * len(datasets), 4), squeeze=False)
     for axis, dataset in zip(axes[0], datasets):
-        points = [(row["fuel_per_frame"], row["ate_m"], row["submission"]) for row in table if row["dataset"] == dataset]
+        points = [(row["fuel_per_frame"], row["rpe_m"], row["submission"]) for row in table if row["dataset"] == dataset]
         front = set(pareto_front([(p[0], p[1]) for p in points]))
-        for index, (fuel, ate, label) in enumerate(points):
-            axis.scatter(fuel, ate, marker="o" if index in front else "x", color="C0" if index in front else "C7")
-            axis.annotate(label, (fuel, ate), textcoords="offset points", xytext=(4, 4), fontsize=8)
+        for index, (fuel, rpe, label) in enumerate(points):
+            axis.scatter(fuel, rpe, marker="o" if index in front else "x", color="C0" if index in front else "C7")
+            axis.annotate(label, (fuel, rpe), textcoords="offset points", xytext=(4, 4), fontsize=8)
         axis.set_xscale("log")
         axis.set_yscale("log")
         axis.set_xlabel("fuel per frame (median)")
-        axis.set_ylabel("ATE [m] (median over episodes)")
+        axis.set_ylabel("RPE over 1 s [m] (median over episodes)")
         axis.set_title(dataset)
         axis.grid(True, which="both", alpha=0.3)
     figure.tight_layout()

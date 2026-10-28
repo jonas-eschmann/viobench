@@ -1,6 +1,7 @@
 """Learned baseline: a tiny CNN on consecutive frame pairs plus IMU preintegration predicts the relative camera
 translation (and a rotation residual on top of the gyroscope) per frame; the motions are chained into the pose
-relative to frame 0.
+relative to frame 0, and the last one over the frame interval gives the twist (its mean over the interval, so it lags
+half a frame).
 
 Runs the ONNX graph through cv2.dnn (SIMD kernels) when available and falls back to the numpy implementation in
 tinynn.py otherwise. Trained with ../train.py, which also writes net.onnx / weights.npz / meta.json next to this file.
@@ -10,7 +11,7 @@ import json
 import cv2
 import numpy as np
 
-from preintegrate import exp_so3, preintegrate
+from preintegrate import exp_so3, log_so3, preintegrate
 from tinynn import TinyNet
 
 
@@ -51,6 +52,7 @@ class Solution:
             self.fallback = TinyNet(np.load(bundle.open("weights.npz")))
             print("using the numpy forward pass")
         self.previous = None
+        self.previous_t = None
         self.T = np.eye(4)
 
     def _predict(self, pair, imu_vector):
@@ -67,13 +69,15 @@ class Solution:
         gray = cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)  # frames are RGB; the network was trained on gray
         small = cv2.resize(gray, self.size, interpolation=cv2.INTER_AREA).astype(np.float32) / 255.0
         if self.previous is None or len(imu) == 0:
-            self.previous = small
-            return np.array([0, 0, 0, 0, 0, 0, 1.0])
+            self.previous, self.previous_t = small, t
+            return np.array([0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0])
         integrated = preintegrate(imu, self.T_cam_imu)
         motion = self._predict(np.stack([self.previous, small]), integrated)
         delta = np.eye(4)
         delta[:3, :3] = exp_so3(integrated[:3].astype(np.float64)) @ exp_so3(motion[3:6].astype(np.float64))  # gyro rotation + learned residual
         delta[:3, 3] = motion[:3]
         self.T = self.T @ delta
-        self.previous = small
-        return np.concatenate([self.T[:3, 3], quaternion_from_matrix(self.T[:3, :3])])
+        interval = t - self.previous_t
+        twist = np.concatenate([delta[:3, :3].T @ delta[:3, 3], log_so3(delta[:3, :3])]) / interval  # in the current camera's axes
+        self.previous, self.previous_t = small, t
+        return np.concatenate([self.T[:3, 3], quaternion_from_matrix(self.T[:3, :3]), twist])

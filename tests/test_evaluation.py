@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from relpose.solution.runtime.python.bundler.bundle import bundle
-from relpose.tools.datasets.storage import write_episode
+from relpose.tools.datasets.storage import read_episode, write_episode
 from relpose.tools.runner.metrics import evaluate_trajectory
 from relpose.tools.runner.run import evaluate
 from tests.test_datasets import synthetic_episode
@@ -16,12 +16,12 @@ import solution_bundle as bundle
 class Solution:
     # cheats: replays the ground truth shipped in the bundle (tests the plumbing, not an estimator)
     def __init__(self, config):
-        self.poses = np.load(bundle.open("gt.npy"))
+        self.states = np.load(bundle.open("gt.npy"))
         self.k = 0
     def step(self, t, frame, imu):
-        pose = self.poses[self.k]
+        state = self.states[self.k]
         self.k += 1
-        return pose
+        return state
 """
 
 
@@ -29,7 +29,7 @@ def test_evaluate_report(engine, runtime_path, solution_dir, tmp_path):
     episode = synthetic_episode(n_frames=12, width=320, height=240)
     dataset = tmp_path / "set"
     write_episode(episode, dataset / episode.name)
-    gt = episode.ground_truth_relative()
+    gt = episode.ground_truth_state()
     import io
 
     buffer = io.BytesIO()
@@ -41,14 +41,17 @@ def test_evaluate_report(engine, runtime_path, solution_dir, tmp_path):
     assert report["summary"]["overall"]["episodes"] == 1 and report["summary"]["overall"]["completed"] == 1
     episode_report = report["episodes"][0]
     assert episode_report["metrics"]["ate_rmse"] < 1e-9 and episode_report["metrics"]["held"] == 0
+    assert episode_report["metrics"]["velocity_rmse"] < 1e-6 and episode_report["metrics"]["angular_velocity_rmse"] < 1e-6
     assert episode_report["fuel_per_frame_median"] > 0
     assert (tmp_path / "report" / "report.json").is_file()
     assert json.loads((tmp_path / "report" / "report.json").read_text())["episodes"][0]["name"] == episode.name
     estimate = np.loadtxt(tmp_path / "report" / "logs" / "set" / episode.name / "estimate.tum")
-    np.testing.assert_allclose(estimate[:, 1:], gt, atol=1e-6)
+    np.testing.assert_allclose(estimate[:, 1:], gt[:, :7], atol=1e-6)
+    twist = np.loadtxt(tmp_path / "report" / "logs" / "set" / episode.name / "twist.txt")
+    np.testing.assert_allclose(twist[:, 1:], gt[:, 7:], atol=1e-6)
 
 
-@pytest.mark.parametrize("failure", ["raise RuntimeError('flaky')", "return [float('nan')] * 7"])
+@pytest.mark.parametrize("failure", ["raise RuntimeError('flaky')", "return [float('nan')] * 13"])
 def test_a_failed_step_ends_the_episode(failure, engine, runtime_path, solution_dir, tmp_path):
     episode = synthetic_episode(n_frames=6, width=320, height=240)
     write_episode(episode, tmp_path / "set" / episode.name)
@@ -60,7 +63,7 @@ class Solution:
         self.k += 1
         if self.k == 3:
             {failure}
-        return [self.k, 0, 0, 0, 0, 0, 1]
+        return [self.k, 0, 0, 0, 0, 0, 1, 0.5, 0, 0, 0, 0, 0]
 """
     wasm = tmp_path / "flaky.wasm"
     bundle(solution_dir(flaky), wasm, runtime=runtime_path)
@@ -70,9 +73,11 @@ class Solution:
     assert not episode_report["completed"] and episode_report["failure"].startswith("step")
     estimate = np.loadtxt(tmp_path / "report" / "logs" / "set" / episode.name / "estimate.tum")
     assert list(estimate[:2, 1]) == [1, 2] and np.isnan(estimate[2:, 1:]).all()
-    held = np.tile([0, 0, 0, 0, 0, 0, 1.0], (6, 1))
-    held[:, 0] = [1, 2, 2, 2, 2, 2]  # the frames from the failure on repeat the last pose
-    expected = evaluate_trajectory(episode.ground_truth_relative(), held, episode.frame_times)
+    held = np.tile([0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0], (6, 1))
+    held[:, 0] = [1, 2, 2, 2, 2, 2]  # the frames from the failure on repeat the last pose, standing still
+    held[:2, 7] = 0.5
+    stored = read_episode(tmp_path / "set" / episode.name, frames="none")  # the ground truth the runner scored against
+    expected = evaluate_trajectory(stored.ground_truth_state(), held, stored.frame_times)
     assert episode_report["metrics"]["held"] == 4 and episode_report["metrics"]["ate_rmse"] == expected.ate_rmse
 
 
@@ -88,7 +93,7 @@ class Solution:
         assert "channels" not in config and "color" not in config
     def step(self, t, frame, imu):
         replicated = np.array_equal(frame[..., 0], frame[..., 1]) and np.array_equal(frame[..., 1], frame[..., 2])
-        return [frame.ndim, frame.shape[2], float(replicated), 0, 0, 0, 1]
+        return [frame.ndim, frame.shape[2], float(replicated), 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
 """
     wasm = tmp_path / "probe.wasm"
     bundle(solution_dir(probe), wasm, runtime=runtime_path)
@@ -109,7 +114,7 @@ class Solution:
     def __init__(self, config):
         self.config = config
     def step(self, t, frame, imu):
-        return [frame.shape[1], frame.shape[0], self.config["fx"], 0, 0, 0, 1]
+        return [frame.shape[1], frame.shape[0], self.config["fx"], 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
 """
     # only the two supported widths are accepted: anything else fails the episode before init, with the reason
     wasm = tmp_path / "bad.wasm"
@@ -138,7 +143,7 @@ def test_evaluate_accepts_an_in_memory_dataset(engine, runtime_path, solution_di
 
     episode = synthetic_episode(n_frames=5, width=320, height=240)
     episode.meta["dataset"] = "adhoc"
-    gt = episode.ground_truth_relative()
+    gt = episode.ground_truth_state()
     buffer = io.BytesIO()
     np.save(buffer, gt)
     wasm = tmp_path / "perfect.wasm"

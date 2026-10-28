@@ -2,7 +2,7 @@
 
 frame_width() receives the zip of the student's directory, makes it importable, imports `solution:Solution` and
 returns its frame_width. init() receives the config JSON and constructs the Solution. step() wraps the raw buffers in
-numpy arrays, calls Solution.step and writes the pose back. Constants mirror relpose/tools/abi/__init__.py.
+numpy arrays, calls Solution.step and writes the state (pose and twist) back. Constants mirror relpose/tools/abi/__init__.py.
 """
 import importlib
 import importlib.abc
@@ -23,7 +23,7 @@ SOLUTION_CLASS = "Solution"
 FRAME_WIDTH = "frame_width"  # optional class attribute: 320 (default) or 640
 DEFAULT_FRAME_WIDTH = 320
 IMU_ROW_VALUES = 7
-POSE_VALUES = 7
+STATE_VALUES = 13
 
 STATUS_OK = 0
 STATUS_ERROR = -1
@@ -150,13 +150,14 @@ def step(t, frame_view, imu_view, out_view):
     try:
         frame = np.frombuffer(frame_view, dtype=np.uint8).reshape(_shape)  # zero-copy, read-only, valid until the next step
         imu = np.frombuffer(imu_view, dtype=np.float64).reshape(-1, IMU_ROW_VALUES).copy()
-        pose = _solution.step(float(t), frame, imu)
-        if pose is None:
-            raise ValueError("step() must return 7 values [x, y, z, qx, qy, qz, qw], got None (return the identity pose until you have an estimate)")
-        values = np.asarray(pose, dtype=np.float64).reshape(-1)
-        if values.shape != (POSE_VALUES,):
-            raise ValueError(f"step() must return 7 values [x, y, z, qx, qy, qz, qw], got shape {values.shape}")
-        np.frombuffer(out_view, dtype=np.float64)[:] = values  # the harness checks that the pose is usable
+        state = _solution.step(float(t), frame, imu)
+        if state is None:
+            raise ValueError("step() must return 13 values [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz], got None "
+                             "(return the identity pose and zero twist until you have an estimate)")
+        values = np.asarray(state, dtype=np.float64).reshape(-1)
+        if values.shape != (STATE_VALUES,):
+            raise ValueError(f"step() must return 13 values [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz], got shape {values.shape}")
+        np.frombuffer(out_view, dtype=np.float64)[:] = values  # the harness checks that the state is usable
         return STATUS_OK
     except BaseException:
         traceback.print_exc()

@@ -20,7 +20,7 @@ class Solution:
     def __init__(self, config):
         self.config = config
     def step(self, t, frame, imu):
-        return np.array([0, 0, 0, 0, 0, 0, 1.0])
+        return np.array([0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0])
 """
 
 
@@ -37,6 +37,7 @@ def test_identity_solution_round_trip(engine, runtime_path, solution_dir, tmp_pa
     assert sandbox.init_fuel > 0
     results = [sandbox.step(0.05 * (k + 1), FRAME, IMU) for k in range(3)]
     np.testing.assert_array_equal(results[0].pose, [0, 0, 0, 0, 0, 0, 1])
+    np.testing.assert_array_equal(results[0].twist, np.zeros(6))
     assert all(result.fuel > 0 for result in results)
     # fuel is deterministic for deterministic code: a second instance repeats the exact per-step numbers
     # (consecutive steps of one instance differ because the interpreter warms up: specialization, caches)
@@ -54,12 +55,13 @@ class Solution:
     def step(self, t, frame, imu):
         assert frame.shape == (240, 320, 3) and frame.dtype == np.uint8 and not frame.flags.writeable
         assert imu.shape == (10, 7) and abs(imu[-1, 0] - 0.05) < 1e-12 and abs(imu[3, 3] - 9.81) < 1e-12
-        return [float(frame[7, 9, 1]), float(imu[0, 1]), t, 0, 0, 0, 1]
+        return [float(frame[7, 9, 1]), float(imu[0, 1]), t, 0, 0, 0, 1, 1, 2, 3, 4, 5, 6]
 """
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source), tmp_path)
     sandbox.init(CONFIG)
     result = sandbox.step(0.05, FRAME, IMU)
     assert result.pose[0] == FRAME[7, 9, 1] and result.pose[1] == 0.1 and result.pose[2] == 0.05
+    np.testing.assert_array_equal(result.twist, [1, 2, 3, 4, 5, 6])
 
 
 def test_empty_imu_window(engine, runtime_path, solution_dir, tmp_path):
@@ -77,18 +79,54 @@ class Solution:
         self.k = 0
     def step(self, t, frame, imu):
         self.k += 1
-        return [None, [0, 0, float("nan"), 0, 0, 0, 1], [1, 2, 3]][self.k - 1]
+        nan = float("nan")
+        return [None, [0, 0, nan, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, nan], [0, 0, 0, 0, 0, 0, 1]][self.k - 1]
 """
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source), tmp_path)
     sandbox.init(CONFIG)
     with pytest.raises(SandboxError, match="step failed"):
         sandbox.step(0.05, FRAME, IMU)
     assert "got None" in sandbox.stderr_tail()
-    with pytest.raises(SandboxError, match="unusable pose"):  # returned fine, but the harness rejects the pose
-        sandbox.step(0.10, FRAME, IMU)
-    with pytest.raises(SandboxError, match="step failed"):
-        sandbox.step(0.15, FRAME, IMU)
-    assert "got shape (3,)" in sandbox.stderr_tail()
+    for t in (0.10, 0.15):  # returned fine, but the harness rejects a NaN in the pose and in the twist alike
+        with pytest.raises(SandboxError, match="unusable state"):
+            sandbox.step(t, FRAME, IMU)
+    with pytest.raises(SandboxError, match="step failed"):  # a pose without the twist
+        sandbox.step(0.20, FRAME, IMU)
+    assert "got shape (7,)" in sandbox.stderr_tail()
+
+
+def test_a_native_module_must_write_every_value(engine, tmp_path):
+    """The host fills `out` with NaN before each step: a module that writes the pose but not the twist fails."""
+    import wasmtime
+
+    def module(values):
+        stores = "\n".join(f"(f64.store offset={8 * i} (local.get $out) (f64.const {value}))" for i, value in enumerate(values))
+        return wasmtime.wat2wasm(f"""
+(module
+  (memory (export "memory") 16)
+  (global $next (mut i32) (i32.const 1024))
+  (func (export "abi_version") (result i32) (i32.const {abi.ABI_VERSION}))
+  (func (export "alloc") (param $size i32) (result i32) (local $pointer i32)
+    (local.set $pointer (global.get $next))
+    (global.set $next (i32.and (i32.add (i32.add (global.get $next) (local.get $size)) (i32.const 7)) (i32.const -8)))
+    (local.get $pointer))
+  (func (export "init") (param i32 i32) (result i32) (i32.const {abi.STATUS_OK}))
+  (func (export "step") (param $t f64) (param $frame i32) (param $imu i32) (param $count i32) (param $out i32) (result i32)
+    {stores}
+    (i32.const {abi.STATUS_OK})))
+""")
+
+    state = [0, 0, 0, 0, 0, 0, 1, 1, 2, 3, 4, 5, 6]
+    for name, values in (("complete", state), ("pose-only", state[:abi.POSE_VALUES])):
+        wasm = tmp_path / f"{name}.wasm"
+        wasm.write_bytes(module(values))
+        sandbox = Sandbox(wasm, engine, log_dir=tmp_path / name)
+        sandbox.init(CONFIG)
+        if name == "complete":
+            np.testing.assert_array_equal(sandbox.step(0.05, FRAME, IMU).twist, [1, 2, 3, 4, 5, 6])
+        else:
+            with pytest.raises(SandboxError, match="not all 13 values written"):
+                sandbox.step(0.05, FRAME, IMU)
 
 
 def test_exception_shows_bundle_traceback(engine, runtime_path, solution_dir, tmp_path):
@@ -102,7 +140,7 @@ class Solution:
         self.k += 1
         if self.k == 2:
             blow_up()
-        return np.array([0, 0, 0, 0, 0, 0, 1.0])
+        return np.array([0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0])
 """
     helpers = {"helpers/__init__.py": "", "helpers/math.py": "def blow_up():\n    raise RuntimeError('kaboom in helper')\n"}
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source, helpers), tmp_path)
@@ -131,7 +169,7 @@ class Solution:
         assert pkgutil.get_data("mypkg", "data.txt") == b"hi"
         assert mypkg.__file__ == "/bundle/mypkg/__init__.py"
     def step(self, t, frame, imu):
-        return [self.w.sum(), 0, 0, 0, 0, 0, 1]
+        return [self.w.sum(), 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
 """
     extra = {"model/weights.npz": weights.getvalue(), "model/meta.json": '{"layers": 2}', "mypkg/__init__.py": "", "mypkg/data.txt": "hi"}
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source, extra), tmp_path)
@@ -221,7 +259,7 @@ class Solution:
         if self.previous is not None:
             tracked, status, _ = cv2.calcOpticalFlowPyrLK(self.previous, frame, corners, None)
         self.previous = frame.copy()
-        return [0 if corners is None else len(corners), float(blurred.mean()), 0, 0, 0, 0, 1]
+        return [0 if corners is None else len(corners), float(blurred.mean()), 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
 """
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source), tmp_path)
     sandbox.init(CONFIG)
@@ -256,7 +294,7 @@ class Solution:
         for _ in range(8):
             self.keep.append(np.ones(16 << 20, np.uint8))  # 128 MiB per step, retained
         digest = hashlib.sha256(bundle.read_bytes("blob.bin")).hexdigest()
-        return [float(digest == EXPECTED), len(self.keep), 0, 0, 0, 0, 1]
+        return [float(digest == EXPECTED), len(self.keep), 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
 """ % __import__("hashlib").sha256(blob).hexdigest()
     sandbox = make_sandbox(engine, runtime_path, solution_dir(source, {"blob.bin": blob}), tmp_path, limits=Limits(memory_bytes=1 << 30))
     sandbox.init(CONFIG)
@@ -295,6 +333,9 @@ def test_abi_constants_match_the_guest_shim_and_the_native_header():
         assert f"{name} = {getattr(abi, name)}" in shim
         assert f"#define RELPOSE_{name} {getattr(abi, name)}" in header
     assert f"#define RELPOSE_ABI_VERSION {abi.ABI_VERSION}" in header
+    for name in ("POSE_VALUES", "TWIST_VALUES", "STATE_VALUES"):
+        assert f"#define RELPOSE_{name} {getattr(abi, name)}" in header
+    assert f"STATE_VALUES = {abi.STATE_VALUES}" in shim
     assert f'FRAME_WIDTH = "{abi.FRAME_WIDTH}"' in shim and f"DEFAULT_FRAME_WIDTH = {abi.DEFAULT_RESOLUTION[0]}" in shim
     assert f"RELPOSE_EXPORT({abi.FRAME_WIDTH})" in header
 
@@ -308,7 +349,7 @@ class Solution:
         assert (config["width"], config["height"]) == (640, 480)
     def step(self, t, frame, imu):
         assert frame.shape == (480, 640, 3)
-        return [float(frame[1, 2, 0]), float(frame[1, 2, 1]), float(frame[1, 2, 2]), 0, 0, 0, 1]
+        return [float(frame[1, 2, 0]), float(frame[1, 2, 1]), float(frame[1, 2, 2]), 0, 0, 0, 1, 0, 0, 0, 0, 0, 0]
 """
     wasm = tmp_path / "vga.wasm"
     bundle(solution_dir(source), wasm, runtime=runtime_path)

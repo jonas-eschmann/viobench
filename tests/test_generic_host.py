@@ -18,7 +18,7 @@ class Solution:
     def __init__(self, config):
         self.offset = float(bundle.read_text("offset.txt"))
     def step(self, t, frame, imu):
-        return [self.offset, float(frame.mean()), t, 0, 0, 0, 1]
+        return [self.offset, float(frame.mean()), t, 0, 0, 0, 1, 1, 2, 3, 4, 5, 6]
 """
 
 
@@ -51,8 +51,8 @@ def test_plain_wasmtime_host_runs_a_bundle(runtime_path, solution_dir, tmp_path)
     assert init(store, pointer, len(config_bytes)) == 0
 
     frame = np.full(320 * 240 * 3, 100, np.uint8).tobytes()  # 320x240 RGB
-    frame_pointer, imu_pointer, out_pointer = alloc(store, len(frame)), alloc(store, 7 * 8), alloc(store, 7 * 8)
+    frame_pointer, imu_pointer, out_pointer = alloc(store, len(frame)), alloc(store, 7 * 8), alloc(store, 13 * 8)
     write(frame_pointer, frame)
     assert step(store, 0.5, frame_pointer, imu_pointer, 0, out_pointer) == 0
-    pose = np.frombuffer(bytes(memory.read(store, out_pointer, out_pointer + 56)), np.float64)
-    np.testing.assert_allclose(pose, [2.5, 100.0, 0.5, 0, 0, 0, 1])
+    state = np.frombuffer(bytes(memory.read(store, out_pointer, out_pointer + 13 * 8)), np.float64)
+    np.testing.assert_allclose(state, [2.5, 100.0, 0.5, 0, 0, 0, 1, 1, 2, 3, 4, 5, 6])

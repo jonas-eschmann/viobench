@@ -6,7 +6,7 @@ import numpy as np
 
 from .. import abi
 from ..abi.config import guest_config
-from ..geometry import interpolate_poses, invert, matrices_to_poses, poses_to_matrices
+from ..geometry import interpolate_poses, invert, matrices_to_poses, poses_to_matrices, rotation_vectors
 
 
 class FrameSequence:
@@ -83,6 +83,7 @@ class Episode:
     meta: dict = field(default_factory=dict)
 
     TIME_TOLERANCE = 1e-6  # seconds; timestamps are ns integers on disk, so this only absorbs float round-off
+    TWIST_STEP = 0.005  # seconds: half-width of the central difference of the ground truth that gives the twist
 
     def __post_init__(self):
         self.frame_times = np.asarray(self.frame_times, dtype=float)
@@ -137,15 +138,31 @@ class Episode:
         for index in range(self.num_frames):
             yield self.frame_times[index], frames[index], self.imu_window(index)
 
-    def camera_poses_world(self):
-        """(N, 7) pose of the camera in the world frame at the frame times."""
-        body = interpolate_poses(self.ground_truth[:, 0], self.ground_truth[:, 1:8], self.frame_times)
+    def camera_poses_world(self, times=None):
+        """(N, 7) pose of the camera in the world frame at the given times (default: the frame times)."""
+        times = self.frame_times if times is None else times
+        body = interpolate_poses(self.ground_truth[:, 0], self.ground_truth[:, 1:8], times)
         return matrices_to_poses(poses_to_matrices(body) @ self.T_body_camera)
 
     def ground_truth_relative(self):
-        """(N, 7) pose of camera k in the frame of camera 0 (T_c0_ck): what a perfect solution returns."""
+        """(N, 7) pose of camera k in the frame of camera 0 (T_c0_ck): the pose a perfect solution returns."""
         T_wc = poses_to_matrices(self.camera_poses_world())
         return matrices_to_poses(invert(T_wc[0]) @ T_wc)
+
+    def ground_truth_twist(self):
+        """(N, 6) twist of camera k [vx, vy, vz, wx, wy, wz]: velocity of the camera centre and angular velocity, both in
+        camera-k axes (v = R^T dt/dt and [w]x = R^T dR/dt of T_c0_ck), by central differences of the ground truth."""
+        before = np.maximum(self.frame_times - self.TWIST_STEP, self.ground_truth[0, 0])
+        after = np.minimum(self.frame_times + self.TWIST_STEP, self.ground_truth[-1, 0])
+        T_before, T_now, T_after = (poses_to_matrices(self.camera_poses_world(times)) for times in (before, self.frame_times, after))
+        interval = (after - before)[:, None]
+        velocity = np.einsum("nji,nj->ni", T_now[:, :3, :3], T_after[:, :3, 3] - T_before[:, :3, 3]) / interval
+        angular_velocity = rotation_vectors(np.swapaxes(T_before[:, :3, :3], 1, 2) @ T_after[:, :3, :3]) / interval
+        return np.concatenate([velocity, angular_velocity], axis=1)
+
+    def ground_truth_state(self):
+        """(N, 13) pose and twist of camera k (ground_truth_relative, ground_truth_twist): what a perfect solution returns."""
+        return np.concatenate([self.ground_truth_relative(), self.ground_truth_twist()], axis=1)
 
     def adapt(self, resolution=None):
         """(guest config, frames) for a solution that declared 320x240 or 640x480 (docs/ABI.md, "Frame format").

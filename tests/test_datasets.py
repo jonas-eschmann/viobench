@@ -44,6 +44,29 @@ def test_episode_windows_and_ground_truth():
     np.testing.assert_allclose(poses_to_matrices(relative)[3], expected, atol=1e-12)
 
 
+def test_ground_truth_twist_of_an_offset_camera():
+    """The synthetic body circles at 0.5 rad/s (yaw = angle), climbing at 0.1 m/s; the camera sits off the body origin, rotated."""
+    import dataclasses
+
+    episode = synthetic_episode()
+    R_bc = quaternion_to_matrix([0.1, -0.2, 0.3, 0.9])
+    T_body_camera = np.eye(4)
+    T_body_camera[:3, :3], T_body_camera[:3, 3] = R_bc, [0.05, -0.02, 0.1]
+    episode = dataclasses.replace(episode, T_body_camera=T_body_camera)
+    angle = 0.5 * episode.frame_times
+    velocity_world = np.column_stack([-0.5 * np.sin(angle), 0.5 * np.cos(angle), np.full_like(angle, 0.1)])
+    R_wb = quaternion_to_matrix(np.column_stack([np.zeros_like(angle), np.zeros_like(angle), np.sin(angle / 2), np.cos(angle / 2)]))
+    omega_body = np.array([0.0, 0.0, 0.5])
+    velocity_body = np.einsum("nji,nj->ni", R_wb, velocity_world) + np.cross(omega_body, T_body_camera[:3, 3])  # camera centre: v + w x r
+    expected = np.column_stack([velocity_body @ R_bc, np.tile(R_bc.T @ omega_body, (len(angle), 1))])
+    twist = episode.ground_truth_twist()
+    np.testing.assert_allclose(twist[:-1], expected[:-1], atol=1e-5)
+    np.testing.assert_allclose(twist[-1], expected[-1], atol=2e-3)  # the ground truth ends at the last frame: one-sided there
+    state = episode.ground_truth_state()
+    assert state.shape == (8, 13)
+    np.testing.assert_array_equal(state[:, :7], episode.ground_truth_relative())
+
+
 def test_first_imu_window_is_one_frame_interval():
     episode = synthetic_episode(lead_in=1.5)  # a recording may hold IMU from long before its first frame, simulated episodes barely
     first = episode.imu_window(0)
