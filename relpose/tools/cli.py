@@ -205,7 +205,7 @@ def main(argv=None):
     evaluate = commands.add_parser("evaluate", help="[runner] run a module over episodes (directories and/or freshly simulated) and write report.json")
     evaluate.add_argument("wasm")
     evaluate.add_argument("datasets", nargs="*", help="episode directories or directories of episodes")
-    evaluate.add_argument("-o", "--output", help="report directory (default: ./report-<name>)")
+    evaluate.add_argument("-o", "--output", help="report directory; also write trajectory.mp4 per episode (default: ./report-<name>, without video)")
     evaluate.add_argument("--max-episodes", type=int)
     evaluate.add_argument("--simulate", type=int, metavar="N", help="also evaluate on N fresh HyperDrone episodes (GPU; options below)")
     add_simulation_arguments(evaluate)

@@ -124,10 +124,11 @@ def as_dataset(dataset):
 
 
 def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_episodes=None, log=print):
-    """dataset: episode directories / dataset roots, or any iterable of Episodes. Returns the report dict (also written as report.json)."""
+    """Evaluate a Dataset and write report.json; an explicit output_dir also enables per-episode videos."""
     wasm_path = Path(wasm_path)
     engine = engine or Engine()
     limits = limits or Limits()
+    save_video = output_dir is not None
     output_dir = Path(output_dir) if output_dir else Path.cwd() / f"report-{wasm_path.stem}"
     output_dir.mkdir(parents=True, exist_ok=True)
     reports = []
@@ -143,6 +144,10 @@ def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_
         log(f"{episode.dataset}/{episode.name}: {'ok' if report.completed else 'FAILED'} RPE {m['rpe_translation_rmse']:.3f} m/1 s  ATE {m['ate_rmse']:.3f} m  "
             f"rot {np.degrees(m['rotation_rmse']):.1f} deg  vel {m['velocity_rmse']:.3f} m/s  held {m['held']}  fuel/frame {report.fuel_per_frame_median:,.0f} (p95 {report.fuel_per_frame_p95:,.0f})  "
             f"wall/frame {report.wall_per_frame_median_ms:.1f} ms" + (f"  [{report.failure}]" if report.failure else ""))
+        if save_video:
+            from .video import write_video
+
+            log(f"video: {write_video(episode, estimates, log_dir / 'trajectory.mp4')}")
     if not reports:
         raise ValueError("the dataset yielded no episodes")
     result = {
