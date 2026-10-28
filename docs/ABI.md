@@ -35,9 +35,6 @@ Frames are always **RGB**, `uint8`, `height × width × 3`, and the only choice 
 **320 × 240** (default) or **640 × 480**. Nothing else about the format varies between episodes or sets, and the
 config does not say where an episode comes from.
 
-- **Colour**: simulated sets are RGB; grayscale-only sources (EuRoC) arrive with their gray value in all three
-  channels, unannounced. A solution that relies on colour has to cope with frames where R = G = B; one that works on
-  gray converts itself (`cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)`, ITU-R 601 luma).
 - **Resolution**: every set is stored at 640 × 480 (or 320 × 240), 4:3. A 640 × 480 set is delivered as stored or
   area-averaged to 320 × 240, with the intrinsics rescaled (pixel-centre convention); nothing is ever upscaled, so a
   set stored at 320 × 240 cannot serve a 640 × 480 solution and the runner refuses to try. More pixels cost fuel in
