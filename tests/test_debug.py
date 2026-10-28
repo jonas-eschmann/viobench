@@ -43,11 +43,11 @@ def test_direct_run_matches_the_sandbox(engine, runtime_path, tmp_path):
 
 
 def test_direct_manifest_and_host_solution_bundle(solution_dir, tmp_path):
-    """solution.json picks entry/resolution; data files next to the code come through `solution_bundle`."""
+    """solution.json picks the resolution; solution.py may re-export a class from elsewhere; data files next to the code come through `solution_bundle`."""
     directory = solution_dir(
-        "",
+        "from estimator import Est as Solution\n",
         {
-            "solution.json": json.dumps({"entry": "estimator:Est", "resolution": "640x480"}),
+            "solution.json": json.dumps({"resolution": "640x480"}),
             "estimator.py": (
                 "import numpy as np\nimport solution_bundle as bundle\n"
                 "class Est:\n"

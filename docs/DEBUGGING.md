@@ -15,7 +15,7 @@ relpose debug my_solution --simulate 2 --condition blur                         
 relpose debug my_solution <episode dir> -o out       # writes out/<dataset>/<episode>/estimate.tum like `evaluate` does
 ```
 
-The driver imports your directory (`solution.json` is honoured: `entry`, `resolution`), provides the
+The driver imports your directory (`solution.json` is honoured: `resolution`), provides the
 `solution_bundle` module backed by the files next to your code, adapts each episode to your resolution (RGB frames) and
 calls `Solution(config)` then `step(t, frame, imu)` per frame, exactly like the runtime. It prints the metrics line of
 `evaluate` (without fuel) per episode.

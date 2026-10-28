@@ -340,3 +340,6 @@ class Solution:
         write_manifest(wasm, {"resolution": [64, 48]})
     with pytest.raises(Exception, match="unknown manifest keys"):  # there is no colour choice: frames are always RGB
         write_manifest(wasm, {"channels": 3})
+    assert "entry" not in write_manifest(wasm, {"entry": "solution:Solution"})  # what older bundlers wrote: accepted and dropped
+    with pytest.raises(Exception, match="from mypkg.estimator import Estimator as Solution"):  # the entry point is fixed
+        write_manifest(wasm, {"entry": "mypkg.estimator:Estimator"})

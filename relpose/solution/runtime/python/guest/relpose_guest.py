@@ -1,7 +1,7 @@
 """Guest-side glue between relpose/solution/runtime/python/reactor.c and the student's solution; frozen into runtime.wasm.
 
 init() receives the config JSON and (when the wasm carries one) the zip of the student's directory, makes the
-zip importable, imports the entry point (default `solution:Solution`) and constructs it. step() wraps the raw
+zip importable, imports `solution:Solution` and constructs it. step() wraps the raw
 buffers in numpy arrays, calls Solution.step and writes the pose back. Status codes mirror relpose/abi.py.
 """
 import importlib
@@ -19,8 +19,8 @@ import numpy as np
 
 BUNDLE_ROOT = "/bundle"  # virtual location used for __file__ of bundled modules
 BUNDLE_MODULE = "solution_bundle"  # `import solution_bundle` gives students their data files
-MANIFEST_NAME = "solution.json"
-DEFAULT_ENTRY = "solution:Solution"
+SOLUTION_MODULE = "solution"  # the entry point is always class Solution in solution.py (or solution/__init__.py)
+SOLUTION_CLASS = "Solution"
 SOLUTION_DIR_VARIABLE = "RELPOSE_SOLUTION_DIR"  # dev mode: the host preopened the directory instead of bundling it
 IMU_ROW_VALUES = 7
 POSE_VALUES = 7
@@ -150,11 +150,9 @@ def init(config_view, bundle_view):
         bundle = DirectoryBundle(directory)
         sys.path.insert(0, directory)
     _install_bundle_module(bundle)
-    manifest = json.loads(bundle.read_text(MANIFEST_NAME)) if bundle.exists(MANIFEST_NAME) else {}
-    module_name, _, class_name = manifest.get("entry", DEFAULT_ENTRY).partition(":")
     try:
-        module = importlib.import_module(module_name)
-        factory = getattr(module, class_name or "Solution")
+        module = importlib.import_module(SOLUTION_MODULE)
+        factory = getattr(module, SOLUTION_CLASS)
         _solution = factory(config)
     except BaseException:
         traceback.print_exc()

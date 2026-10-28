@@ -43,13 +43,12 @@ def command_bundle(arguments):
     from ..solution.runtime.python.bundler.bundle import bundle
 
     try:
-        summary = bundle(arguments.directory, arguments.output, runtime=arguments.runtime, entry=arguments.entry,
-                         resolution=arguments.resolution)
+        summary = bundle(arguments.directory, arguments.output, runtime=arguments.runtime, resolution=arguments.resolution)
     except (BundleError, abi.AbiError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(f"wrote {summary['output']} ({summary['bytes'] / 2**20:.1f} MiB, bundle {summary['bundle_bytes'] / 1024:.0f} KiB, {len(summary['files'])} files, "
-          f"entry {summary['entry']}, {summary['resolution'][0]}x{summary['resolution'][1]} frames)")
+          f"{summary['resolution'][0]}x{summary['resolution'][1]} frames)")
     for warning in summary["warnings"]:
         print(f"warning: {warning}")
     print(f"next: relpose check {summary['output']}")
@@ -74,8 +73,6 @@ def command_manifest(arguments):
 
     try:
         updates = {}
-        if arguments.entry is not None:
-            updates["entry"] = arguments.entry
         if arguments.resolution is not None:
             updates["resolution"] = arguments.resolution
         manifest = write_manifest(arguments.wasm, updates) if updates else read_manifest(open(arguments.wasm, "rb").read())
@@ -231,7 +228,6 @@ def main(argv=None):
     bundle.add_argument("directory")
     bundle.add_argument("-o", "--output", required=True, help="output .wasm")
     bundle.add_argument("--runtime", help="runtime.wasm to build on (default: $RELPOSE_RUNTIME or build/runtime/dist/runtime.wasm)")
-    bundle.add_argument("--entry", help=f"module:Class of the solution (default {abi.DEFAULT_ENTRY} or solution.json)")
     bundle.add_argument("--resolution", help="frames the solution wants: 320x240 (default) or 640x480 (or solution.json)")
     bundle.set_defaults(function=command_bundle)
 
@@ -243,7 +239,6 @@ def main(argv=None):
     manifest = commands.add_parser("manifest", help="[solution] show or change a module's manifest (native modules declare RGB / VGA this way)")
     manifest.add_argument("wasm")
     manifest.add_argument("--resolution", help="320x240 or 640x480")
-    manifest.add_argument("--entry")
     manifest.set_defaults(function=command_manifest)
 
     check = commands.add_parser("check", help="[runner] instantiate a module and run a few synthetic frames through it")

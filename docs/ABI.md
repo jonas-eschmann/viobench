@@ -46,13 +46,13 @@ config does not say where an episode comes from.
   config are those of the delivered resolution; `fx = fy` and a centred principal point are not promised.
 
 **Requesting the resolution: the manifest.** A JSON object in the module's custom section `relpose.manifest`, read by
-the harness *before* `init`: `{"resolution": [320, 240] | [640, 480], "entry": "module:Class"}`, both optional
-(`entry` only matters to the Python runtime). Python solutions write `solution.json` next to `solution.py` and
-`relpose bundle` copies it into the section (`--resolution` / `--entry` override it); native modules add the section
-with `relpose manifest solution.wasm --resolution 640x480`. The harness takes the section if present, else a
-`solution.json` inside the embedded bundle, else the defaults; in dev mode (`--dir`) the directory's `solution.json` is
-merged on top, so editing it takes effect without rebundling. Unknown keys and other resolutions are rejected. The
-section is removed before compilation: modules that differ only in their manifest share one compiled artifact.
+the harness *before* `init`: `{"resolution": [320, 240] | [640, 480]}`, optional. Python solutions write
+`solution.json` next to `solution.py` and `relpose bundle` copies it into the section (`--resolution` overrides it);
+native modules add the section with `relpose manifest solution.wasm --resolution 640x480`. The harness takes the
+section if present, else a `solution.json` inside the embedded bundle, else the default; in dev mode (`--dir`) the
+directory's `solution.json` is merged on top, so editing it takes effect without rebundling. Unknown keys and other
+resolutions are rejected. The section is removed before compilation: modules that differ only in their manifest share
+one compiled artifact.
 
 ## Buffers
 
@@ -127,10 +127,11 @@ class Solution:
         imu: float64 (N, 7) rows [t, ax, ay, az, gx, gy, gz]. Return [x, y, z, qx, qy, qz, qw] or None."""
 ```
 
-The entry point defaults to `solution:Solution` (`solution.py` or `solution/__init__.py` at the root of the
-bundled directory) and can be changed with `solution.json` (`{"entry": "mypkg.estimator:Estimator"}`). Data files in
-the directory are reachable through `import solution_bundle as bundle` (`bundle.read_bytes(name)`, `bundle.open(name)`,
-`bundle.exists(name)`, `bundle.listdir(prefix)`), `pkgutil.get_data`, or the module's `__file__` under `/bundle/`.
+The entry point is always `Solution` in `solution.py` (or `solution/__init__.py`) at the root of the bundled
+directory; a class that lives elsewhere is re-exported there (`from mypkg.estimator import Estimator as Solution`).
+Data files in the directory are reachable through `import solution_bundle as bundle` (`bundle.read_bytes(name)`,
+`bundle.open(name)`, `bundle.exists(name)`, `bundle.listdir(prefix)`), `pkgutil.get_data`, or the module's `__file__`
+under `/bundle/`.
 Available inside the runtime: CPython 3.14 stdlib (no zlib/ssl/sqlite3/ctypes), numpy 2.3 (scalar build), OpenCV 4.12
 (`core`, `imgproc`, `features2d`, `flann`, `calib3d`, `video`, `dnn` with ONNX import). No threads, no filesystem,
 no network, no clock you should rely on for scoring.

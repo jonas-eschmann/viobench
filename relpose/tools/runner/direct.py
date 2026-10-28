@@ -75,9 +75,9 @@ def install_solution_bundle(directory):
 
 
 class PythonSolution:
-    """A solution directory loaded on the host: its manifest (resolution, entry) and a factory for instances."""
+    """A solution directory loaded on the host: its manifest (resolution) and a factory for instances."""
 
-    def __init__(self, directory, entry=None, solution_class=None):
+    def __init__(self, directory, solution_class=None):
         self.directory = Path(directory).resolve()
         manifest_path = self.directory / abi.BUNDLE_MANIFEST
         self.manifest = validate_manifest(json.loads(manifest_path.read_text()) if manifest_path.is_file() else {})
@@ -88,11 +88,10 @@ class PythonSolution:
         if solution_class is not None:
             self.factory = solution_class
         else:
-            module_name, _, class_name = (entry or self.manifest.get("entry", abi.DEFAULT_ENTRY)).partition(":")
-            cached = sys.modules.get(module_name)
+            cached = sys.modules.get(abi.SOLUTION_MODULE)
             if cached is not None and not str(getattr(cached, "__file__", "") or "").startswith(str(self.directory)):
-                del sys.modules[module_name]  # a same-named module from another solution directory (one process, several solutions)
-            self.factory = getattr(importlib.import_module(module_name), class_name or "Solution")
+                del sys.modules[abi.SOLUTION_MODULE]  # a same-named module from another solution directory (one process, several solutions)
+            self.factory = getattr(importlib.import_module(abi.SOLUTION_MODULE), abi.SOLUTION_CLASS)
 
     @classmethod
     def from_class(cls, solution_class):
@@ -165,7 +164,6 @@ def add_arguments(parser, solution_class=None):
     parser.add_argument("--simulate", type=int, metavar="N", help="also run on N fresh HyperDrone episodes (GPU; options below)")
     parser.add_argument("--episode-limit", type=int, help="stop after this many episodes")
     parser.add_argument("-o", "--output", help="write estimate.tum per episode under this directory")
-    parser.add_argument("--entry", help="module:Class (default: solution.json or solution:Solution)")
     add_simulation_arguments(parser)
 
 
@@ -174,7 +172,7 @@ def run_arguments(arguments, solution_class=None):
 
     if not arguments.datasets and not arguments.simulate:
         raise SystemExit("debug needs episode directories and/or --simulate N")
-    solution = PythonSolution.from_class(solution_class) if solution_class is not None else PythonSolution(arguments.solution, entry=arguments.entry)
+    solution = PythonSolution.from_class(solution_class) if solution_class is not None else PythonSolution(arguments.solution)
 
     def dataset():
         if arguments.datasets:

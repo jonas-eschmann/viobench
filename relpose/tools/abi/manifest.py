@@ -1,20 +1,21 @@
 """The manifest: what a module declares to the harness before it runs.
 
-`{"entry": "module:Class", "resolution": [320, 240] | [640, 480]}` — stored as the custom section
+`{"resolution": [320, 240] | [640, 480]}` — stored as the custom section
 `relpose.manifest`. Reading is part of the contract (the runner needs it before instantiation); writing is done by the
 Python runtime's bundler or by `relpose manifest` for native modules. Python solutions write it with `solution.json` next to `solution.py` (the bundler copies it into
-the section); native modules add it with `relpose manifest solution.wasm --resolution 640x480`. Missing keys mean the defaults
-(320×240, `solution:Solution`). Frames are always RGB; there is nothing to choose about colour.
+the section); native modules add it with `relpose manifest solution.wasm --resolution 640x480`. A missing resolution means
+320×240. Frames are always RGB; there is nothing to choose about colour.
 """
 import io
 import json
 import zipfile
 from pathlib import Path
 
-from . import BUNDLE_MANIFEST, MANIFEST_SECTION, SUPPORTED_RESOLUTIONS, AbiError
+from . import BUNDLE_MANIFEST, MANIFEST_SECTION, SOLUTION_CLASS, SOLUTION_MODULE, SUPPORTED_RESOLUTIONS, AbiError
 from .wasm_binary import append_custom, find_custom
 
-MANIFEST_KEYS = {"entry", "resolution"}
+MANIFEST_KEYS = {"resolution"}
+LEGACY_ENTRY = f"{SOLUTION_MODULE}:{SOLUTION_CLASS}"  # older bundlers wrote {"entry": "solution:Solution"} into every manifest
 
 
 def parse_resolution(value):
@@ -37,6 +38,11 @@ def validate_manifest(manifest):
         if resolution not in SUPPORTED_RESOLUTIONS:
             raise AbiError(f"manifest resolution must be one of {['x'.join(map(str, r)) for r in SUPPORTED_RESOLUTIONS]}, got {manifest['resolution']!r}")
         manifest["resolution"] = list(resolution)
+    entry = manifest.pop("entry", LEGACY_ENTRY)
+    if entry != LEGACY_ENTRY:
+        module_name, _, class_name = str(entry).partition(":")
+        raise AbiError(f"the manifest no longer takes an entry point: the solution is always class {SOLUTION_CLASS} in {SOLUTION_MODULE}.py, "
+                       f"so re-export yours there (`from {module_name} import {class_name or SOLUTION_CLASS} as {SOLUTION_CLASS}`) and drop \"entry\"")
     unknown = set(manifest) - MANIFEST_KEYS
     if unknown:
         raise AbiError(f"unknown manifest keys {sorted(unknown)} (known: {sorted(MANIFEST_KEYS)})")

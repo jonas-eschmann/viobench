@@ -70,11 +70,10 @@ def entry_file(files, module_name):
     return None
 
 
-def validate(directory, files, entry):
-    """Syntax-checks every .py and looks for the entry class; returns warnings (hard errors raise)."""
+def validate(directory, files):
+    """Syntax-checks every .py and looks for class Solution in solution.py; returns warnings (hard errors raise)."""
     directory = Path(directory)
-    module_name, _, class_name = entry.partition(":")
-    class_name = class_name or "Solution"
+    module_name, class_name = abi.SOLUTION_MODULE, abi.SOLUTION_CLASS
     warnings = []
     errors = []
     trees = {}
@@ -90,10 +89,13 @@ def validate(directory, files, entry):
         raise PackagingError("syntax errors:\n  " + "\n  ".join(errors))
     main = entry_file(files, module_name)
     if main is None:
-        raise PackagingError(f"entry module {module_name!r} not found: expected {module_name.replace('.', '/')}.py or {module_name.replace('.', '/')}/__init__.py")
+        raise PackagingError(f"no {module_name}.py or {module_name}/__init__.py in {directory}: the bundle's entry point is class {class_name} there")
     classes = {node.name: node for node in ast.walk(trees[main]) if isinstance(node, ast.ClassDef)}
-    if class_name not in classes:
-        warnings.append(f"{main} does not define class {class_name} itself (fine if it imports it from another module)")
+    imported = {alias.asname or alias.name for node in trees[main].body if isinstance(node, ast.ImportFrom) for alias in node.names}
+    if class_name in imported:
+        pass  # re-exported from another module (`from mypkg import Estimator as Solution`): checked when it is imported
+    elif class_name not in classes:
+        warnings.append(f"{main} neither defines nor imports {class_name} (fine if it binds it some other way)")
     else:
         methods = {node.name for node in classes[class_name].body if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
         for method in ("__init__", "step"):
@@ -105,7 +107,7 @@ def validate(directory, files, entry):
     return warnings
 
 
-def make_zip(directory, files, entry, resolution=abi.DEFAULT_RESOLUTION):
+def make_zip(directory, files, resolution=abi.DEFAULT_RESOLUTION):
     """Uncompressed (the guest has no zlib), deterministic zip with the manifest at the end. Returns (bytes, manifest)."""
     directory = Path(directory)
     manifest = {}
@@ -121,7 +123,7 @@ def make_zip(directory, files, entry, resolution=abi.DEFAULT_RESOLUTION):
             info.compress_type = zipfile.ZIP_STORED
             info.external_attr = 0o644 << 16
             archive.writestr(info, data)
-        manifest.update({"entry": entry, "resolution": list(parse_resolution(resolution))})
+        manifest["resolution"] = list(parse_resolution(resolution))
         validate_manifest(manifest)
         info = zipfile.ZipInfo(abi.BUNDLE_MANIFEST, date_time=ZIP_EPOCH)
         info.external_attr = 0o644 << 16
@@ -129,20 +131,18 @@ def make_zip(directory, files, entry, resolution=abi.DEFAULT_RESOLUTION):
     return buffer.getvalue(), manifest
 
 
-def bundle(directory, output, runtime=None, entry=None, resolution=None):
-    """Writes output (.wasm) and returns a summary dict. entry/resolution default to solution.json in the directory."""
+def bundle(directory, output, runtime=None, resolution=None):
+    """Writes output (.wasm) and returns a summary dict. resolution defaults to solution.json in the directory."""
     directory = Path(directory)
     files = collect_files(directory)
     manifest_path = directory / abi.BUNDLE_MANIFEST
     existing = json.loads(manifest_path.read_text()) if manifest_path.is_file() else {}
-    if entry is None:
-        entry = existing.get("entry", abi.DEFAULT_ENTRY)
     if resolution is None:
         resolution = existing.get("resolution", abi.DEFAULT_RESOLUTION)
-    warnings = validate(directory, files, entry)
+    warnings = validate(directory, files)
     runtime_path = Path(runtime) if runtime else default_runtime()
     runtime_bytes = strip_custom(runtime_path.read_bytes(), abi.MANIFEST_SECTION)
-    payload, manifest = make_zip(directory, files, entry, resolution)
+    payload, manifest = make_zip(directory, files, resolution)
     result = with_manifest(embed_bundle(runtime_bytes, payload), manifest)
     if extract_bundle(result) != payload or read_manifest(result) != manifest:
         raise PackagingError("internal error: the embedded bundle does not round-trip")
@@ -153,7 +153,6 @@ def bundle(directory, output, runtime=None, entry=None, resolution=None):
         "bytes": len(result),
         "files": [file.as_posix() for file in files],
         "bundle_bytes": len(payload),
-        "entry": entry,
         "resolution": manifest["resolution"],
         "runtime": str(runtime_path),
         "runtime_sha256": hashlib.sha256(strip_bundle(runtime_bytes)).hexdigest(),
