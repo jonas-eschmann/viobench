@@ -1,9 +1,9 @@
 # Learned baseline: PyTorch → ONNX → `cv2.dnn` inside the runtime
 
-1. Train on episode directories (any mix of the published sets or your own `simulate` output):
+1. Train on episode directories (your `relpose simulate` output, for example):
 
    ```bash
-   python relpose/solution/examples/python/tiny_cnn/train.py datasets/default-train --epochs 10
+   python relpose/solution/examples/python/tiny_cnn/train.py data/train --epochs 10
    ```
 
    writes `solution/net.onnx`, `solution/weights.npz`, `solution/meta.json` (and `net.pt`).
@@ -13,7 +13,7 @@
    ```bash
    relpose bundle relpose/solution/examples/python/tiny_cnn/solution -o tinynn.wasm
    relpose check tinynn.wasm
-   relpose evaluate tinynn.wasm datasets/default-val
+   relpose evaluate tinynn.wasm data/val
    ```
 
 The solution runs the ONNX graph with `cv2.dnn.readNetFromONNX` (bytes from the bundle) and falls back to the numpy

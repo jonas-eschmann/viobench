@@ -3,7 +3,7 @@
 solution     bundle, unbundle                  Python runtime + directory <-> solution.wasm
 runner       check, evaluate, leaderboard      run a module on synthetic frames / on a dataset (disk or freshly simulated); aggregate reports
              debug, score                      run a Python solution in-process (debugger-friendly); score a pose file
-datasets     simulate, convert-euroc, feed     write episodes with HyperDrone (GPU); cut EuRoC sequences into episodes; export raw inputs for native debugging
+datasets     simulate, feed                    write episodes with HyperDrone (GPU); export raw inputs for native debugging
 
 The CLI is the one host component that also reaches into the guest side (for `bundle`); the runner library never does.
 """
@@ -175,24 +175,6 @@ def command_feed(arguments):
     return 0
 
 
-def command_convert_euroc(arguments):
-    from pathlib import Path
-
-    from .datasets.generate.euroc import convert
-    from .datasets.storage import write_episode
-
-    output = Path(arguments.output)
-    output.mkdir(parents=True, exist_ok=True)
-    count = 0
-    width, height = (int(value) for value in arguments.resolution.split("x"))
-    for episode, origin_ns in convert(arguments.sequence, width=width, height=height, snippet_seconds=arguments.snippet,
-                                      max_snippets=arguments.max_snippets, start_seconds=arguments.start, stride_seconds=arguments.stride):
-        write_episode(episode, output / episode.name, origin_ns=origin_ns)
-        count += 1
-    print(f"{count} episodes in {output}")
-    return 0 if count else 1
-
-
 # --- parser ----------------------------------------------------------------------------------------------------
 
 def main(argv=None):
@@ -258,17 +240,6 @@ def main(argv=None):
                       help="what your solution declares")
     add_simulation_arguments(feed)
     feed.set_defaults(function=command_feed)
-
-    convert = commands.add_parser("convert-euroc", help="[datasets] cut a EuRoC MAV sequence (ASL format directory) into episodes")
-    convert.add_argument("sequence", help="sequence directory (containing mav0/)")
-    convert.add_argument("-o", "--output", required=True)
-    convert.add_argument("--snippet", type=float, default=60.0, help="episode length in seconds (default: one minute, like the simulated sets)")
-    convert.add_argument("--stride", type=float, help="seconds between snippet starts (default: --snippet, no overlap)")
-    convert.add_argument("--start", type=float, default=0.0, help="skip this many seconds at the beginning")
-    convert.add_argument("--max-snippets", type=int)
-    convert.add_argument("--resolution", default="640x480", choices=[f"{w}x{h}" for w, h in abi.SUPPORTED_RESOLUTIONS],
-                         help="stored resolution (EuRoC's 752x480 crops to 640x480 without scaling; 640x480 serves every solution)")
-    convert.set_defaults(function=command_convert_euroc)
 
     arguments = parser.parse_args(argv)
     return arguments.function(arguments)

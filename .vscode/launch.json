@@ -10,7 +10,7 @@
             "args": [
                 "debug",
                 "${workspaceFolder}/relpose/solution/examples/python/dead_reckoning",
-                "${workspaceFolder}/build/datasets/public/default-val",
+                "${workspaceFolder}/data/val",
                 "--max-episodes", "1"
             ],
             "cwd": "${workspaceFolder}",

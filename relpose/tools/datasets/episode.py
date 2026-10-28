@@ -150,7 +150,7 @@ class Episode:
     def adapt(self, resolution=None):
         """(guest config, frames) for a solution that declared 320x240 or 640x480 (docs/ABI.md, "Frame format").
 
-        Frames are always RGB (H, W, 3): a grayscale-only set arrives with its gray value in all three channels, and
+        Frames are always RGB (H, W, 3): a grayscale source arrives with its gray value in all three channels, and
         nothing says so. Downscaling averages areas, upscaling interpolates bilinearly; either way the intrinsics are
         rescaled with the pixel-centre convention. Streamed frames stay streamed: the conversion is applied per frame
         as the runner consumes them."""

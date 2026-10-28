@@ -1,15 +1,15 @@
 """Episode generator on HyperDrone: random autopilot flights through ProcTHOR/HSSD scenes, rendered at IMU rate.
 
     from relpose.tools.datasets.generate.simulation import SimConfig, simulate
-    for episode in simulate(SimConfig(), seeds=range(4), condition="default"):
+    for episode in simulate(SimConfig(), seeds=range(4)):
         ...
 
 Needs `pip install hyperdrone` and a GPU (the environment module is JIT-compiled per configuration on first use;
 the rendered spec header's hash is the key, so every distinct resolution, duration or route length compiles once).
-Frames are RGB uint8 after the camera/ISP model (relpose.tools.datasets.generate.camera) with per-episode parameters
-drawn from the condition's public ranges (relpose.tools.datasets.generate.conditions); solutions receive them as
-stored or rescaled (Episode.adapt). The episode length is `SimConfig.duration_seconds` (default one
-minute); developed frames are spooled to a temporary directory while a batch renders, so memory does not grow with it.
+Frames are RGB uint8: by default each one is the render at its time (`nominal_camera`); another camera model plugs in
+through `simulate(camera=...)`. Solutions receive frames as stored or rescaled (Episode.adapt). The episode length is
+`SimConfig.duration_seconds` (default one minute); frames are spooled to a temporary directory while a batch renders,
+so memory does not grow with it.
 """
 import hashlib
 import itertools
@@ -32,14 +32,12 @@ from ...geometry import matrix_to_quaternion, quaternion_to_matrix
 from ..episode import Episode, FrameSequence
 from ..regularize import regularize
 from ..storage import read_png
-from .camera import apply, srgb_to_linear
-from .conditions import sample as sample_condition
 
 TEMPLATE = Path(__file__).with_name("hyperdrone_world.h.in")
 CACHE_VARIABLE = "RELPOSE_CACHE"
 SPOOL_VARIABLE = "RELPOSE_SPOOL"
 NOMINAL_FOV_DEGREES = 63.78166175396324  # preset camera, horizontal
-WAYPOINTS_PER_SECOND = 0.8  # route length per second of flight unless SimConfig.waypoints is given (the 10 s sets flew 8)
+WAYPOINTS_PER_SECOND = 0.8  # route length per second of flight unless SimConfig.waypoints is given
 MIN_WAYPOINTS = 8
 
 
@@ -119,10 +117,27 @@ def procthor_scenes(names=None):
     return _catalog_scenes(hyperlux.datasets.procthor.Train200(), names)
 
 
-def hssd_scenes(split="val", names=None):
+def hssd_scenes(split="train", names=None):
     import hyperlux
 
     return _catalog_scenes(hyperlux.datasets.hssd.Val43() if split == "val" else hyperlux.datasets.hssd.Train125(), names)
+
+
+SCENES = {"procthor-train": procthor_scenes, "hssd-train": lambda names=None: hssd_scenes("train", names)}  # --scenes choices
+
+
+def nominal_camera(rng, imu_rate_hz):
+    """The default camera of simulate(): each frame is the render at its time, quantised to 8 bits.
+
+    A camera is called once per flight and returns (sub_frames, develop, meta): develop(renders, rng) turns the last
+    `sub_frames` renders up to a frame ((sub_frames, H, W, 3) sRGB float32 in [0, 1], one per IMU step, oldest first)
+    into that (H, W, 3) uint8 frame, and meta goes into the episode's metadata.
+    """
+    return 1, quantise, {}
+
+
+def quantise(renders, rng):
+    return np.clip(np.rint(renders[-1] * 255.0), 0, 255).astype(np.uint8)
 
 
 # a user-spec World exposes unnamed observation blocks: privileged = [position 3 | rotation matrix 9 | linear velocity 3 |
@@ -160,10 +175,11 @@ def _block(vector, layout, name):
     return vector[:, offset:offset + size]
 
 
-def simulate(sim, seeds, scenes=None, condition="default", log=print):
+def simulate(sim, seeds, scenes=None, camera=nominal_camera, name="sim", log=print):
     """Yields Episodes: for each seed one batch of `sim.instances` flights in one scene (round-robin over scenes).
 
-    scenes: {name: reference} (default: ProcTHOR Train200). Terminated flights (collisions) are skipped.
+    scenes: {name: reference} (default: ProcTHOR Train200). camera: how renders become frames (see nominal_camera).
+    name: prefix of the episode names and the episodes' dataset. Terminated flights (collisions) are skipped.
     """
     import hyperdrone
 
@@ -185,12 +201,12 @@ def simulate(sim, seeds, scenes=None, condition="default", log=print):
             imu_rate = float(round(1.0 / float(env.dt)))
             if header.name != sim.render_header(imu_rate).name:  # the preset's IMU rate differs from the assumed 200 Hz
                 raise RuntimeError(f"IMU rate {imu_rate} Hz: re-render the spec header for it")
-        yield from _run_batch(env, sim, int(seed), scene_name, condition, log)
+        yield from _run_batch(env, sim, int(seed), scene_name, camera, name, log)
     if env is not None:
         env.close()
 
 
-def _run_batch(env, sim, seed, scene_name, condition, log):
+def _run_batch(env, sim, seed, scene_name, camera, name, log):
     import time
 
     imu_rate = float(round(1.0 / float(env.dt)))  # env.dt is float32 (0.00499999989)
@@ -200,9 +216,9 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
     total = env.total_instances
     layout = env.observation_layout_privileged
     layout_imu = env.observation_layout_imu
-    rng = np.random.default_rng([seed, abs(hash(condition)) % (2**32)])
-    isp = [sample_condition(condition, rng, imu_rate_hz=imu_rate) for _ in range(total)]
-    sub_frames = max(k for _, k in isp)  # ring buffer length
+    rng = np.random.default_rng([seed, abs(hash(name)) % (2**32)])
+    cameras = [camera(rng, imu_rate) for _ in range(total)]  # (sub_frames, develop, meta) per flight
+    sub_frames = max(k for k, _, _ in cameras)  # ring buffer length
 
     env.reset(np.ones(total, dtype=bool))
     parameters = env.instance_parameters()
@@ -224,14 +240,10 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
     for instance in range(total):
         (spool.path / f"{instance:02d}").mkdir()
 
-    def to_linear(rendered):
-        return np.stack(list(pool.map(srgb_to_linear, rendered)))
-
     def develop(instance, index):
-        """ISP for one instance's frame, written straight to the spool (PNG, BGR like storage.write_episode); returns the path."""
-        params, k = isp[instance]
-        stack = [linear[instance] for linear in list(ring)[-k:]]
-        frame = apply(np.mean(stack, axis=0) if len(stack) > 1 else stack[-1], params, instance_rngs[instance])
+        """One instance's frame through its camera, written straight to the spool (PNG, BGR like storage.write_episode); returns the path."""
+        k, develop_frame, _ = cameras[instance]
+        frame = develop_frame(np.stack([renders[instance] for renders in list(ring)[-k:]]), instance_rngs[instance])
         path = spool.path / f"{instance:02d}" / f"{index:05d}.png"
         if not cv2.imwrite(str(path), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_PNG_COMPRESSION, 1]):
             raise OSError(f"could not write {path}")
@@ -239,11 +251,10 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
 
     started = time.perf_counter()
     for step in range(steps):
-        # only sub-frames inside the longest shutter window before a frame's closing step are needed: converting
-        # every render to linear radiance would dominate the run time at 640x480
+        # only renders inside the longest exposure before a frame's closing step are kept: (total, H, W, 3) sRGB
+        # float32 in [0, 1], camera at the pre-step state (time step*dt), copied in case the renderer reuses its buffer
         if step % frame_every >= frame_every - sub_frames:
-            rendered = env.frames()  # (total, H, W, 3) sRGB float32 in [0, 1], camera at the pre-step state (time step*dt)
-            ring.append(to_linear(rendered))
+            ring.append(np.array(env.frames()))
         if step % frame_every == frame_every - 1:
             index = len(frame_times)
             for instance, path in enumerate(pool.map(lambda i: develop(i, index), range(total))):
@@ -272,15 +283,15 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
     for instance in range(total):
         if terminated[instance]:
             continue
-        params, k = isp[instance]
-        cameras = parameters[instance]["cameras"]
-        camera = cameras.get("front") or next(iter(cameras.values()))
-        fov = float(camera["fov"])
-        T_body_camera = mount_to_body_camera(camera["mount"])
+        k, _, camera_meta = cameras[instance]
+        mounted = parameters[instance]["cameras"]  # HyperDrone's camera descriptions
+        front = mounted.get("front") or next(iter(mounted.values()))
+        fov = float(front["fov"])
+        T_body_camera = mount_to_body_camera(front["mount"])
         intrinsics = pinhole_intrinsics(sim.width, sim.height, fov)
         config = make_config(width=sim.width, height=sim.height, channels=abi.CHANNELS, frame_rate_hz=sim.frame_rate_hz,
                              num_frames=len(frame_times), hover_seconds=sim.hold_seconds, T_body_camera=T_body_camera,
-                             intrinsics=intrinsics, episode_name=f"{condition}-{scene_name}-{seed:05d}-{instance:02d}")
+                             intrinsics=intrinsics, episode_name=f"{name}-{scene_name}-{seed:05d}-{instance:02d}")
         config["camera"]["horizontal_fov_degrees"] = fov
         config["episode"]["exposure_seconds"] = k * dt
         # frame k integrates the renders at steps c-k+1..c (c = closing step): mid-exposure is (c - (k-1)/2) dt
@@ -293,9 +304,8 @@ def _run_batch(env, sim, seed, scene_name, condition, log):
             imu=imu_rows[:, instance, :],
             ground_truth=ground_truth[:, instance, :],
             T_body_camera=T_body_camera,
-            meta={"dataset": f"sim-{condition}", "source": "hyperdrone", "scene": scene_name, "seed": seed, "instance": instance, "condition": condition,
-                  "sensor": params.as_dict(), "sub_frames": k, "spawn": spawns[instance], "hyperdrone": _versions(),
-                  "sim": asdict(sim)},
+            meta={"dataset": name, "source": "hyperdrone", "scene": scene_name, "seed": seed, "instance": instance, "sub_frames": k,
+                  **camera_meta, "spawn": spawns[instance], "hyperdrone": _versions(), "sim": asdict(sim)},
         )
         yield regularize(episode)  # frame 0's window starts before the first IMU sample
 
@@ -311,11 +321,10 @@ def _versions():
 
 # --- command-line plumbing shared by `relpose simulate`, `relpose evaluate --simulate`, `relpose debug --simulate`, `relpose feed --simulate`
 
-def add_simulation_arguments(parser):
+def add_simulation_arguments(parser, scenes=SCENES):
     """Adds the generator's options to an argparse parser (names match SimConfig and simulate())."""
     parser.add_argument("--seed", type=int, default=0, help="first seed; seeds also pick the scene round-robin")
-    parser.add_argument("--condition", default="default", choices=["default", "blur", "lowlight", "oversaturated"])
-    parser.add_argument("--scenes", default="procthor-train", choices=["procthor-train", "hssd-train", "hssd-val"])
+    parser.add_argument("--scenes", default="procthor-train", choices=sorted(scenes))
     parser.add_argument("--scene-names", nargs="*", help="restrict to these scene names")
     parser.add_argument("--instances", type=int, default=8, help="flights per batch")
     parser.add_argument("--frame-rate", type=float, default=20.0)
@@ -326,10 +335,8 @@ def add_simulation_arguments(parser):
     parser.add_argument("--spool", help="directory for the frames while a batch renders (default: $RELPOSE_SPOOL or the system temp dir)")
 
 
-def dataset_from_arguments(arguments):
+def dataset_from_arguments(arguments, scenes=SCENES, camera=nominal_camera, name="sim"):
     """The ad-hoc Dataset provider configured from add_simulation_arguments() options."""
     sim = SimConfig(instances=arguments.instances, frame_rate_hz=arguments.frame_rate, duration_seconds=arguments.duration,
                     waypoints=arguments.waypoints, fov_range=arguments.fov_range, hold_seconds=arguments.hover, spool=arguments.spool)
-    scenes = {"procthor-train": lambda: procthor_scenes(arguments.scene_names), "hssd-val": lambda: hssd_scenes("val", arguments.scene_names),
-              "hssd-train": lambda: hssd_scenes("train", arguments.scene_names)}[arguments.scenes]()
-    return simulate(sim, itertools.count(arguments.seed), scenes=scenes, condition=arguments.condition)
+    return simulate(sim, itertools.count(arguments.seed), scenes=scenes[arguments.scenes](arguments.scene_names), camera=camera, name=name)

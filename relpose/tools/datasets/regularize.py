@@ -3,7 +3,7 @@ IMU_ROWS_PER_FRAME IMU rows in each frame's window (t_{k-1}, t_k], the first fra
 
 - A dropped frame (a gap of n frame intervals) is filled with n - 1 repeats of the frame before it.
 - A window that already holds IMU_ROWS_PER_FRAME rows at the nominal IMU spacing is kept as recorded (HyperDrone after
-  frame 0, EuRoC). Any other window is resampled onto IMU_ROWS_PER_FRAME evenly spaced slots ending at the frame time:
+  frame 0). Any other window is resampled onto IMU_ROWS_PER_FRAME evenly spaced slots ending at the frame time:
   linear between neighbouring samples (an IMU at another rate), the previous sample across a gap (dropped samples),
   the first sample before the recording starts (HyperDrone's frame 0 window).
 

@@ -1,6 +1,6 @@
-"""Evaluation worker: polls the queue, runs `relpose evaluate` on the hidden datasets, stores the summary.
+"""Evaluation worker: polls the queue, runs `relpose evaluate` on the server's datasets, stores the summary.
 
-    RELPOSE_DATASETS=/data/hidden/default:/data/hidden/blur:... relpose.tools.server.worker
+    RELPOSE_DATASETS=/data/test/first:/data/test/second python -m relpose.tools.server.worker
 
 Runs each evaluation in a subprocess (own process = own memory, killed on timeout). Run the worker as an unprivileged
 user in a container without network: the guest is sandboxed by wasmtime, but the evaluation host process is not.
@@ -15,7 +15,7 @@ from pathlib import Path
 from .store import Store
 
 POLL_SECONDS = 3.0
-TIMEOUT_SECONDS = float(os.environ.get("RELPOSE_EVAL_TIMEOUT", "14400"))  # ~50 one-minute episodes per submission
+TIMEOUT_SECONDS = float(os.environ.get("RELPOSE_EVAL_TIMEOUT", "14400"))  # one submission's whole evaluation
 
 
 def datasets_from_environment():

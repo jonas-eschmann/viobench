@@ -19,9 +19,9 @@ instead of the wasi-sdk toolchain, builds an executable `debug` = your sources +
 replays one episode's inputs through `init`/`step` exactly like the sandbox and writes `estimate.tum`:
 
 ```bash
-relpose feed build/datasets/public/default-val/<name> -o build/feed      # raw arrays: config.json, frames.u8, imu.f64, ...
+relpose feed data/val/<name> -o build/feed      # raw arrays: config.json, frames.u8, imu.f64, ...
 cmake -S relpose/solution/examples/native/cpp_minimal -B build-host && cmake --build build-host
-build-host/debug build/feed estimate.tum && relpose score build/datasets/public/default-val/<name> estimate.tum
+build-host/debug build/feed estimate.tum && relpose score data/val/<name> estimate.tum
 gdb --args build-host/debug build/feed
 ```
 

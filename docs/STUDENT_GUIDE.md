@@ -14,15 +14,14 @@ relpose/solution/runtime/python/build.sh       # your Python runtime: build/runt
 ```
 
 The runtime is yours to build, and to change (`relpose/solution/runtime/python/README.md`): nothing inside the `.wasm` is prescribed,
-only the ABI it exports. Writing C/C++ instead? Skip `build.sh` and read `relpose/solution/runtime/native/README.md`. The public
-datasets come as a tarball from the course page; unpack them to `build/datasets/public`.
+only the ABI it exports. Writing C/C++ instead? Skip `build.sh` and read `relpose/solution/runtime/native/README.md`. The
+validation episodes come from the course page; unpack them to `data/val` (the paths below assume that).
 
 On the lab machines (RTX 5080): `pip install -e ".[data,sim,train]"` adds the HyperDrone generator (first use compiles
 for a minute) and PyTorch. There is no pre-rendered training set; you generate what you need:
 
 ```bash
-relpose simulate -o data/train --episodes 200 --seed 1 --condition default     # ~2 min per 8 one-minute episodes (640x480), blur ~4 min
-relpose simulate -o data/train-blur --episodes 64 --seed 500 --condition blur
+relpose simulate -o data/train --episodes 200 --seed 1                         # ~2 min per 8 one-minute episodes (640x480)
 relpose simulate -o data/train-short --episodes 64 --seed 900 --duration 15     # any length; the frame count is in the config
 ```
 
@@ -34,38 +33,33 @@ Read `docs/TASK.md` (what to estimate, how it is scored) and `docs/ABI.md` / `do
 cp -r relpose/solution/examples/python/dead_reckoning my_solution
 relpose bundle my_solution -o my_solution.wasm             # your runtime + your directory in one file; rerun after every edit
 relpose check my_solution.wasm                             # synthetic frames, prints status/fuel per step
-relpose evaluate my_solution.wasm build/datasets/public/default-val
-relpose evaluate my_solution.wasm --simulate 8 --condition blur   # fresh episodes, GPU, nothing on disk
+relpose evaluate my_solution.wasm data/val
+relpose evaluate my_solution.wasm --simulate 8                    # fresh episodes, GPU, nothing on disk
 ```
 
-`check` catches crashes and protocol errors; `evaluate` gives ATE/RPE and fuel per frame on real episodes
+`check` catches crashes and protocol errors; `evaluate` gives ATE/RPE and fuel per frame on episodes
 (`report-my_solution/report.json`, per-episode `estimate.tum` for plotting with `evo`). Tracebacks name your files
 `/bundle/<path>`. To step through your code with a debugger, or to iterate without bundling, run it outside the sandbox:
-`relpose debug my_solution build/datasets/public/default-val --max-episodes 1`, see `docs/DEBUGGING.md`.
+`relpose debug my_solution data/val --max-episodes 1`, see `docs/DEBUGGING.md`.
 
 ## 3. Iterate
 
-- Data: generate training data with `relpose simulate` (any condition, any amount); `build/datasets/public/default-val`
-  and the other `*-val` sets are for validation and show the hidden conditions, `real-sample` the real-data format. The
-  hidden sets use the same generator with other seeds and scenes.
+- Data: generate training data with `relpose simulate` (any amount); validate on the episodes from the course page.
 - Debug: `relpose debug my_solution <episodes>` runs your `Solution` in your own Python process, so `breakpoint()`, prints
   and matplotlib work; `trace()` yields per-frame inputs and poses for plots (`docs/DEBUGGING.md`). No fuel there:
   `check`/`evaluate` remain the measure.
-- Inspect an episode in Python: `from relpose.tools.datasets import read_episode; ep = read_episode("build/datasets/public/default-val/<name>")`,
+- Inspect an episode in Python: `from relpose.tools.datasets import read_episode; ep = read_episode("data/val/<name>")`,
   then `ep.frames`, `ep.imu`, `ep.ground_truth_relative()`, `ep.steps()`.
-- Augmentation: `relpose.tools.datasets.generate.conditions.sample(name, rng)` + `relpose.tools.datasets.generate.camera.apply(...)` reproduce the
-  blur / low-light / saturation pipeline on your own renders (apply them to linear frames: `srgb_to_linear(frame / 255)`).
-- Length: episodes are continuous flights of about a minute, but nothing fixes that and the config does not say: keep
-  per-frame cost flat (do not accumulate every frame or grow a map without bound), and expect drift to show over a
-  minute where it hid over ten seconds. Nor does it say how an episode starts: at rest or already flying.
+- Length: episodes are continuous flights of unannounced length (the config does not say): keep per-frame cost flat
+  (do not accumulate every frame or grow a map without bound), and expect drift to grow with it. Nor does the config
+  say how an episode starts: at rest or already flying.
 - Compute: watch the fuel column. Python-level loops over pixels are expensive; OpenCV calls are cheap per pixel; a
   `cv2.dnn` forward of a small CNN costs about as much as one `goodFeaturesToTrack`.
 - Learned models: `relpose/solution/examples/python/tiny_cnn` shows PyTorch → ONNX → `cv2.dnn` inside the runtime, with a numpy fallback,
   and `train.py --generate N` trains straight from the simulator.
 - Frames: always RGB `(H, W, 3)`, 320 × 240 unless your class declares `frame_width = 640` (then 640 × 480;
-  native solutions export `int32_t frame_width(void)`). Some sets are grayscale-only and arrive with R = G = B; convert to gray yourself if
-  that is what your method uses (`cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)`). More pixels cost fuel in everything you
-  run on them.
+  native solutions export `int32_t frame_width(void)`); convert to gray yourself if that is what your method uses
+  (`cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)`). More pixels cost fuel in everything you run on them.
 
 ## 4. Submit
 
@@ -75,7 +69,7 @@ relpose check my_solution.wasm                     # exactly what the server run
 curl -F file=@my_solution.wasm -F label="klt+imu v3" -H "X-Token: $TOKEN" https://<server>/submit
 ```
 
-The server evaluates on the hidden sets (default, blur, low light, oversaturation, real), posts the result on the
+The server evaluates on its own episodes (not published), posts the result on the
 leaderboard and keeps your stderr logs for you (`/submissions/<id>/logs`). Every submission is a point on the
 accuracy-vs-fuel curve; your best points form your Pareto front. Quotas: 20 submissions per day, 128 MiB per file.
 
@@ -97,4 +91,4 @@ OpenCV's static libraries behind if you want them. Configured with your host com
 | `step returned an unusable pose` | NaN/inf or an all-zero quaternion in the pose: guard divisions and normalise quaternions |
 | frames look identical | you kept a view of the frame buffer; `frame.copy()` |
 | `np.load` fails on `.npz` | compressed archive: save with `np.savez`, not `np.savez_compressed` |
-| real data looks "upside down" in the IMU | the IMU frame of the real sensor is not gravity-aligned at start; estimate gravity from the measurements |
+| the IMU looks "upside down" | the IMU frame need not be gravity-aligned at the start; estimate gravity from the measurements |

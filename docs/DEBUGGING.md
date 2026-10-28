@@ -9,8 +9,8 @@ what the sandbox accepts and what it costs.
 ## Python: `relpose debug`
 
 ```bash
-relpose debug my_solution build/datasets/public/default-val --max-episodes 1  # the directory with solution.py
-relpose debug my_solution --simulate 2 --condition blur                        # fresh HyperDrone episodes (GPU)
+relpose debug my_solution data/val --max-episodes 1  # the directory with solution.py
+relpose debug my_solution --simulate 2                                         # fresh HyperDrone episodes (GPU)
 relpose debug my_solution <episode dir> -o out       # writes out/<dataset>/<episode>/estimate.tum like `evaluate` does
 ```
 
@@ -29,7 +29,7 @@ calls `Solution(config)` then `step(t, frame, imu)` per frame, exactly like the 
   from relpose.tools.datasets import read_episode
   from relpose.tools.runner.direct import PythonSolution, trace
 
-  episode = read_episode("build/datasets/public/default-val/<name>")
+  episode = read_episode("data/val/<name>")
   poses = np.array([s.pose for s in trace(PythonSolution("my_solution"), episode)])
   plt.plot(poses[:, 0], poses[:, 1], label="estimate"); gt = episode.ground_truth_relative(); plt.plot(gt[:, 0], gt[:, 1], label="truth"); plt.legend(); plt.show()
   ```
@@ -43,17 +43,17 @@ raw arrays, so C needs no PNG or JSON parser), calls `init` and `step` like the 
 `t_prev < t ≤ t_frame`, same buffers) and writes `estimate.tum`.
 
 ```bash
-relpose feed build/datasets/public/default-val/<name> -o build/feed          # --resolution 640x480 if your frame_width() returns 640
+relpose feed data/val/<name> -o build/feed          # --resolution 640x480 if your frame_width() returns 640
 cd my_native_solution && cmake -S . -B build-host && cmake --build build-host
 build-host/debug ../build/feed estimate.tum                 # prints where a step fails, ms/frame and the position RMSE
-relpose score build/datasets/public/default-val/<name> estimate.tum          # the full metrics line
+relpose score data/val/<name> estimate.tum          # the full metrics line
 gdb --args build-host/debug ../build/feed                   # or lldb; VS Code: "relpose: debug native solution (gdb)"
 ```
 
-`relpose feed --simulate -o build/feed --condition lowlight` feeds a fresh HyperDrone episode instead. A feed is
+`relpose feed --simulate -o build/feed` feeds a fresh HyperDrone episode instead. A feed is
 `config.json` (the bytes `init` receives), `frames.u8` (N×H×W×3 RGB), `frame_times.f64`, `imu.f64` (M×7, the rows the
-harness delivers), `gt.f64` (N×7 relative ground truth) and `shape.txt` (`N H W C M`, C = 3); about 280 MB for a
-one-minute episode at 320×240.
+harness delivers), `gt.f64` (N×7 relative ground truth) and `shape.txt` (`N H W C M`, C = 3); about 4.6 MB per
+second of flight at 320×240.
 
 With the VS Code CMake Tools extension pointed at your solution directory (`.vscode/settings.json`), the host
 configure is the default one, so its *Debug* button launches `debug` under gdb; pass the feed directory as the

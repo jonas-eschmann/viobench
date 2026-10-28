@@ -7,7 +7,6 @@ import pytest
 from relpose.tools.abi.config import make_config
 from relpose.tools.datasets.episode import Episode, FrameSequence, interpolate_poses
 from relpose.tools.datasets.storage import list_episodes, read_episode, write_episode
-from relpose.tools.datasets.generate.camera import SensorParams, apply, integrate_exposure, linear_to_srgb, srgb_to_linear
 from relpose.tools.geometry import poses_to_matrices, quaternion_to_matrix
 
 
@@ -46,7 +45,7 @@ def test_episode_windows_and_ground_truth():
 
 
 def test_first_imu_window_is_one_frame_interval():
-    episode = synthetic_episode(lead_in=1.5)  # EuRoC snippets record IMU before their first frame, simulated sets barely
+    episode = synthetic_episode(lead_in=1.5)  # a recording may hold IMU from long before its first frame, simulated episodes barely
     first = episode.imu_window(0)
     assert len(first) == 10 and first[0, 0] > episode.frame_times[0] - episode.frame_interval
     np.testing.assert_array_equal(episode.delivered_imu(), np.concatenate([imu for _, _, imu in episode.steps()]))
@@ -215,22 +214,6 @@ def test_sim_config_scales_with_duration(tmp_path, monkeypatch):
     header = minute.render_header(200.0).read_text()
     assert "NUM_WAYPOINTS = 48;" in header and "INITIALIZATION_HOLD_STEPS = 200;" in header and "@" not in header
     assert SimConfig(duration_seconds=30).render_header(200.0) != minute.render_header(200.0)  # a different route length is a different JIT key
-
-
-def test_isp_identity_and_effects():
-    rng = np.random.default_rng(0)
-    srgb = rng.uniform(0, 1, (4, 16, 16, 3)).astype(np.float32)
-    linear = integrate_exposure(srgb)
-    np.testing.assert_allclose(linear_to_srgb(srgb_to_linear(srgb)), srgb, atol=1e-5)
-    clean = apply(linear, SensorParams(full_well=np.inf, read_noise=0.0), rng)
-    assert clean.shape == (16, 16, 3) and clean.dtype == np.uint8
-    dark = apply(linear, SensorParams(exposure_scale=0.05, full_well=np.inf, read_noise=0.0), rng)
-    bright = apply(linear, SensorParams(exposure_scale=20.0, full_well=np.inf, read_noise=0.0), rng)
-    assert dark.mean() < clean.mean() < bright.mean() and (bright == 255).mean() > 0.9
-    noisy = apply(linear, SensorParams(full_well=200.0, read_noise=0.05), rng)
-    assert np.abs(noisy.astype(float) - clean.astype(float)).mean() > 2.0
-    # a static stack blurs to itself
-    np.testing.assert_allclose(integrate_exposure(np.repeat(srgb[:1], 5, axis=0)), srgb_to_linear(srgb[0]), atol=1e-6)
 
 
 def test_adapt_always_delivers_rgb():

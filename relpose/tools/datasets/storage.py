@@ -1,14 +1,14 @@
-"""On-disk episode format: the EuRoC/ASL directory layout plus episode.json — the file-system Dataset provider.
+"""On-disk episode format: the ASL directory layout plus episode.json — the file-system Dataset provider.
 
-    <episode>/episode.json                               our config + metadata (format, condition, source, frame count)
+    <episode>/episode.json                               our config + metadata (format, source, frame count)
     <episode>/mav0/cam0/data.csv                         "#timestamp [ns],filename"
-    <episode>/mav0/cam0/data/<timestamp ns>.png          8-bit RGB (simulated) or grayscale (real) PNG
+    <episode>/mav0/cam0/data/<timestamp ns>.png          8-bit RGB or grayscale PNG
     <episode>/mav0/cam0/sensor.yaml                      Kalibr-style intrinsics and T_BS (camera in body)
     <episode>/mav0/imu0/data.csv                         "#timestamp [ns],w_x,w_y,w_z [rad s^-1],a_x,a_y,a_z [m s^-2]"
     <episode>/mav0/imu0/sensor.yaml                      noise densities, rate
     <episode>/mav0/state_groundtruth_estimate0/data.csv  "#timestamp,p_x,p_y,p_z [m],q_w,q_x,q_y,q_z,..." body in world
 
-Identical for simulated and real episodes, and readable by evo / ORB-SLAM / OpenVINS tooling. Timestamps are
+Readable by evo / ORB-SLAM / OpenVINS tooling. Timestamps are
 integer nanoseconds in the files and float seconds (relative to the first IMU sample) in memory. Frames are read on
 demand by default (`FrameSequence`), so episodes of any length cost little memory.
 """

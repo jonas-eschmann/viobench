@@ -69,7 +69,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("datasets", nargs="*", help="episode directories or dataset roots")
     parser.add_argument("--generate", type=int, default=0, metavar="BATCHES",
-                        help="also generate BATCHES x 8 fresh episodes with HyperDrone (GPU), condition drawn at random per batch")
+                        help="also generate BATCHES x 8 fresh episodes with HyperDrone (GPU)")
     parser.add_argument("--generate-seed", type=int, default=10_000)
     parser.add_argument("--out", default=str(Path(__file__).resolve().parent / "solution"))
     parser.add_argument("--epochs", type=int, default=10)
@@ -94,15 +94,11 @@ def main():
 
     for path in episodes:
         add(read_episode(path))
-    if arguments.generate:  # "infinite" data: straight from the simulator, with the public degradation conditions as augmentation
+    if arguments.generate:  # "infinite" data: straight from the simulator
         from relpose.tools.datasets.generate.simulation import SimConfig, simulate
-        from relpose.tools.datasets.generate.conditions import CONDITIONS
 
-        rng = np.random.default_rng(arguments.generate_seed)
-        for batch in range(arguments.generate):
-            condition = str(rng.choice(sorted(CONDITIONS)))
-            for episode in simulate(SimConfig(), [arguments.generate_seed + batch], condition=condition):
-                add(episode)
+        for episode in simulate(SimConfig(), range(arguments.generate_seed, arguments.generate_seed + arguments.generate)):
+            add(episode)
     images, imus, targets = np.concatenate(images), np.concatenate(imus), np.concatenate(targets)
     imu_mean, imu_std = imus.mean(0), imus.std(0) + 1e-6
     target_std = targets.std(0) + 1e-6
