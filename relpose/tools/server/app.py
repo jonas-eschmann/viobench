@@ -10,13 +10,13 @@ import os
 import time
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse
 
 from ..abi import AbiError
 from ..abi.module import runtime_descriptor
 from ..abi.wasm_binary import iter_sections
 from ..runner.leaderboard import pareto_front
-from .store import DAILY_QUOTA, MAX_UPLOAD_BYTES, Store
+from .store import DAILY_QUOTA, MAX_UPLOAD_BYTES, METRICS_FILE, Store
 
 app = FastAPI(title="relpose challenge")
 _store = None
@@ -70,31 +70,16 @@ def submission(submission_id: int, x_token: str | None = Header(default=None)):
     return row
 
 
-@app.get("/submissions/{submission_id}/report")
-def report(submission_id: int, x_token: str | None = Header(default=None)):
+@app.get("/submissions/{submission_id}/metrics")
+def metrics(submission_id: int, x_token: str | None = Header(default=None)):
     user = authenticate(x_token)
     row = get_store().get(submission_id)
     if row is None or row["user"] != user:
         raise HTTPException(status_code=404, detail="no such submission")
-    path = get_store().report_dir(submission_id) / "report.json"
+    path = get_store().report_dir(submission_id) / METRICS_FILE  # written by the worker; never the report or the logs
     if not path.is_file():
-        raise HTTPException(status_code=404, detail="no report yet")
+        raise HTTPException(status_code=404, detail="no metrics yet")
     return FileResponse(path, media_type="application/json")
-
-
-@app.get("/submissions/{submission_id}/logs")
-def logs(submission_id: int, x_token: str | None = Header(default=None), lines: int = 200):
-    user = authenticate(x_token)
-    row = get_store().get(submission_id)
-    if row is None or row["user"] != user:
-        raise HTTPException(status_code=404, detail="no such submission")
-    out = {}
-    report_dir = get_store().report_dir(submission_id)
-    for path in sorted(report_dir.rglob("*.txt")):
-        text = path.read_text(errors="replace").splitlines()
-        if text:
-            out[str(path.relative_to(report_dir))] = "\n".join(text[-lines:])
-    return JSONResponse(out)
 
 
 @app.get("/mine")

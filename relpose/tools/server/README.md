@@ -14,8 +14,12 @@ uvicorn relpose.tools.server.app:app --host 0.0.0.0 --port 8000
 |---|---|
 | `POST /submit` | `curl -F file=@solution.wasm -F label=v1 -H "X-Token: token-1" http://server:8000/submit` |
 | `GET /submissions/<id>` | status and summary |
-| `GET /submissions/<id>/logs`, `/report` | stderr tails per episode, `report.json` |
+| `GET /submissions/<id>/metrics` | per-episode and per-dataset metrics, fuel and wall time |
 | `GET /leaderboard`, `/leaderboard.json` | every completed submission per dataset, Pareto front marked |
+
+Students get metrics only, never the guest's stdout, stderr or failure messages (they could carry the hidden episodes
+out). The worker writes `reports/<id>/metrics.json` from an allowlist of numeric fields; the full `report.json`, the
+logs and `worker.txt` stay on the server.
 
 Settings: `RELPOSE_TOKENS`, `RELPOSE_MAX_UPLOAD_MIB` (128), `RELPOSE_DAILY_QUOTA` (20).
 

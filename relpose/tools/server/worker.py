@@ -4,6 +4,9 @@
 
 Runs each evaluation in a subprocess (own process = own memory, killed on timeout). Run the worker as an unprivileged
 user in a container without network: the guest is sandboxed by wasmtime, but the evaluation host process is not.
+
+Students get metrics only: nothing the guest wrote (stdout, stderr, failure messages) leaves the server, since it could
+carry the hidden episodes out. The full report and logs stay in the report directory for the instructors.
 """
 import json
 import os
@@ -12,10 +15,18 @@ import sys
 import time
 from pathlib import Path
 
-from .store import Store
+from .store import METRICS_FILE, Store
 
 POLL_SECONDS = 3.0
 TIMEOUT_SECONDS = float(os.environ.get("RELPOSE_EVAL_TIMEOUT", "14400"))  # one submission's whole evaluation
+EPISODE_FIELDS = ("dataset", "name", "frames", "duration_s", "completed", "metrics", "fuel_init", "fuel_per_frame_median",
+                  "fuel_per_frame_p95", "fuel_per_frame_mean", "fuel_total", "wall_init_s", "wall_per_frame_median_ms",
+                  "wall_per_frame_p95_ms")  # allowlist: numbers, no text from the guest
+
+
+def public_metrics(report):
+    """The part of a report.json a student sees."""
+    return {"summary": report["summary"], "episodes": [{key: episode[key] for key in EPISODE_FIELDS} for episode in report["episodes"]]}
 
 
 def datasets_from_environment():
@@ -43,10 +54,10 @@ def evaluate_submission(store, submission, datasets, log=print):
             return
     report_path = report_dir / "report.json"
     if not report_path.is_file():
-        tail = "\n".join((report_dir / "worker.txt").read_text(errors="replace").splitlines()[-20:])
-        store.finish(submission["id"], error=f"evaluate exited with {completed.returncode}:\n{tail}")
+        store.finish(submission["id"], error=f"evaluate exited with {completed.returncode} without a report")  # its output: worker.txt
         return
     report = json.loads(report_path.read_text())
+    (report_dir / METRICS_FILE).write_text(json.dumps(public_metrics(report), indent=1))
     store.finish(submission["id"], summary=report["summary"])
     log(f"submission {submission['id']}: done ({report['summary']['overall']['completed']}/{report['summary']['overall']['episodes']} episodes)")
 

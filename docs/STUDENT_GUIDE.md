@@ -38,8 +38,9 @@ relpose debug my_solution data/val                 # in-process, with breakpoint
 curl -F file=@my_solution.wasm -F label="klt+imu v3" -H "X-Token: $TOKEN" https://<server>/submit
 ```
 
-The server evaluates on unpublished episodes and keeps your logs at `/submissions/<id>/logs`. Quota: 20 submissions
-per day.
+The server evaluates on unpublished episodes and returns metrics only, at `/submissions/<id>/metrics`: no stdout,
+stderr or failure messages. An episode that fails shows up as `"completed": false`; reproduce it locally with
+`relpose evaluate`. Quota: 20 submissions per day.
 
 ## Tips
 

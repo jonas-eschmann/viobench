@@ -9,6 +9,7 @@ from pathlib import Path
 DEFAULT_DIR = Path(os.environ.get("RELPOSE_SERVER_DIR", "server-data"))
 MAX_UPLOAD_BYTES = int(os.environ.get("RELPOSE_MAX_UPLOAD_MIB", "128")) << 20
 DAILY_QUOTA = int(os.environ.get("RELPOSE_DAILY_QUOTA", "20"))
+METRICS_FILE = "metrics.json"  # in a submission's report directory: the only file a student gets back
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS submissions (
