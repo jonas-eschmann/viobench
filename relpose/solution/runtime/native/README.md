@@ -17,5 +17,6 @@ The same CMake call configured with the host compiler builds `build-host/debug` 
   `toolchain/download_dependencies.sh` if you like) and link them in your `CMakeLists.txt`.
 - **OpenCV**: the Python runtime build leaves static libraries and headers in `build/runtime/opencv-build`. Compile
   with `-fwasm-exceptions -mllvm -wasm-use-legacy-eh=false`; link with `-fwasm-exceptions -lc++ -lc++abi -lunwind`.
+  `relpose/solution/examples/native/openvins` does this and ports a larger C++ project (OpenVINS, Ceres, Eigen).
 - **Rust**: `crate-type = ["cdylib"]`, target `wasm32-wasip1`, `#[no_mangle] pub extern "C" fn step(t: f64, frame:
   *const u8, imu: *const f64, n: i32, out: *mut f64) -> i32` and the other exports.

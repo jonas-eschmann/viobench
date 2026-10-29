@@ -1,0 +1,347 @@
+// OpenVINS (github.com/rpng/open_vins, GPL-3.0) as a relpose solution: ov_msckf::VioManager, a monocular MSCKF with KLT tracking,
+// static initialization with zero-velocity updates, dynamic initialization (Ceres). This file adapts the ABI (relpose_abi.h) to it: the
+// configuration from the init() JSON, IMU rows and the frame per step, and the filter's IMU state re-expressed as the pose and
+// twist of the camera relative to the first frame.
+// Build:  relpose/solution/runtime/native/build.sh relpose/solution/examples/native/openvins   ->   build/solution.wasm
+#include "relpose_abi.h"
+
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <exception>
+#include <memory>
+#include <string>
+#include <vector>
+
+#include <Eigen/Dense>
+#include <opencv2/imgproc.hpp>
+
+#include "cam/CamRadtan.h"
+#include "core/VioManager.h"
+#include "core/VioManagerOptions.h"
+#include "state/Propagator.h"
+#include "state/State.h"
+#include "track/TrackBase.h"
+#include "types/IMU.h"
+#include "utils/print.h"
+#include "utils/quat_ops.h"
+#include "utils/sensor_data.h"
+
+namespace {
+
+// The numbers that follow `"key":` in the flat config JSON, nested arrays flattened (T_cam_imu row by row).
+std::vector<double> numbers(const std::string& json, const char* key, size_t count) {
+    std::vector<double> values;
+    size_t at = json.find(std::string("\"") + key + "\"");
+    if (at == std::string::npos || (at = json.find(':', at)) == std::string::npos) return values;
+    const char* cursor = json.c_str() + at + 1;
+    while (values.size() < count && *cursor) {
+        if (*cursor == '-' || *cursor == '.' || (*cursor >= '0' && *cursor <= '9')) {
+            char* end;
+            values.push_back(std::strtod(cursor, &end));
+            cursor = end;
+        } else if (std::strchr("[], \t\r\n", *cursor)) {
+            cursor++;
+        } else {
+            break;
+        }
+    }
+    return values;
+}
+
+// Filter settings. Noise densities: the simulator's IMU preset (relpose/tools/abi/config.py DEFAULT_IMU, per-sample std at
+// 200 Hz) converted to continuous time; feature counts and thresholds for 320x240 frames.
+ov_msckf::VioManagerOptions make_options(int width, int height, const double intrinsics[4], const Eigen::Matrix4d& T_cam_imu) {
+    ov_msckf::VioManagerOptions options;
+    const double imu_rate = 200.0;
+    options.imu_noises.sigma_w = 0.07 / std::sqrt(imu_rate);
+    options.imu_noises.sigma_a = 0.28 / std::sqrt(imu_rate);
+    options.imu_noises.sigma_wb = 0.0006 * std::sqrt(imu_rate);
+    options.imu_noises.sigma_ab = 0.001 * std::sqrt(imu_rate);
+    options.imu_noises.sigma_w_2 = std::pow(options.imu_noises.sigma_w, 2);
+    options.imu_noises.sigma_a_2 = std::pow(options.imu_noises.sigma_a, 2);
+    options.imu_noises.sigma_wb_2 = std::pow(options.imu_noises.sigma_wb, 2);
+    options.imu_noises.sigma_ab_2 = std::pow(options.imu_noises.sigma_ab, 2);
+    for (ov_msckf::UpdaterOptions* updater : {&options.msckf_options, &options.slam_options, &options.aruco_options}) {
+        updater->sigma_pix = 1.0;
+        updater->sigma_pix_sq = 1.0;
+        updater->chi2_multipler = 1.0;
+    }
+    options.zupt_options.chi2_multipler = 0.0;  // zero-velocity detection by disparity only
+
+    // estimator (OpenVINS' EuRoC configuration, without online calibration: the intrinsics and extrinsics are exact)
+    ov_msckf::StateOptions& state = options.state_options;
+    state.num_cameras = 1;
+    state.do_fej = true;
+    state.integration_method = ov_msckf::StateOptions::IntegrationMethod::RK4;
+    state.max_clone_size = 11;
+    state.max_slam_features = 50;
+    state.max_slam_in_update = 25;
+    state.max_msckf_in_update = 40;
+    state.feat_rep_msckf = ov_type::LandmarkRepresentation::Representation::GLOBAL_3D;
+    state.feat_rep_slam = ov_type::LandmarkRepresentation::Representation::ANCHORED_MSCKF_INVERSE_DEPTH;
+    options.dt_slam_delay = 1.0;
+    options.gravity_mag = 9.81;
+    // zero-velocity updates whenever the image stands still (below 0.5 px per frame): the static initialization needs them,
+    // and while hovering or creeping a monocular MSCKF has no parallax to triangulate with and would drift on the IMU alone
+    options.try_zupt = true;
+    options.zupt_only_at_beginning = false;
+    options.zupt_max_velocity = 0.1;
+    options.zupt_noise_multiplier = 10.0;
+    options.zupt_max_disparity = 0.5;
+
+    // tracking
+    options.use_stereo = false;
+    options.use_klt = true;
+    options.use_aruco = false;
+    options.num_opencv_threads = 1;
+    options.use_multi_threading_pubs = false;
+    options.use_multi_threading_subs = false;
+    options.num_pts = 150;
+    options.fast_threshold = 15;
+    options.grid_x = 5;
+    options.grid_y = 4;
+    options.min_px_dist = 8;
+    options.histogram_method = ov_core::TrackBase::HistogramMethod::HISTOGRAM;
+
+    // ideal IMU intrinsics: identity scale and misalignment (Kalibr layout), no gravity sensitivity
+    options.vec_dw << 1, 0, 0, 1, 0, 1;
+    options.vec_da << 1, 0, 0, 1, 0, 1;
+    options.vec_tg.setZero();
+    options.q_ACCtoIMU << 0, 0, 0, 1;
+    options.q_GYROtoIMU << 0, 0, 0, 1;
+
+    // camera: pinhole (radtan without distortion), extrinsics as OpenVINS stores them: JPL q_ItoC and p_IinC
+    auto camera = std::make_shared<ov_core::CamRadtan>(width, height);
+    Eigen::VectorXd calibration(8);
+    calibration << intrinsics[0], intrinsics[1], intrinsics[2], intrinsics[3], 0, 0, 0, 0;
+    camera->set_value(calibration);
+    Eigen::VectorXd extrinsics(7);
+    extrinsics << ov_core::rot_2_quat(T_cam_imu.block<3, 3>(0, 0)), T_cam_imu.block<3, 1>(0, 3);
+    options.camera_intrinsics.insert({0, camera});
+    options.camera_extrinsics.insert({0, extrinsics});
+
+    // initialization: static while hovering (both halves of the window still), else dynamic (Ceres MLE, single-threaded and
+    // bounded by iterations only, so the fuel does not depend on the machine)
+    ov_init::InertialInitializerOptions& init = options.init_options;
+    init.init_window_time = 1.0;
+    init.init_imu_thresh = 1.0;
+    init.init_max_disparity = 1.5;
+    init.init_max_features = 75;
+    init.init_dyn_use = true;
+    init.init_dyn_mle_opt_calib = false;
+    init.init_dyn_mle_max_iter = 50;
+    init.init_dyn_mle_max_time = 1e9;
+    init.init_dyn_mle_max_threads = 1;
+    init.init_dyn_num_pose = 6;
+    init.init_dyn_min_deg = 5.0;
+    init.init_dyn_inflation_orientation = 10.0;
+    init.init_dyn_inflation_velocity = 100.0;
+    init.init_dyn_inflation_bias_gyro = 10.0;
+    init.init_dyn_inflation_bias_accel = 100.0;
+    init.init_dyn_min_rec_cond = 1e-12;
+    init.sigma_w = options.imu_noises.sigma_w;
+    init.sigma_wb = options.imu_noises.sigma_wb;
+    init.sigma_a = options.imu_noises.sigma_a;
+    init.sigma_ab = options.imu_noises.sigma_ab;
+    init.sigma_pix = 1.0;
+    init.gravity_mag = options.gravity_mag;
+    init.num_cameras = 1;
+    init.use_stereo = false;
+    init.camera_intrinsics = options.camera_intrinsics;
+    init.camera_extrinsics = options.camera_extrinsics;
+    return options;
+}
+
+// VioManager keeps "has an initial state" protected; initialized() becomes true only after the first visual update
+struct Vio : ov_msckf::VioManager {
+    using VioManager::VioManager;
+    bool started() const { return is_initialized_vio; }
+};
+
+struct Pose {  // a frame in a world frame: p_world = R p_frame + p
+    Eigen::Matrix3d R = Eigen::Matrix3d::Identity();
+    Eigen::Vector3d p = Eigen::Vector3d::Zero();
+};
+
+struct State {
+    std::unique_ptr<Vio> vio;
+    Eigen::Matrix3d R_ItoC;  // camera axes from IMU axes
+    Eigen::Vector3d p_CinI;  // camera centre in the IMU frame
+    cv::Mat mask;            // all zero: every pixel may hold a feature
+    int width = 0, height = 0;
+    double gravity = 9.81;
+    long frames = 0;
+    double t0 = 0;
+    std::vector<ov_core::ImuData> imu;  // every sample since the first frame, until the first camera pose is known
+    Eigen::Matrix3d R_I0_I = Eigen::Matrix3d::Identity();  // gyro attitude before initialization
+    bool anchored = false;
+    Pose camera0;  // the first camera frame in the world frame: the first IMU frame until initialization, then OpenVINS' global frame
+    double last[RELPOSE_STATE_VALUES] = {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0};
+};
+
+State state;
+
+Pose camera_pose(const Eigen::Matrix3d& R_world_imu, const Eigen::Vector3d& p_imu) {
+    return {R_world_imu * state.R_ItoC.transpose(), p_imu + R_world_imu * state.p_CinI};
+}
+
+// The IMU pose at the first frame, integrating the measurements back from the initial state (time, R_GtoI, p_IinG, v_IinG,
+// biases) with the propagator's mean model; OpenVINS starts its window later than the first frame.
+Pose imu_pose_at_first_frame(double time, Eigen::Matrix3d R_GtoI, Eigen::Vector3d p, Eigen::Vector3d v, const Eigen::Vector3d& bias_g,
+                             const Eigen::Vector3d& bias_a, double gravity) {
+    const Eigen::Vector3d g(0, 0, gravity);
+    for (size_t j = state.imu.size(); j-- > 1;) {
+        const ov_core::ImuData &before = state.imu[j - 1], &after = state.imu[j];
+        const double start = std::max(before.timestamp, state.t0), end = std::min(after.timestamp, time);
+        if (end <= start) continue;
+        const double dt = end - start;
+        const Eigen::Vector3d w = 0.5 * (before.wm + after.wm) - bias_g, a = 0.5 * (before.am + after.am) - bias_a;
+        R_GtoI = ov_core::exp_so3(w * dt) * R_GtoI;  // inverse of the forward step R_GtoI <- exp(-w dt) R_GtoI
+        const Eigen::Vector3d acceleration = R_GtoI.transpose() * a - g;
+        v -= acceleration * dt;
+        p -= v * dt + 0.5 * acceleration * dt * dt;
+    }
+    return {R_GtoI.transpose(), p};
+}
+
+void write(double* out, const Pose& camera, const Eigen::Vector3d& v_cam, const Eigen::Vector3d& w_cam) {
+    // relative to the first camera: p_c0 = R p_ck + t
+    const Eigen::Matrix3d R = state.camera0.R.transpose() * camera.R;
+    const Eigen::Vector3d t = state.camera0.R.transpose() * (camera.p - state.camera0.p);
+    Eigen::Quaterniond q(R);
+    q.normalize();
+    const double values[RELPOSE_STATE_VALUES] = {t.x(), t.y(), t.z(), q.x(), q.y(), q.z(), q.w(),
+                                                 v_cam.x(), v_cam.y(), v_cam.z(), w_cam.x(), w_cam.y(), w_cam.z()};
+    bool finite = true;
+    for (double value : values) finite = finite && std::isfinite(value);
+    if (finite) {
+        for (int i = 0; i < RELPOSE_STATE_VALUES; i++) state.last[i] = values[i];
+    } else {  // keep the last estimate, standing still
+        for (int i = 7; i < RELPOSE_STATE_VALUES; i++) state.last[i] = 0;
+    }
+    for (int i = 0; i < RELPOSE_STATE_VALUES; i++) out[i] = state.last[i];
+}
+
+int32_t estimate(double t, const uint8_t* frame, const double* imu, int32_t imu_count, double* out) {
+    Eigen::Vector3d gyro_mean = Eigen::Vector3d::Zero();
+    for (int32_t i = 0; i < imu_count; i++) {
+        const double* row = imu + RELPOSE_IMU_ROW_VALUES * i;
+        ov_core::ImuData sample;
+        sample.timestamp = row[0];
+        sample.am << row[1], row[2], row[3];
+        sample.wm << row[4], row[5], row[6];
+        gyro_mean += sample.wm / imu_count;
+        state.vio->feed_measurement_imu(sample);
+        if (!state.anchored) {
+            if (state.frames > 0 && !state.imu.empty()) {  // gyro attitude for the outputs before initialization
+                const ov_core::ImuData& previous = state.imu.back();
+                state.R_I0_I = state.R_I0_I * ov_core::exp_so3(0.5 * (previous.wm + sample.wm) * (sample.timestamp - previous.timestamp));
+            }
+            state.imu.push_back(sample);
+        }
+    }
+    if (state.frames++ == 0) state.t0 = t;
+
+    ov_core::CameraData message;
+    message.timestamp = t;
+    message.sensor_ids.push_back(0);
+    cv::Mat gray;
+    cv::cvtColor(cv::Mat(state.height, state.width, CV_8UC3, const_cast<uint8_t*>(frame)), gray, cv::COLOR_RGB2GRAY);
+    message.images.push_back(gray);
+    message.masks.push_back(state.mask);
+    state.vio->feed_measurement_camera(message);
+
+    if (!state.vio->started()) {  // the gyro attitude, in place
+        write(out, camera_pose(state.R_I0_I, Eigen::Vector3d::Zero()), Eigen::Vector3d::Zero(), state.R_ItoC * gyro_mean);
+        return RELPOSE_STATUS_OK;
+    }
+    std::shared_ptr<ov_msckf::State> filter = state.vio->get_state();
+    if (!state.anchored) {
+        std::shared_ptr<ov_type::IMU> initial = filter->_imu;
+        Pose imu0 = imu_pose_at_first_frame(filter->_timestamp, initial->Rot(), initial->pos(), initial->vel(), initial->bias_g(),
+                                            initial->bias_a(), state.gravity);
+        state.camera0 = camera_pose(imu0.R, imu0.p);
+        state.anchored = true;
+        state.imu.clear();
+        state.imu.shrink_to_fit();
+        std::printf("openvins: initialized at t=%.3f (frame %ld), state at t=%.3f, |v|=%.3f m/s\n", t, state.frames - 1,
+                    filter->_timestamp, initial->vel().norm());
+    }
+    // the IMU state at t: the filter's own once it has processed this frame, else propagated to it
+    Eigen::Matrix3d R_GtoI;
+    Eigen::Vector3d p_IinG, v_IinI;
+    if (filter->_timestamp == t) {
+        R_GtoI = filter->_imu->Rot();
+        p_IinG = filter->_imu->pos();
+        v_IinI = R_GtoI * filter->_imu->vel();
+    } else {
+        Eigen::Matrix<double, 13, 1> propagated;  // q_GtoI (JPL), p_IinG, v_IinI, w_IinI
+        Eigen::Matrix<double, 12, 12> covariance;
+        if (!state.vio->get_propagator()->fast_state_propagate(filter, t, propagated, covariance)) {
+            for (int i = 0; i < RELPOSE_STATE_VALUES; i++) out[i] = state.last[i];
+            return RELPOSE_STATUS_OK;
+        }
+        R_GtoI = ov_core::quat_2_Rot(propagated.block<4, 1>(0, 0));
+        p_IinG = propagated.block<3, 1>(4, 0);
+        v_IinI = propagated.block<3, 1>(7, 0);
+    }
+    const Eigen::Vector3d w_IinI = gyro_mean - filter->_imu->bias_g();  // mean over the frame interval
+    const Eigen::Vector3d v_cam = state.R_ItoC * (v_IinI + w_IinI.cross(state.p_CinI));
+    write(out, camera_pose(R_GtoI.transpose(), p_IinG), v_cam, state.R_ItoC * w_IinI);
+    return RELPOSE_STATUS_OK;
+}
+
+}  // namespace
+
+int32_t abi_version() { return RELPOSE_ABI_VERSION; }
+
+void* alloc(uint32_t size) { return std::malloc(size ? size : 1); }
+
+int32_t frame_width() { return 320; }
+
+int32_t init(const char* json, uint32_t length) {
+    std::setvbuf(stdout, nullptr, _IONBF, 0);
+    std::setvbuf(stderr, nullptr, _IONBF, 0);
+    try {
+        const std::string text(json, length);
+        const std::vector<double> size = numbers(text, "width", 1), height = numbers(text, "height", 1);
+        const std::vector<double> fx = numbers(text, "fx", 1), fy = numbers(text, "fy", 1), cx = numbers(text, "cx", 1),
+                                  cy = numbers(text, "cy", 1), T = numbers(text, "T_cam_imu", 16);
+        if (size.empty() || height.empty() || fx.empty() || fy.empty() || cx.empty() || cy.empty() || T.size() != 16) {
+            std::fprintf(stderr, "config without width, height, fx, fy, cx, cy or T_cam_imu\n");
+            return RELPOSE_STATUS_ERROR;
+        }
+        state.width = static_cast<int>(size[0]);
+        state.height = static_cast<int>(height[0]);
+        Eigen::Matrix4d T_cam_imu;
+        for (int i = 0; i < 16; i++) T_cam_imu(i / 4, i % 4) = T[i];
+        state.R_ItoC = T_cam_imu.block<3, 3>(0, 0);
+        state.p_CinI = -state.R_ItoC.transpose() * T_cam_imu.block<3, 1>(0, 3);
+        state.mask = cv::Mat::zeros(state.height, state.width, CV_8UC1);
+        state.camera0 = camera_pose(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
+
+        ov_core::Printer::setPrintLevel(ov_core::Printer::PrintLevel::WARNING);
+        const double intrinsics[4] = {fx[0], fy[0], cx[0], cy[0]};
+        ov_msckf::VioManagerOptions options = make_options(state.width, state.height, intrinsics, T_cam_imu);
+        state.gravity = options.gravity_mag;
+        state.vio = std::make_unique<Vio>(options);
+        std::printf("openvins: %dx%d fx=%.1f fy=%.1f cx=%.1f cy=%.1f\n", state.width, state.height, fx[0], fy[0], cx[0], cy[0]);
+        return RELPOSE_STATUS_OK;
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "init: %s\n", error.what());
+        return RELPOSE_STATUS_ERROR;
+    }
+}
+
+int32_t step(double t, const uint8_t* frame, const double* imu, int32_t imu_count, double* out) {
+    try {
+        return estimate(t, frame, imu, imu_count, out);
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "step at t=%.3f: %s\n", t, error.what());
+        return RELPOSE_STATUS_ERROR;
+    }
+}

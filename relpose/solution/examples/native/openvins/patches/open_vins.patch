@@ -1,0 +1,85 @@
+--- a/ov_core/src/track/Grider_FAST.h
++++ b/ov_core/src/track/Grider_FAST.h
+@@ -27,7 +27,6 @@
+ #include <iostream>
+ #include <vector>
+ 
+-#include <opencv2/highgui/highgui.hpp>
+ #include <opencv2/imgproc/imgproc.hpp>
+ #include <opencv2/opencv.hpp>
+ 
+--- a/ov_core/src/track/Grider_GRID.h
++++ b/ov_core/src/track/Grider_GRID.h
+@@ -27,7 +27,6 @@
+ #include <iostream>
+ #include <vector>
+ 
+-#include <opencv2/highgui/highgui.hpp>
+ #include <opencv2/imgproc/imgproc.hpp>
+ #include <opencv2/opencv.hpp>
+ 
+--- a/ov_core/src/track/TrackBase.h
++++ b/ov_core/src/track/TrackBase.h
+@@ -30,7 +30,6 @@
+ 
+ #include <boost/date_time/posix_time/posix_time.hpp>
+ #include <opencv2/core/core.hpp>
+-#include <opencv2/highgui/highgui.hpp>
+ #include <opencv2/opencv.hpp>
+ 
+ #include "utils/colors.h"
+--- a/ov_init/src/dynamic/DynamicInitializer.cpp
++++ b/ov_init/src/dynamic/DynamicInitializer.cpp
+@@ -633,6 +633,7 @@
+   // options.linear_solver_ordering = ordering;
+   options.function_tolerance = 1e-5;
+   options.gradient_tolerance = 1e-4 * options.function_tolerance;
++  options.logging_type = ceres::SILENT; // relpose: the per-iteration log formats wall-clock times, so its fuel would vary
+ 
+   // Loop through each CPI integration and add its measurement to the problem
+   double timestamp_k = -1;
+--- a/ov_msckf/src/core/VioManagerHelper.cpp
++++ b/ov_msckf/src/core/VioManagerHelper.cpp
+@@ -92,8 +92,9 @@
+   }
+ 
+   // Run the initialization in a second thread so it can go as slow as it desires
++  // relpose: a wasm32-wasip1 module has no threads, so the initialization runs in the calling thread
+   thread_init_running = true;
+-  std::thread thread([&] {
++  auto initialize = [&] {
+     // Returns from our initializer
+     double timestamp;
+     Eigen::MatrixXd covariance;
+@@ -175,15 +176,8 @@
+ 
+     // Finally, mark that the thread has finished running
+     thread_init_running = false;
+-  });
+-
+-  // If we are single threaded, then run single threaded
+-  // Otherwise detach this thread so it runs in the background!
+-  if (!params.use_multi_threading_subs) {
+-    thread.join();
+-  } else {
+-    thread.detach();
+-  }
++  };
++  initialize();
+   return false;
+ }
+ 
+--- a/ov_msckf/src/core/VioManagerOptions.h
++++ b/ov_msckf/src/core/VioManagerOptions.h
+@@ -290,7 +290,11 @@
+             PRINT_ERROR(RED "\t- mask%d - %s\n" RESET, i, total_mask_path.c_str());
+             std::exit(EXIT_FAILURE);
+           }
++#ifdef HAVE_OPENCV_IMGCODECS
+           cv::Mat mask = cv::imread(total_mask_path, cv::IMREAD_GRAYSCALE);
++#else
++          cv::Mat mask; // relpose: OpenCV without imgcodecs (the wasm build) cannot read mask images
++#endif
+           masks.insert({i, mask});
+           if (mask.cols != camera_intrinsics.at(i)->w() || mask.rows != camera_intrinsics.at(i)->h()) {
+             PRINT_ERROR(RED "VioManager(): mask size does not match camera!\n" RESET);
