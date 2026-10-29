@@ -165,7 +165,7 @@ class Episode:
         return np.concatenate([self.ground_truth_relative(), self.ground_truth_twist()], axis=1)
 
     def adapt(self, resolution=None):
-        """(guest config, frames) for a solution that declared 320x240 or 640x480 (docs/ABI.md, "Frame format").
+        """(guest config, frames) for a solution that declared 320x240 or 640x480 (docs/ABI.md, "step arguments").
 
         Frames are always RGB (H, W, 3): a grayscale source arrives with its gray value in all three channels, and
         nothing says so. Downscaling averages areas, upscaling interpolates bilinearly; either way the intrinsics are

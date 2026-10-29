@@ -1,69 +1,44 @@
-# The Python runtime (`runtime.wasm`)
+# Python runtime (`runtime.wasm`)
 
-`runtime.wasm` is CPython 3.14 with numpy and OpenCV compiled to `wasm32-wasip1` as a *reactor* that implements the
-solution ABI (`docs/ABI.md`). `relpose bundle <dir>` embeds your directory (zipped) into the module as a
-data segment and records its address in the runtime's bundle descriptor; nothing is compiled and the result is a
-self-contained module. At `init` the embedded shim (`relpose/solution/runtime/python/guest/relpose_guest.py`) finds the zip in its own memory,
-installs an importer over it, imports `solution:Solution` and constructs it with the config; each `step` wraps the raw
-buffers in numpy arrays and calls `Solution.step`.
+CPython with numpy and OpenCV as a `wasm32-wasip1` reactor implementing `docs/ABI.md`. `relpose bundle <dir> -o x.wasm`
+embeds your directory into it as a zip; `relpose unbundle` extracts it again.
 
-## What is inside
+## Contents
 
 | | |
 |---|---|
-| Python | 3.14, full stdlib except `zlib`, `bz2`, `lzma`, `ssl`, `ctypes`, `sqlite3`, `tkinter`, `ensurepip`, `venv` |
-| numpy | 2.3 — scalar build (no SIMD, no BLAS): large `@` are slow; push heavy arithmetic into OpenCV |
-| OpenCV | 4.12 `core`, `imgproc`, `features2d`, `flann`, `calib3d`, `video`, `dnn` (ONNX import), SIMD128 kernels; no `imgcodecs`/`highgui` |
-| threads | none (`cv2.setNumThreads` is a no-op, `threading` works but runs one thread at a time) |
-| files / network | none: the module gets no directory and no sockets; data files travel in the bundle |
-| clocks | `time.perf_counter()` works (host monotonic clock) but fuel is the metric |
-| randomness | `os.urandom`/`random` are seeded from host entropy: seed them yourself for reproducible fuel numbers |
+| Python | 3.14 stdlib without `zlib`, `bz2`, `lzma`, `ssl`, `ctypes`, `sqlite3`, `tkinter` |
+| numpy | 2.3, scalar build (no SIMD, no BLAS): large `@` are slow, use OpenCV |
+| OpenCV | 4.12 `core`, `imgproc`, `features2d`, `flann`, `calib3d`, `video`, `dnn` (ONNX); no `imgcodecs`, `highgui` |
+| threads, files, network | none; data files travel in the bundle |
+| randomness | seeded from host entropy: seed it yourself for reproducible fuel |
 
-## Rules of the sandbox
-
-- `init` runs once per episode; a fresh instance is created for every episode (no state leaks between episodes).
-- Exceptions in `Solution.__init__`/`step` are caught by the shim: traceback to stderr (shown by `check` and kept in
-  the evaluation logs), status `-1`, the episode ends and is marked failed. Returning `None`, a wrong shape (anything but 13
-  values) or a state with NaN/inf does the same.
-- `sys.exit()` is an exception like any other. `os._exit()`, a C-level `abort()` or a memory fault trap the instance:
-  episode failed.
-- Running out of fuel in one `step` (`Limits.step_fuel`) or exceeding the wall-clock deadline traps: episode failed.
-  Budget your per-frame work; `check` prints fuel per step.
-- Memory is capped (`Limits.memory_bytes`): a too-large allocation raises `MemoryError` (catch it yourself to recover;
-  uncaught, it ends the episode like any exception).
-- The frame array handed to `step` is a read-only view into a buffer the harness overwrites with the next frame; copy
-  it (`frame.copy()`) if you keep it. OpenCV accepts read-only inputs.
-- `print` output goes to the log; keep it light, host calls are free in fuel but cost wall time.
-
-## Bundle layout
+## Bundle
 
 ```
 my_solution/
-  solution.py          class Solution (or a package solution/__init__.py); `frame_width = 640` in it asks for 640x480 frames
-  helpers/...          any modules and packages; relative imports work; __file__ is /bundle/<path>
-  net.onnx, w.npz      data files: `import solution_bundle as bundle; bundle.read_bytes("net.onnx")`, `np.load(bundle.open("w.npz"))`
+  solution.py      class Solution (or solution/__init__.py)
+  helpers/...      modules and packages; __file__ is /bundle/<path>
+  net.onnx, w.npz  data: import solution_bundle as bundle; bundle.read_bytes("net.onnx"), np.load(bundle.open("w.npz"))
 ```
 
-Zips are stored uncompressed (there is no zlib in the guest), so `np.savez` rather than `np.savez_compressed`.
-`relpose unbundle solution.wasm -o dir` extracts a bundle again.
+The zip is uncompressed (no zlib in the guest): save arrays with `np.savez`, not `np.savez_compressed`.
 
-## Measuring
+## Behaviour
 
-`check` prints fuel and wall time per step; `evaluate` reports medians and 95th percentiles per episode. Fuel is
-deterministic: the same code on the same frames consumes the same fuel on any machine (the first few steps of an
-instance cost more while the interpreter warms up). Rough calibration on this build: the empty solution costs ~0.15 M
-fuel per step, IMU dead reckoning in numpy ~3.6 M, the KLT/essential-matrix baseline ~150 M (≈ 8 ms native), the tiny
-CNN through `cv2.dnn` ~12 M; 1 s of wall time corresponds to roughly 2 × 10¹⁰ fuel.
+- An exception, `sys.exit()` included, is an error: the traceback goes to stderr and the episode fails.
+- `os._exit()`, `abort()` and memory faults trap.
+- `MemoryError` past the memory cap can be caught.
+- `frame` is a read-only view that the next step overwrites: `frame.copy()` to keep it.
+- `print` goes to the log.
 
-## Native solutions
+## Fuel
 
-C, C++ and Rust modules implement the same exports directly (`relpose/solution/examples/native/cpp_minimal`); the bundle mechanism is only
-needed by the Python runtime. The harness treats both identically.
+Deterministic for the same code and input; the first steps of an instance cost more. Per step at 320 × 240: empty
+solution 0.09 M, numpy dead reckoning 4.1 M, tiny CNN via `cv2.dnn` 14 M, KLT baseline 50–130 M depending on the
+image (p95 up to 500 M).
 
-## Building the runtime (you)
+## Building
 
-`relpose/solution/runtime/python/build.sh` (downloads the toolchain into `build/toolchain` with `relpose/solution/toolchain/download_dependencies.sh`,
-then runs `relpose/solution/runtime/python/cpython/build-wasm.sh`, 10–15 min): produces `build/runtime/dist/runtime.wasm` (the reactor `relpose bundle` embeds
-your directory into) and `python.wasm` (a command-line Python for experiments: `relpose/solution/runtime/python/cpython/python.sh`).
-Patches, module lists and the frozen-stdlib mechanism are documented in `relpose/solution/runtime/python/README.md`; change them
-freely, the contract is only the ABI. `tests/` exercises the result through the harness (`pytest`).
+`relpose/solution/runtime/python/build.sh` (10–15 min, once) writes `build/runtime/dist/runtime.wasm` and `python.wasm`
+(a REPL). Only the ABI is fixed: change the runtime freely (`relpose/solution/runtime/python/README.md`).

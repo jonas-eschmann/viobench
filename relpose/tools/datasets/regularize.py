@@ -1,4 +1,4 @@
-"""Puts an episode on the ABI's timeline before it is stored (docs/ABI.md, "Buffers"): a frame every 1/20 s and exactly
+"""Puts an episode on the ABI's timeline before it is stored (docs/ABI.md, "step arguments"): a frame every 1/20 s and exactly
 IMU_ROWS_PER_FRAME IMU rows in each frame's window (t_{k-1}, t_k], the first frame's window being one interval long.
 
 - A dropped frame (a gap of n frame intervals) is filled with n - 1 repeats of the frame before it.

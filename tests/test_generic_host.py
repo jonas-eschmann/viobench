@@ -1,6 +1,7 @@
 """A bundled solution is a self-contained wasip1 reactor: a host that knows nothing about relpose can drive it.
 
-This is the whole protocol in 25 lines of plain wasmtime-py: instantiate, _initialize, init(config), step(...).
+This is the whole protocol in 25 lines of plain wasmtime-py: instantiate, _initialize, frame_width, init(config),
+step(...).
 """
 import ctypes
 import json
@@ -41,6 +42,7 @@ def test_plain_wasmtime_host_runs_a_bundle(runtime_path, solution_dir, tmp_path)
     exports = instance.exports(store)
     memory, alloc, init, step = exports["memory"], exports["alloc"], exports["init"], exports["step"]
     exports["_initialize"](store)
+    assert exports["frame_width"](store) == 320  # the Python runtime starts the interpreter and imports the solution here
 
     def write(pointer, data):
         ctypes.memmove(ctypes.cast(memory.data_ptr(store), ctypes.c_void_p).value + pointer, data, len(data))

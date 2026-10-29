@@ -1,29 +1,23 @@
 # Submission server
 
-Two processes share one directory (`RELPOSE_SERVER_DIR`, default `./server-data`): the web app accepts uploads into
-an SQLite queue, the worker evaluates them one at a time on the datasets it is given and the app serves the leaderboard.
+The app accepts uploads into an SQLite queue and serves the leaderboard; the worker evaluates submissions one at a
+time. Both share `RELPOSE_SERVER_DIR` (default `./server-data`).
 
 ```bash
 pip install -e ".[server,data]"
-mkdir -p server-data && printf "s3cr3t-token-1 alice\ns3cr3t-token-2 bob\n" > server-data/tokens.txt
-RELPOSE_DATASETS=/data/test/first:/data/test/second \
-    python -m relpose.tools.server.worker &
+mkdir -p server-data && printf "token-1 alice\ntoken-2 bob\n" > server-data/tokens.txt
+RELPOSE_DATASETS=/data/test/first:/data/test/second python -m relpose.tools.server.worker &
 uvicorn relpose.tools.server.app:app --host 0.0.0.0 --port 8000
 ```
 
-Students:
+| endpoint | |
+|---|---|
+| `POST /submit` | `curl -F file=@solution.wasm -F label=v1 -H "X-Token: token-1" http://server:8000/submit` |
+| `GET /submissions/<id>` | status and summary |
+| `GET /submissions/<id>/logs`, `/report` | stderr tails per episode, `report.json` |
+| `GET /leaderboard`, `/leaderboard.json` | every completed submission per dataset, Pareto front marked |
 
-```bash
-curl -F file=@solution.wasm -F label=orb-v2 -H "X-Token: s3cr3t-token-1" http://server:8000/submit
-curl -H "X-Token: s3cr3t-token-1" http://server:8000/submissions/7          # status + summary
-curl -H "X-Token: s3cr3t-token-1" http://server:8000/submissions/7/logs     # stderr tails per episode
-curl -H "X-Token: s3cr3t-token-1" http://server:8000/submissions/7/report   # full report.json
-```
+Settings: `RELPOSE_TOKENS`, `RELPOSE_MAX_UPLOAD_MIB` (128), `RELPOSE_DAILY_QUOTA` (20).
 
-`GET /leaderboard` (HTML) and `/leaderboard.json` list every completed submission per dataset with the Pareto
-front highlighted; the datasets never leave the server (students see metrics and their own logs).
-
-Hardening checklist for a public deployment: run the worker as a dedicated user in a container without network and
-with a memory limit (the wasm guest is sandboxed by wasmtime and capped by `Limits`, the host Python process is not),
-put the app behind TLS, rotate tokens, keep `RELPOSE_DAILY_QUOTA` modest, and back up `submissions.sqlite`
-plus `reports/`.
+Deployment: run the worker unprivileged, in a container without network and with a memory limit (wasmtime sandboxes
+the guest, not the host process); TLS in front of the app; back up `submissions.sqlite` and `reports/`.

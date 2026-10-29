@@ -1,26 +1,14 @@
-# Learned baseline: PyTorch → ONNX → `cv2.dnn` inside the runtime
+# tiny_cnn: PyTorch → ONNX → `cv2.dnn`
 
-1. Train on episode directories (your `relpose simulate` output, for example):
+```bash
+python relpose/solution/examples/python/tiny_cnn/train.py data/train --epochs 10     # or --generate N: train on fresh simulated episodes
+relpose bundle relpose/solution/examples/python/tiny_cnn/solution -o tinynn.wasm
+relpose check tinynn.wasm && relpose evaluate tinynn.wasm data/val
+```
 
-   ```bash
-   python relpose/solution/examples/python/tiny_cnn/train.py data/train --epochs 10
-   ```
+Training writes `solution/net.onnx`, `solution/weights.npz` and `solution/meta.json`. The solution runs the ONNX graph
+with `cv2.dnn` and falls back to the numpy forward pass in `tinynn.py` if OpenCV rejects the graph. Export with
+`opset_version=13, dynamo=False` and static input shapes.
 
-   writes `solution/net.onnx`, `solution/weights.npz`, `solution/meta.json` (and `net.pt`).
-
-2. Bundle and test:
-
-   ```bash
-   relpose bundle relpose/solution/examples/python/tiny_cnn/solution -o tinynn.wasm
-   relpose check tinynn.wasm
-   relpose evaluate tinynn.wasm data/val
-   ```
-
-The solution runs the ONNX graph with `cv2.dnn.readNetFromONNX` (bytes from the bundle) and falls back to the numpy
-forward pass in `tinynn.py` (same weights, `.npz`) if the graph is rejected — useful when trying operators OpenCV's
-importer does not support. Export with `opset_version=13, dynamo=False`; keep the inputs static-shaped.
-
-The model itself (frame pair at 64 × 48 + 9 preintegrated IMU values → relative 6-DoF motion, chained per frame) is
-only a demonstration of the tooling: it drifts like a visual odometry without any correction. Ideas that stay inside
-the same pipeline: predict in the gravity-aligned frame, feed longer IMU windows, add a learned scale/gravity
-initialiser for the hover window, distil a classical tracker's inliers.
+The model (a frame pair at 64 × 48 plus 9 preintegrated IMU values → the relative 6-DoF motion) demonstrates the
+tooling; chained per frame, it drifts.
