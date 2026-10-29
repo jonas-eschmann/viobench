@@ -39,7 +39,7 @@ pose held, standing still.
 | wall clock per step | 60 s |
 | submission size | 128 MiB (the Python runtime is 48 MiB) |
 
-These are the defaults; the server's values are at `GET /config`, and `relpose evaluate --limits` takes them.
+Set in `relpose/tools/config.json`; `relpose check` and `evaluate` apply the same limits as the server.
 
 ## Data
 

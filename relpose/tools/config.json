@@ -1,0 +1,15 @@
+{
+ "daily_quota": 1,
+ "daily_failed_quota": 1,
+ "quota_time_zone": "America/Los_Angeles",
+ "max_upload_mib": 128,
+ "evaluation_timeout_seconds": 14400,
+ "limits": {
+  "init_fuel": 200000000000,
+  "step_fuel": 20000000000,
+  "memory_bytes": 2147483648,
+  "table_elements": 1048576,
+  "init_wall_seconds": 300,
+  "step_wall_seconds": 60
+ }
+}

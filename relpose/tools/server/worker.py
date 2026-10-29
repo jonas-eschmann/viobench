@@ -13,7 +13,6 @@ import os
 import subprocess
 import sys
 import time
-from dataclasses import asdict
 from pathlib import Path
 
 from .store import Store
@@ -45,8 +44,7 @@ def evaluate_submission(store, submission, datasets, log=print):
     report_dir = store.report_dir(submission["id"])
     report_dir.mkdir(parents=True, exist_ok=True)
     config = store.config
-    command = [sys.executable, "-m", "relpose", "evaluate", str(wasm), *map(str, datasets), "-o", str(report_dir),
-               "--limits", json.dumps(asdict(config.limits))]
+    command = [sys.executable, "-m", "relpose", "evaluate", str(wasm), *map(str, datasets), "-o", str(report_dir)]  # limits: config.json
     log(f"submission {submission['id']} by {submission['name']}: {' '.join(command)}")
     with open(report_dir / "worker.txt", "w") as output:
         try:
@@ -59,8 +57,12 @@ def evaluate_submission(store, submission, datasets, log=print):
         store.finish(submission["id"], error=f"evaluate exited with {completed.returncode} without a report")  # its output: worker.txt
         return
     report = json.loads(report_path.read_text())
-    store.finish(submission["id"], results=public_results(report))
-    log(f"submission {submission['id']}: done ({report['summary']['overall']['completed']}/{report['summary']['overall']['episodes']} episodes)")
+    overall = report["summary"]["overall"]
+    if overall["completed"] == 0:  # a broken submission: failed, without results (it may fall under the failed quota)
+        store.finish(submission["id"], error="no episode completed")
+    else:
+        store.finish(submission["id"], results=public_results(report))
+    log(f"submission {submission['id']}: {overall['completed']}/{overall['episodes']} episodes completed")
 
 
 def main():

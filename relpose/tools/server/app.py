@@ -6,7 +6,8 @@
     GET  /config             the rules: daily quota, upload size, evaluation timeout, sandbox limits (`server.config`)
 
 Every request carries "Authorization: Bearer <token>" (tokens: `python -m relpose.tools.server.teams`) and sees only
-its own team's submissions. RELPOSE_SERVER_DIR: uploads, reports, sqlite and config.json (default ./server-data).
+its own team's submissions. RELPOSE_SERVER_DIR: uploads, reports and sqlite (default ./server-data); the rules are
+the checked-in relpose/tools/config.json.
 The evaluation itself is done by `relpose.tools.server.worker`, which polls the queue.
 """
 import json
@@ -17,7 +18,7 @@ from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from ..abi import AbiError
 from ..abi.module import runtime_descriptor
 from ..abi.wasm_binary import iter_sections
-from .store import Store
+from .store import Refused, Store
 
 app = FastAPI(title="relpose submissions", docs_url=None, redoc_url=None, openapi_url=None)  # the routes below, nothing else
 _store = None
@@ -68,10 +69,10 @@ async def submit(file: UploadFile = File(...), label: str = Form(""), authorizat
         raise HTTPException(status_code=400, detail=str(error)) from None
     if descriptor is not None and descriptor.length == 0:
         raise HTTPException(status_code=400, detail="this is the bare Python runtime without solution code: run `relpose bundle`")
-    submission_id = get_store().add(token, label[:80], file.filename or "solution.wasm", data)
-    if submission_id is None:
-        raise HTTPException(status_code=429, detail=f"quota of {config.daily_quota} submission(s) per day reached; "
-                                                    f"it resets at midnight ({config.quota_time_zone})")
+    try:
+        submission_id = get_store().add(token, label[:80], file.filename or "solution.wasm", data)
+    except Refused as error:  # one still queued or running, or today's quota used up
+        raise HTTPException(status_code=429, detail=str(error)) from None
     return public(get_store().get(token, submission_id))
 
 

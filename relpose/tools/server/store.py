@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .config import CONFIG_FILE, load as load_config
+from .config import load as load_config
 
 DEFAULT_DIR = Path(os.environ.get("RELPOSE_SERVER_DIR", "server-data"))
 TOKEN_BYTES = 24  # a token is 32 base64url characters
@@ -42,6 +42,10 @@ CREATE INDEX IF NOT EXISTS submissions_token ON submissions(token, created);
 """
 
 
+class Refused(Exception):
+    """The rules do not admit an upload right now; the message says why."""
+
+
 def day_start(now, time_zone):
     """Unix time of the last midnight in `time_zone` (e.g. "America/Los_Angeles") at or before the Unix time `now`."""
     return datetime.fromtimestamp(now, ZoneInfo(time_zone)).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
@@ -57,7 +61,7 @@ class Store:
         self.path = self.directory / "submissions.sqlite"
         with self._connect() as connection:
             connection.executescript(SCHEMA)
-        self.config = load_config(self.directory / CONFIG_FILE)
+        self.config = load_config()
 
     def _connect(self):
         connection = sqlite3.connect(self.path, timeout=30)
@@ -85,19 +89,26 @@ class Store:
     # --- submissions, as a team sees them --------------------------------------------------------------------
 
     def add(self, token, label, filename, data):
-        """Queues a submission; returns its id, or None when the team has used up today's quota (config.daily_quota).
+        """Queues a submission and returns its id. Refused while the team has one queued or running, or once today's
+        quota is used up: config.daily_quota submissions, where up to config.daily_failed_quota failed ones do not count
+        (further failures count like any other submission).
 
-        One transaction: concurrent uploads cannot both pass the quota, and the worker cannot claim the row before the
-        file is written."""
+        One transaction: concurrent uploads cannot both pass these checks, and the worker cannot claim the row before
+        the file is written."""
         submission_id = secrets.token_hex(ID_BYTES)
         now = time.time()
-        with self._connect() as connection:
+        config = self.config
+        with self._connect() as connection:  # leaving it with an exception rolls back
             connection.execute("BEGIN IMMEDIATE")
-            today = connection.execute("SELECT COUNT(*) AS n FROM submissions WHERE token = ? AND created >= ?",
-                                       (token, day_start(now, self.config.quota_time_zone))).fetchone()
-            if today["n"] >= self.config.daily_quota:
-                connection.execute("ROLLBACK")
-                return None
+            pending = connection.execute("SELECT id, status FROM submissions WHERE token = ? AND status IN ('queued', 'running')", (token,)).fetchone()
+            if pending is not None:
+                raise Refused(f"submission {pending['id']} is still {pending['status']}; submit again once it has finished")
+            today = connection.execute("SELECT COUNT(*) AS n, COALESCE(SUM(status = 'failed'), 0) AS failed FROM submissions "
+                                       "WHERE token = ? AND created >= ?", (token, day_start(now, config.quota_time_zone))).fetchone()
+            counted = today["n"] - today["failed"] + max(0, today["failed"] - config.daily_failed_quota)
+            if counted >= config.daily_quota:
+                raise Refused(f"today's quota of {config.daily_quota} submission(s) is used up (up to {config.daily_failed_quota} "
+                              f"failed one(s) do not count); it resets at midnight ({config.quota_time_zone})")
             connection.execute(
                 "INSERT INTO submissions (id, token, label, filename, sha256, bytes, created, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')",
                 (submission_id, token, label, filename, hashlib.sha256(data).hexdigest(), len(data), now))

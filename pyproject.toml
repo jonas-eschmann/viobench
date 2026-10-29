@@ -32,6 +32,7 @@ namespaces = true
 
 [tool.setuptools.package-data]
 "relpose.tools.datasets.generate" = ["*.h.in"]
+"relpose.tools" = ["config.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

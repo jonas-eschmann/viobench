@@ -30,14 +30,18 @@ def tail(path, lines=40):
     return "\n".join(text.splitlines()[-lines:])
 
 
+CHALLENGE_LIMITS = json.loads((Path(__file__).parents[1] / "config.json").read_text())["limits"]  # the server's too
+
+
 @dataclass
 class Limits:
-    init_fuel: int = 200_000_000_000  # covers _initialize and init (interpreter start + imports)
-    step_fuel: int = 20_000_000_000  # per step; exceeding it traps and ends the episode
-    memory_bytes: int = 2 << 30  # the module's one linear memory
-    table_elements: int = 1 << 20  # its one table (function references)
-    init_wall_seconds: float = 300.0  # wall-clock safety nets only (fuel is the metric)
-    step_wall_seconds: float = 60.0
+    """Defaults: the challenge's limits (relpose/tools/config.json), so local runs and the server apply the same."""
+    init_fuel: int = int(CHALLENGE_LIMITS["init_fuel"])  # covers _initialize and init (interpreter start + imports)
+    step_fuel: int = int(CHALLENGE_LIMITS["step_fuel"])  # per step; exceeding it traps and ends the episode
+    memory_bytes: int = int(CHALLENGE_LIMITS["memory_bytes"])  # the module's one linear memory
+    table_elements: int = int(CHALLENGE_LIMITS["table_elements"])  # its one table (function references)
+    init_wall_seconds: float = float(CHALLENGE_LIMITS["init_wall_seconds"])  # wall-clock safety nets only (fuel is the metric)
+    step_wall_seconds: float = float(CHALLENGE_LIMITS["step_wall_seconds"])
 
     @classmethod
     def from_dict(cls, values):

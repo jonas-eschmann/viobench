@@ -44,10 +44,9 @@ curl -H "Authorization: Bearer $TOKEN" https://<server>/submissions/<id>     # o
 curl -H "Authorization: Bearer $TOKEN" https://<server>/config               # the rules: quota, limits, timeouts
 ```
 
-The server evaluates on unpublished episodes and returns metrics only: no stdout, stderr or failure messages. An
-episode that fails shows up as `"completed": false`; reproduce it locally with `relpose evaluate`, under the server's
-limits with `--limits "$(curl -s -H "Authorization: Bearer $TOKEN" https://<server>/config)"`. Quota: one submission
-per team and day (`daily_quota` in `/config`); the quota resets at midnight Pacific time.
+The server evaluates on unpublished episodes and returns metrics only, no logs; `relpose evaluate` applies the same
+limits, so reproduce failures locally. Quota (see `/config`): one submission at a time, one per day (from midnight
+Pacific time) plus one retry after a failed one.
 
 ## Tips
 
