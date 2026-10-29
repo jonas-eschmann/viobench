@@ -26,6 +26,6 @@ A team has one submission in flight at a time and `daily_quota` per day (from mi
 `daily_failed_quota` failed ones (crashed, timed out or no episode completed; no results) do not count. Teams never
 see the guest's output: `report.json` and the logs stay in `reports/<id>/`.
 
-Deployment: run the worker unprivileged, in a container without network and with a memory limit (wasmtime sandboxes
-the guest, not the host process); TLS in front of the app; keep `submissions.sqlite` private (it holds the tokens) and
-back it up with `reports/`.
+Deployment: [`compose.yaml`](compose.yaml) (usage in its header) runs the app on 0.0.0.0:8000 and the worker
+unprivileged, without network and with a memory limit (wasmtime sandboxes the guest, not the host process); put TLS in
+front of the app; keep the `server-data` volume private (the sqlite holds the tokens) and back it up.
