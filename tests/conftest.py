@@ -3,14 +3,15 @@ from pathlib import Path
 
 import pytest
 
-REPO = Path(__file__).resolve().parent.parent
-RUNTIME = Path(os.environ.get("RELPOSE_RUNTIME", REPO / "build" / "runtime" / "dist" / "runtime.wasm"))
+from relpose.solution import workspace
+
+RUNTIME = Path(os.environ.get("RELPOSE_RUNTIME") or workspace.runtime_path(workspace.PACKAGE))
 
 
 @pytest.fixture(scope="session")
 def runtime_path():
     if not RUNTIME.is_file():
-        pytest.skip(f"runtime.wasm not built ({RUNTIME}); run relpose/solution/runtime/python/build.sh")
+        pytest.skip(f"runtime.wasm not built ({RUNTIME}); run relpose build-runtime")
     return RUNTIME
 
 

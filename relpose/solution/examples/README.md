@@ -1,7 +1,7 @@
 # Examples
 
-Copy one to start. Python examples are packaged with `relpose bundle <dir> -o x.wasm`, the native one with
-`relpose/solution/runtime/native/build.sh <dir>`.
+`relpose init python|native <dir>` starts a workspace with `python/minimal` or `native/cpp_minimal` as `solution/`;
+copy any other over it. `relpose bundle <dir> -o x.wasm` packages the Python examples and compiles the native one.
 
 | example | method | fuel/frame |
 |---|---|---|

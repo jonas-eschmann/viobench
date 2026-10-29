@@ -1,7 +1,6 @@
 """In-memory episode: frames (materialised or streamed), IMU, ground truth, its stored description and what a solution receives."""
 from dataclasses import dataclass, field
 
-import cv2
 import numpy as np
 
 from .. import abi
@@ -183,6 +182,8 @@ class Episode:
         if resolution != source_resolution:
             width, height = resolution
             scale_x, scale_y = width / source_resolution[0], height / source_resolution[1]
+            import cv2  # relpose[data]: not at the top, the CLI loads this module without it
+
             interpolation = cv2.INTER_AREA if scale_x < 1 else cv2.INTER_LINEAR
             transforms.append(lambda f: cv2.resize(f, (width, height), interpolation=interpolation))
             fx, fy = fx * scale_x, fy * scale_y

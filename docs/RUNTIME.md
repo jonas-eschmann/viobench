@@ -40,5 +40,6 @@ image (p95 up to 500 M).
 
 ## Building
 
-`relpose/solution/runtime/python/build.sh` (10–15 min, once) writes `build/runtime/dist/runtime.wasm` and `python.wasm`
-(a REPL). Only the ABI is fixed: change the runtime freely (`relpose/solution/runtime/python/README.md`).
+The first `relpose bundle` in a workspace builds its runtime (10–15 min) into `build/runtime/dist/runtime.wasm`, next to
+`python.wasm` (a REPL); `relpose build-runtime` rebuilds it after you change `runtime/`. Only the ABI is fixed: change the
+workspace's runtime freely (`runtime/python/README.md`).

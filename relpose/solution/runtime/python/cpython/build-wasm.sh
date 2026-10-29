@@ -3,22 +3,22 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-# relpose/solution/toolchain/download_dependencies.sh puts these into build/toolchain
-TOOLCHAIN=${TOOLCHAIN:-$HERE/../../../../../build/toolchain}
+# toolchain/download_dependencies.sh puts these into the workspace's build/toolchain
+TOOLCHAIN=${TOOLCHAIN:-$HERE/../../../build/toolchain}
 SRC=${SRC:-$TOOLCHAIN/src}
 SDK=${WASI_SDK_PATH:-$TOOLCHAIN/wasi-sdk}
 VENV=${VENV:-$TOOLCHAIN/venv}
 WASMTIME=${WASMTIME:-$TOOLCHAIN/wasmtime/wasmtime}
-BUILD=${BUILD:-$HERE/../../../../../build/runtime}
+BUILD=${BUILD:-$HERE/../../../build/runtime}
 CPUS=$(getconf _NPROCESSORS_ONLN)
 JOBS=$(( CPUS < 5 ? CPUS : 5 ))
 export PATH=$VENV/bin:$(dirname "$WASMTIME"):$PATH
 mkdir -p "$BUILD/logs" "$BUILD/dist" "$BUILD/src"
 BUILD=$(cd "$BUILD" && pwd)
 case "$BUILD:$SDK:$VENV" in
-    *" "*) echo "CPython's build cannot handle spaces in paths: move the repository (or point BUILD/TOOLCHAIN) somewhere without them" >&2; exit 1 ;;
+    *" "*) echo "CPython's build cannot handle spaces in paths: move the workspace (or point BUILD/TOOLCHAIN) somewhere without them" >&2; exit 1 ;;
 esac
-# the source copies are unpacked tarballs, not repositories: keep git (the patches below, numpy's version script) from finding the relpose checkout around them
+# the source copies are unpacked tarballs, not repositories: keep git (the patches below, numpy's version script) from finding a repository around them
 export GIT_CEILING_DIRECTORIES=$BUILD/src
 
 # CPython builds in-tree and numpy/OpenCV get patched, so the build works on copies of the pristine sources
@@ -34,7 +34,7 @@ for project in numpy opencv; do
 done
 
 CPYTHON=$BUILD/src/cpython
-# configured trees remember absolute paths: one from the former Docker toolchain (/work) or a moved checkout cannot be reused
+# configured trees remember absolute paths: one from the former Docker toolchain (/work) or a moved workspace cannot be reused
 if [ -f "$CPYTHON/cross-build/wasm32-wasip1/Makefile" ] && ! grep -qF "abs_srcdir=	$CPYTHON/" "$CPYTHON/cross-build/wasm32-wasip1/Makefile"; then
     echo "$BUILD was configured at another path (e.g. inside the former Docker toolchain): delete it and build again" >&2
     exit 1

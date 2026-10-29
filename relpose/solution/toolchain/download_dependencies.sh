@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# Downloads the toolchain for both solution flavours into build/toolchain (Linux, macOS; Windows inside WSL2): wasi-sdk 34, Wasmtime 50,
+# Downloads the toolchain for both solution flavours into the workspace's build/toolchain (Linux, macOS; Windows inside WSL2): wasi-sdk 34, Wasmtime 50,
 # a venv with Cython, ninja and pytest, and the pristine CPython 3.14.4, numpy 2.3.4 and OpenCV 4.12.0 sources (build-wasm.sh defaults point here).
 # Every archive is SHA256-checked; finished pieces are skipped, so the build scripts run this each time. Run from anywhere.
+# With the argument `native` it fetches wasi-sdk only, all a native solution needs (runtime/native/build.sh).
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-TOOLCHAIN=${TOOLCHAIN:-$HERE/../../../build/toolchain}
+TOOLCHAIN=${TOOLCHAIN:-$HERE/../build/toolchain}
 
 case "$(uname -s)-$(uname -m)" in
     Linux-x86_64)
@@ -51,19 +52,6 @@ if [ -n "$MISSING" ]; then
     echo "missing:$MISSING (Ubuntu/WSL: sudo apt install build-essential cmake curl git python3-venv xz-utils; macOS: xcode-select --install, brew install cmake)" >&2
     exit 1
 fi
-# OpenCV's configure accepts the cross-built CPython 3.14 only if it is at least as new as the interpreter running the build
-PYTHON=""
-for candidate in ${PYTHON3:-} python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
-    if command -v "$candidate" > /dev/null && "$candidate" -c 'import sys; sys.exit(not (3, 10) <= sys.version_info[:2] <= (3, 14))' 2> /dev/null; then
-        # the real interpreter, not an activated venv's symlink to it
-        PYTHON=$("$candidate" -c 'import os, sys; print(os.path.realpath(sys.executable))')
-        break
-    fi
-done
-if [ -z "$PYTHON" ]; then
-    echo "no Python 3.10-3.14 found (set PYTHON3=/path/to/python3.x); macOS: the Command Line Tools' python3 is 3.9, install one from python.org or Homebrew" >&2
-    exit 1
-fi
 if command -v sha256sum > /dev/null; then
     SHA256SUM=sha256sum
 else
@@ -89,14 +77,30 @@ fetch() {
     echo "$3" > "$1/.sha256"
 }
 
-mkdir -p "$TOOLCHAIN/src"
+mkdir -p "$TOOLCHAIN"
 TOOLCHAIN=$(cd "$TOOLCHAIN" && pwd)
 fetch "$TOOLCHAIN/wasi-sdk" "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-34/wasi-sdk-34.0-$HOST.tar.gz" "$WASI_SDK_SHA256"
+if [ "${1:-}" = native ]; then
+    exit 0
+fi
 fetch "$TOOLCHAIN/wasmtime" "https://github.com/bytecodealliance/wasmtime/releases/download/v50.0.0/wasmtime-v50.0.0-${HOST/arm64/aarch64}.tar.xz" "$WASMTIME_SHA256"
 fetch "$TOOLCHAIN/src/cpython" "$CPYTHON_URL" "$CPYTHON_SHA256"
 fetch "$TOOLCHAIN/src/numpy" "$NUMPY_URL" "$NUMPY_SHA256"
 fetch "$TOOLCHAIN/src/opencv" "$OPENCV_URL" "$OPENCV_SHA256"
 
+# OpenCV's configure accepts the cross-built CPython 3.14 only if it is at least as new as the interpreter running the build
+PYTHON=""
+for candidate in ${PYTHON3:-} python3.14 python3.13 python3.12 python3.11 python3.10 python3; do
+    if command -v "$candidate" > /dev/null && "$candidate" -c 'import sys; sys.exit(not (3, 10) <= sys.version_info[:2] <= (3, 14))' 2> /dev/null; then
+        # the real interpreter, not an activated venv's symlink to it
+        PYTHON=$("$candidate" -c 'import os, sys; print(os.path.realpath(sys.executable))')
+        break
+    fi
+done
+if [ -z "$PYTHON" ]; then
+    echo "no Python 3.10-3.14 found (set PYTHON3=/path/to/python3.x); macOS: the Command Line Tools' python3 is 3.9, install one from python.org or Homebrew" >&2
+    exit 1
+fi
 VENV=$TOOLCHAIN/venv
 if [ "$(cat "$VENV/.requirements" 2> /dev/null)" != "$PYTHON ${REQUIREMENTS[*]}" ]; then
     echo "creating $VENV with $PYTHON"

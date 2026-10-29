@@ -1,7 +1,7 @@
 # The Python runtime: build
 
-`build.sh` (runs `relpose/solution/toolchain/download_dependencies.sh`, then `cpython/build-wasm.sh`; 10–15 min) writes
-two modules to `build/runtime/dist/`:
+`build.sh` (what `relpose build-runtime` runs: `toolchain/download_dependencies.sh`, then `cpython/build-wasm.sh`;
+10–15 min) writes two modules to the workspace's `build/runtime/dist/`:
 
 - `runtime.wasm`: CPython 3.14.4, numpy 2.3.4 and OpenCV 4.12.0 as a reactor implementing `docs/ABI.md`;
 - `python.wasm`: the same as a command-line interpreter.
@@ -10,10 +10,13 @@ Both are single-threaded and need no directory: the stdlib and numpy's Python co
 and wasm exceptions (wasi-sdk 34 `eh` runtime, Wasmtime ≥ 50).
 
 ```bash
-relpose/solution/runtime/python/build.sh
-relpose/solution/runtime/python/cpython/test.sh      # numpy's tests inside python.wasm
-relpose/solution/runtime/python/cpython/python.sh    # a REPL
+runtime/python/build.sh                 # or relpose build-runtime
+runtime/python/cpython/test.sh          # numpy's tests inside python.wasm
+runtime/python/cpython/python.sh        # a REPL
 ```
+
+Pure-Python packages need no rebuild: copy them into your solution directory. Extension modules are cross-built in
+`cpython/build-wasm.sh` and linked in like numpy and OpenCV (below).
 
 | file | role |
 |---|---|
@@ -21,7 +24,7 @@ relpose/solution/runtime/python/cpython/python.sh    # a REPL
 | `guest/relpose_guest.py` | frozen shim: imports the bundle, loads `Solution`, glues `step` |
 | `cpython/build-wasm.sh`, `patches/`, `scripts/` | the cross-build |
 
-Overrides: `TOOLCHAIN` (default `build/toolchain`), `SRC` (pristine sources), `WASI_SDK_PATH`, `VENV`, `WASMTIME`,
+Overrides (paths in the workspace): `TOOLCHAIN` (default `build/toolchain`), `SRC` (pristine sources), `WASI_SDK_PATH`, `VENV`, `WASMTIME`,
 `BUILD` (default `build/runtime`). The patched sources in `build/runtime/src` are plain copies:
 `diff -ru build/toolchain/src/numpy build/runtime/src/numpy` shows the changes; delete `build/runtime/src/<project>`
 after editing a patch.

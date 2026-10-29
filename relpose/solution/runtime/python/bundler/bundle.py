@@ -10,6 +10,7 @@ import os
 import zipfile
 from pathlib import Path
 
+from relpose.solution import workspace
 from relpose.tools import abi
 from relpose.tools.abi.module import embedded_bundle
 
@@ -24,18 +25,16 @@ ZIP_EPOCH = (1980, 1, 1, 0, 0, 0)
 
 
 
-def default_runtime():
-    """runtime.wasm from $RELPOSE_RUNTIME, next to this package, or the repository build directory."""
-    candidates = []
+def default_runtime(directory):
+    """runtime.wasm from $RELPOSE_RUNTIME, else from the workspace of directory, built first if missing."""
     if os.environ.get(RUNTIME_VARIABLE):
-        candidates.append(Path(os.environ[RUNTIME_VARIABLE]))
-    repo = Path(__file__).resolve().parents[5]  # bundler/ python/ runtime/ solution/ relpose/ <repo>
-    candidates += [repo / "build" / "runtime" / "dist" / "runtime.wasm"]
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    raise PackagingError(f"runtime.wasm not found; build it with relpose/solution/runtime/python/build.sh, pass --runtime or set {RUNTIME_VARIABLE} "
-                         f"(looked at {[str(c) for c in candidates]})")
+        path = Path(os.environ[RUNTIME_VARIABLE])
+        if not path.is_file():
+            raise PackagingError(f"${RUNTIME_VARIABLE} is {path}, which does not exist")
+        return path
+    space = workspace.find(directory)
+    path = workspace.runtime_path(space)
+    return path if path.is_file() else workspace.build_runtime(space)
 
 
 def collect_files(directory):
@@ -43,6 +42,8 @@ def collect_files(directory):
     directory = Path(directory)
     if not directory.is_dir():
         raise PackagingError(f"{directory} is not a directory")
+    if (directory / workspace.MARKER).is_file():
+        raise PackagingError(f"{directory} is a workspace, not a solution: bundle its solution directory")
     files = []
     for root, directories, names in os.walk(directory):
         directories[:] = sorted(d for d in directories if d not in IGNORED_DIRECTORIES and not d.startswith("."))
@@ -122,7 +123,7 @@ def bundle(directory, output, runtime=None):
     directory = Path(directory)
     files = collect_files(directory)
     warnings = validate(directory, files)
-    runtime_path = Path(runtime) if runtime else default_runtime()
+    runtime_path = Path(runtime) if runtime else default_runtime(directory)
     runtime_bytes = runtime_path.read_bytes()
     payload = make_zip(directory, files)
     result = embed_bundle(runtime_bytes, payload)

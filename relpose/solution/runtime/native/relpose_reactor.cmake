@@ -1,5 +1,5 @@
 # relpose_solution(<target> <sources...>)  — one call, two builds:
-#   * configured with the wasi-sdk toolchain file (relpose/solution/runtime/native/build.sh does that inside the image):
+#   * configured with the wasi-sdk toolchain file (relpose bundle does that):
 #     the solution reactor <target>.wasm that you submit;
 #   * configured with your host compiler (`cmake -S . -B build-host && cmake --build build-host`): an executable
 #     `debug` = your sources + relpose_debug_main.c, built with -g, that reads a feed from `relpose feed` and calls your
@@ -19,6 +19,6 @@ function(relpose_solution target)
         target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_FUNCTION_LIST_DIR})
         target_compile_options(${target} PRIVATE -g -O1)
         set_target_properties(${target} PROPERTIES OUTPUT_NAME debug)
-        message(STATUS "relpose: host configure -> building the `debug` driver (not a submission); use runtime/native/build.sh for the .wasm")
+        message(STATUS "relpose: host configure -> building the `debug` driver (not a submission); use relpose bundle for the .wasm")
     endif()
 endfunction()

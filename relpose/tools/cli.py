@@ -1,11 +1,14 @@
 """The `relpose` command line (also `python -m relpose`).
 
-solution     bundle, unbundle                  Python runtime + directory <-> solution.wasm
+solution     init                              new workspace: a minimal solution with its own toolchain
+             bundle, unbundle                  solution directory (Python, or native with a CMakeLists.txt) <-> solution.wasm
+             build-runtime                     (re)build the workspace's Python runtime; bundle does when it is missing
 runner       check, evaluate, leaderboard      run a module on synthetic frames / on a dataset (disk or freshly simulated); aggregate reports
              debug, score                      run a Python solution in-process (debugger-friendly); score an estimate
 datasets     simulate, feed                    write episodes with HyperDrone (GPU); export raw inputs for native debugging
 
-The CLI is the one host component that also reaches into the guest side (for `bundle`); the runner library never does.
+The CLI is the one host component that also reaches into the guest side (for `bundle`, `init` and the builds); the
+runner library never does.
 """
 import argparse
 import itertools
@@ -38,19 +41,41 @@ def run_with_large_stack(function):
 
 # --- solution (guest side) -------------------------------------------------------------------------------------
 
-def command_bundle(arguments):
-    from ..solution.runtime.python.bundler import BundleError
-    from ..solution.runtime.python.bundler.bundle import bundle
+def command_init(arguments):
+    from ..solution.workspace import WorkspaceError, init
 
     try:
-        summary = bundle(arguments.directory, arguments.output, runtime=arguments.runtime)
-    except (BundleError, abi.AbiError) as error:
+        init(arguments.flavour, arguments.directory)
+    except WorkspaceError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
-    print(f"wrote {summary['output']} ({summary['bytes'] / 2**20:.1f} MiB, bundle {summary['bundle_bytes'] / 1024:.0f} KiB, {len(summary['files'])} files)")
-    for warning in summary["warnings"]:
-        print(f"warning: {warning}")
-    print(f"next: relpose check {summary['output']}")
+    print(f"created {arguments.directory}: solution/ (yours), toolchain/ and runtime/ (the build recipe, yours to change)")
+    print(f"next: cd {arguments.directory} && relpose bundle solution -o solution.wasm && relpose check solution.wasm")
+    if arguments.flavour == "python":
+        print("      (the first bundle builds the runtime into build/: 10-15 min)")
+    return 0
+
+
+def command_bundle(arguments):
+    from pathlib import Path
+
+    from ..solution.runtime.python.bundler import BundleError
+    from ..solution.runtime.python.bundler.bundle import bundle
+    from ..solution.workspace import WorkspaceError, build_native
+
+    try:
+        if (Path(arguments.directory) / "CMakeLists.txt").is_file():  # native: compiled with the workspace's wasi-sdk
+            build_native(arguments.directory, arguments.output)
+            print(f"wrote {arguments.output} ({Path(arguments.output).stat().st_size / 1024:.0f} KiB)")
+        else:
+            summary = bundle(arguments.directory, arguments.output, runtime=arguments.runtime)
+            print(f"wrote {summary['output']} ({summary['bytes'] / 2**20:.1f} MiB, bundle {summary['bundle_bytes'] / 1024:.0f} KiB, {len(summary['files'])} files)")
+            for warning in summary["warnings"]:
+                print(f"warning: {warning}")
+    except (BundleError, WorkspaceError, abi.AbiError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    print(f"next: relpose check {arguments.output}")
     return 0
 
 
@@ -64,6 +89,18 @@ def command_unbundle(arguments):
         print(f"error: {error}", file=sys.stderr)
         return 1
     print(f"extracted {len(names)} files to {arguments.output}")
+    return 0
+
+
+def command_build_runtime(arguments):
+    from ..solution.workspace import WorkspaceError, build_runtime, find
+
+    try:
+        path = build_runtime(find(arguments.directory), force=arguments.force)
+    except WorkspaceError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    print(f"built {path}")
     return 0
 
 
@@ -184,16 +221,28 @@ def main(argv=None):
     parser = argparse.ArgumentParser(prog="relpose", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True, metavar="command")
 
-    bundle = commands.add_parser("bundle", help="[solution] embed a directory of Python code into the Python runtime -> solution .wasm")
+    init = commands.add_parser("init", help="[solution] create a workspace: the minimal Python or native (C++) solution with its own toolchain")
+    init.add_argument("flavour", choices=["python", "native"])
+    init.add_argument("directory", help="new (or empty) directory")
+    init.set_defaults(function=command_init)
+
+    bundle = commands.add_parser("bundle", help="[solution] solution directory -> .wasm: Python code embedded into the Python runtime, "
+                                                "native code (a CMakeLists.txt) compiled with wasi-sdk")
     bundle.add_argument("directory")
     bundle.add_argument("-o", "--output", required=True, help="output .wasm")
-    bundle.add_argument("--runtime", help="runtime.wasm to build on (default: $RELPOSE_RUNTIME or build/runtime/dist/runtime.wasm)")
+    bundle.add_argument("--runtime", help="Python: runtime.wasm to build on (default: $RELPOSE_RUNTIME, else the workspace's "
+                                          "build/runtime/dist/runtime.wasm, built first if missing)")
     bundle.set_defaults(function=command_bundle)
 
     unbundle = commands.add_parser("unbundle", help="[solution] extract the embedded directory from a solution .wasm")
     unbundle.add_argument("wasm")
     unbundle.add_argument("-o", "--output", required=True, help="output directory")
     unbundle.set_defaults(function=command_unbundle)
+
+    build_runtime = commands.add_parser("build-runtime", help="[solution] build the workspace's Python runtime (runtime.wasm), e.g. after changing runtime/")
+    build_runtime.add_argument("directory", nargs="?", default=".", help="a directory inside the workspace (default: the current one)")
+    build_runtime.add_argument("--force", action="store_true", help="delete the previous build first instead of building incrementally")
+    build_runtime.set_defaults(function=command_build_runtime)
 
     check = commands.add_parser("check", help="[runner] instantiate a module and run a few synthetic frames through it")
     check.add_argument("wasm", help="solution .wasm")

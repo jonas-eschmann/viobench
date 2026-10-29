@@ -23,7 +23,6 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-import cv2
 import numpy as np
 
 from ... import abi
@@ -208,6 +207,8 @@ def simulate(sim, seeds, scenes=None, camera=nominal_camera, name="sim", log=pri
 
 def _run_batch(env, sim, seed, scene_name, camera, name, log):
     import time
+
+    import cv2  # not at the top: the CLI loads this module for its arguments, without relpose[data]
 
     imu_rate = float(round(1.0 / float(env.dt)))  # env.dt is float32 (0.00499999989)
     dt = 1.0 / imu_rate

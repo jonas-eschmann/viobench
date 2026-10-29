@@ -18,11 +18,11 @@ import shutil
 import tempfile
 from pathlib import Path
 
-import cv2
 import numpy as np
-import yaml
 
 from .episode import Episode, FrameSequence
+
+# cv2 and yaml (relpose[data]) are imported where they are used: the CLI loads this module, and has to start without them
 
 FORMAT = 1
 CAM_HEADER = "#timestamp [ns],filename"
@@ -36,6 +36,9 @@ def _nanoseconds(seconds, origin_ns=0):
 
 def write_episode(episode, directory, origin_ns=0):
     """Writes the episode; origin_ns is added to all timestamps (0 for simulated data)."""
+    import cv2
+    import yaml
+
     directory = Path(directory)
     cam = directory / "mav0" / "cam0"
     imu = directory / "mav0" / "imu0"
@@ -151,6 +154,8 @@ def _read_csv(path):
 
 def read_png(path, channels):
     """One frame as the episode format stores it: (H, W) uint8 for 1 channel, (H, W, 3) RGB for 3."""
+    import cv2
+
     image = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE if channels == 1 else cv2.IMREAD_COLOR)
     if image is None:
         raise OSError(f"could not read {path}")
@@ -159,6 +164,8 @@ def read_png(path, channels):
 
 def read_episode(directory, frames="lazy", dataset=None):
     """frames: "lazy" (decode PNGs on demand, default), "memory" (load everything), "none" (metadata only)."""
+    import yaml
+
     directory = Path(directory)
     manifest = json.loads((directory / "episode.json").read_text())
     if manifest.get("format") != FORMAT:

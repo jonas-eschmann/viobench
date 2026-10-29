@@ -1,9 +1,10 @@
 """The smallest valid solution: reports the identity pose and a zero twist (standing still) for every frame.
 
-Use it as the template for your own: keep the class name `Solution`, the constructor signature and `step`.
+Use it as the template for your own (`relpose init python <dir>` starts a workspace with it): keep the class name
+`Solution`, the constructor signature and `step`.
 Bundle and check it with
-    relpose bundle relpose/solution/examples/python/minimal -o minimal.wasm
-    relpose check minimal.wasm
+    relpose bundle <this directory> -o solution.wasm
+    relpose check solution.wasm
 """
 import numpy as np
 

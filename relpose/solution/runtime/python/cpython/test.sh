@@ -3,8 +3,8 @@
 set -euo pipefail
 
 HERE=$(cd "$(dirname "$0")" && pwd)
-BUILD=${BUILD:-$HERE/../../../../../build/runtime}
-TOOLCHAIN=${TOOLCHAIN:-$HERE/../../../../../build/toolchain}
+BUILD=${BUILD:-$HERE/../../../build/runtime}
+TOOLCHAIN=${TOOLCHAIN:-$HERE/../../../build/toolchain}
 VENV=${VENV:-$TOOLCHAIN/venv}
 WASMTIME=${WASMTIME:-$TOOLCHAIN/wasmtime/wasmtime}
 TESTS=$BUILD/tests

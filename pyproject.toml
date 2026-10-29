@@ -24,8 +24,8 @@ dev = ["pytest", "opencv-python-headless>=4.9", "pyyaml>=6", "torch", "onnx"]
 [project.scripts]
 relpose = "relpose.tools.cli:main"
 
-# relpose.tools is the host side; relpose.solution is the guest side and consists of files, not modules, except the
-# Python runtime's bundler, reached through implicit namespace packages (no __init__.py in solution/runtime/python).
+# relpose.tools is the host side; relpose.solution is the guest side and consists of files, not modules, except
+# workspace.py and the Python runtime's bundler, reached through implicit namespace packages (no __init__.py in solution/).
 [tool.setuptools.packages.find]
 include = ["relpose", "relpose.tools*", "relpose.solution", "relpose.solution.runtime", "relpose.solution.runtime.python", "relpose.solution.runtime.python.bundler"]
 namespaces = true
@@ -33,6 +33,11 @@ namespaces = true
 [tool.setuptools.package-data]
 "relpose.tools.datasets.generate" = ["*.h.in"]
 "relpose.tools" = ["config.json"]
+# the build recipe and the minimal examples, which `relpose init` copies into new workspaces
+"relpose.solution" = [
+    "toolchain/*", "runtime/native/*", "runtime/python/*", "runtime/python/guest/*", "runtime/python/cpython/*",
+    "runtime/python/cpython/patches/*", "runtime/python/cpython/scripts/*", "examples/python/minimal/*", "examples/native/cpp_minimal/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

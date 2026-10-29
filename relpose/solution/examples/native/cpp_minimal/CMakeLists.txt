@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.20)
 project(solution C CXX)
-# wasm (the submission): relpose/solution/runtime/native/build.sh <this directory>
+# wasm (the submission): relpose bundle <this directory> -o solution.wasm
 # host debug build:      cmake -S . -B build-host && cmake --build build-host && build-host/debug <feed dir>   (docs/DEBUGGING.md)
 set(CMAKE_CXX_STANDARD 17)
 if(NOT CMAKE_BUILD_TYPE)

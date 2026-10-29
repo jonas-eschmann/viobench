@@ -205,7 +205,7 @@ def test_failed_image_write_preserves_destination(tmp_path, monkeypatch, frames)
         return False
 
     monkeypatch.setattr(storage.shutil, "copyfile", fail_copy)
-    monkeypatch.setattr(storage.cv2, "imwrite", fail_encode)
+    monkeypatch.setattr("cv2.imwrite", fail_encode)  # storage imports cv2 inside write_episode
     with pytest.raises(OSError):
         write_episode(source, destination)
     assert [path.read_bytes() for path in paths] == original_pngs
