@@ -4,7 +4,7 @@
 - `geometry`  SE(3) / quaternion helpers shared by runner and datasets
 - `datasets`  episodes: the container, the on-disk format, and the producers (`generate`: HyperDrone)
 - `runner`    Engine, Sandbox, metrics, evaluate over a Dataset, leaderboard   — the Runner Library
-- `server`    submissions over HTTP → the same runner on the server's datasets → leaderboard
+- `server`    submissions over HTTP → the same runner on the server's datasets → each team's own results
 - `cli`       `relpose` command line over all of the above (and `bundle`, the Python runtime's packaging step)
 
 Dependencies point downward only: runner and datasets depend on abi/geometry; server depends on runner; nothing on

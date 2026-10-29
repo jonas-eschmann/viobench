@@ -34,9 +34,12 @@ pose held, standing still.
 |---|---|
 | fuel per step | 2 × 10¹⁰ (≈ 1 s) |
 | fuel for init | 2 × 10¹¹ |
-| memory | 2 GiB |
+| memory | 2 GiB (one linear memory) |
+| function table | one, up to 2²⁰ entries |
 | wall clock per step | 60 s |
 | submission size | 128 MiB (the Python runtime is 48 MiB) |
+
+These are the defaults; the server's values are at `GET /config`, and `relpose evaluate --limits` takes them.
 
 ## Data
 

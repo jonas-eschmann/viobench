@@ -9,6 +9,7 @@ The CLI is the one host component that also reaches into the guest side (for `bu
 """
 import argparse
 import itertools
+import json
 import sys
 import threading
 
@@ -78,10 +79,18 @@ def command_check(arguments):
 
 def command_evaluate(arguments):
     from .runner.run import evaluate
+    from .runner.sandbox import Limits
 
     if not arguments.datasets and not arguments.simulate:
         raise SystemExit("evaluate needs dataset directories and/or --simulate N")
     max_episodes = arguments.max_episodes
+    limits = None
+    if arguments.limits:
+        try:
+            values = json.loads(arguments.limits)
+            limits = Limits.from_dict(values.get("limits", values))  # the server's GET /config has them under "limits"
+        except (ValueError, TypeError) as error:
+            raise SystemExit(f"--limits: {error}") from None
 
     def dataset():
         from .datasets.storage import episodes
@@ -94,7 +103,7 @@ def command_evaluate(arguments):
             yield from itertools.islice(dataset_from_arguments(arguments), arguments.simulate)
 
     def run():
-        result = evaluate(arguments.wasm, dataset(), output_dir=arguments.output, max_episodes=max_episodes)
+        result = evaluate(arguments.wasm, dataset(), output_dir=arguments.output, limits=limits, max_episodes=max_episodes)
         summary = result["summary"]["overall"]
         print(f"overall: {summary['completed']}/{summary['episodes']} episodes completed, RPE median {summary['rpe_translation_rmse_median']:.3f} m/1 s, "
               f"fuel/frame median {summary['fuel_per_frame_median']:,.0f}")
@@ -207,6 +216,7 @@ def main(argv=None):
     evaluate.add_argument("datasets", nargs="*", help="episode directories or directories of episodes")
     evaluate.add_argument("-o", "--output", help="report directory (default: ./report-<name>)")
     evaluate.add_argument("--max-episodes", type=int)
+    evaluate.add_argument("--limits", metavar="JSON", help="sandbox limits: a JSON object with any of Limits' fields, or the server's GET /config response")
     evaluate.add_argument("--simulate", type=int, metavar="N", help="also evaluate on N fresh HyperDrone episodes (GPU; options below)")
     add_simulation_arguments(evaluate)
     evaluate.set_defaults(function=command_evaluate)

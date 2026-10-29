@@ -1,24 +1,25 @@
 """FastAPI submission server.  Run:  uvicorn relpose.tools.server.app:app --host 0.0.0.0 --port 8000
 
-Environment: RELPOSE_SERVER_DIR (uploads, reports, sqlite; default ./server-data), RELPOSE_TOKENS (file with
-"token user" lines; default <dir>/tokens.txt), RELPOSE_MAX_UPLOAD_MIB (128), RELPOSE_DAILY_QUOTA (20).
+    POST /submissions        multipart: file (the .wasm), label (optional)  -> 201 and the new submission
+    GET  /submissions        the team's submissions, newest first
+    GET  /submissions/{id}   one of them, with its results once evaluated
+    GET  /config             the rules: daily quota, upload size, evaluation timeout, sandbox limits (`server.config`)
+
+Every request carries "Authorization: Bearer <token>" (tokens: `python -m relpose.tools.server.teams`) and sees only
+its own team's submissions. RELPOSE_SERVER_DIR: uploads, reports, sqlite and config.json (default ./server-data).
 The evaluation itself is done by `relpose.tools.server.worker`, which polls the queue.
 """
-import html
 import json
-import os
-import time
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
 
 from ..abi import AbiError
 from ..abi.module import runtime_descriptor
 from ..abi.wasm_binary import iter_sections
-from ..runner.leaderboard import pareto_front
-from .store import DAILY_QUOTA, MAX_UPLOAD_BYTES, METRICS_FILE, Store
+from .store import Store
 
-app = FastAPI(title="relpose challenge")
+app = FastAPI(title="relpose submissions", docs_url=None, redoc_url=None, openapi_url=None)  # the routes below, nothing else
 _store = None
 
 
@@ -29,21 +30,32 @@ def get_store():
     return _store
 
 
-def authenticate(token):
-    user = get_store().tokens().get(token or "")
-    if user is None:
-        raise HTTPException(status_code=401, detail="unknown token")
-    return user
+def authenticate(authorization):
+    """The token of an "Authorization: Bearer <token>" header, i.e. the team; 401 unless it is one."""
+    scheme, _, token = (authorization or "").partition(" ")
+    token = token.strip()
+    if scheme.lower() != "bearer" or not get_store().is_team(token):
+        raise HTTPException(status_code=401, detail="unknown token", headers={"WWW-Authenticate": "Bearer"})
+    return token
 
 
-@app.post("/submit")
-async def submit(file: UploadFile = File(...), label: str = Form(""), x_token: str | None = Header(default=None)):
-    user = authenticate(x_token)
-    if get_store().submissions_today(user) >= DAILY_QUOTA:
-        raise HTTPException(status_code=429, detail=f"daily quota of {DAILY_QUOTA} submissions reached")
+def public(row):
+    """A submission as the API shows it: times in ISO 8601 (UTC), results parsed."""
+    for key in ("created", "started", "finished"):
+        if row[key] is not None:
+            row[key] = datetime.fromtimestamp(row[key], timezone.utc).isoformat(timespec="seconds")
+    if "results" in row:
+        row["results"] = json.loads(row["results"]) if row["results"] else None
+    return row
+
+
+@app.post("/submissions", status_code=201)
+async def submit(file: UploadFile = File(...), label: str = Form(""), authorization: str | None = Header(default=None)):
+    token = authenticate(authorization)
+    config = get_store().config
     data = await file.read()
-    if len(data) > MAX_UPLOAD_BYTES:
-        raise HTTPException(status_code=413, detail=f"file larger than {MAX_UPLOAD_BYTES >> 20} MiB")
+    if len(data) > config.max_upload_mib << 20:
+        raise HTTPException(status_code=413, detail=f"file larger than {config.max_upload_mib} MiB")
     try:
         sections = list(iter_sections(data))
     except ValueError as error:
@@ -56,66 +68,27 @@ async def submit(file: UploadFile = File(...), label: str = Form(""), x_token: s
         raise HTTPException(status_code=400, detail=str(error)) from None
     if descriptor is not None and descriptor.length == 0:
         raise HTTPException(status_code=400, detail="this is the bare Python runtime without solution code: run `relpose bundle`")
-    submission_id = get_store().add(user, label[:80], file.filename or "solution.wasm", data)
-    return {"id": submission_id, "user": user, "bytes": len(data), "kind": "python" if descriptor else "native", "status": "queued"}
+    submission_id = get_store().add(token, label[:80], file.filename or "solution.wasm", data)
+    if submission_id is None:
+        raise HTTPException(status_code=429, detail=f"quota of {config.daily_quota} submission(s) per day reached; "
+                                                    f"it resets at midnight ({config.quota_time_zone})")
+    return public(get_store().get(token, submission_id))
+
+
+@app.get("/submissions")
+def submissions(authorization: str | None = Header(default=None)):
+    return [public(row) for row in get_store().submissions(authenticate(authorization))]
 
 
 @app.get("/submissions/{submission_id}")
-def submission(submission_id: int, x_token: str | None = Header(default=None)):
-    user = authenticate(x_token)
-    row = get_store().get(submission_id)
-    if row is None or row["user"] != user:
+def submission(submission_id: str, authorization: str | None = Header(default=None)):
+    row = get_store().get(authenticate(authorization), submission_id)
+    if row is None:
         raise HTTPException(status_code=404, detail="no such submission")
-    row["summary"] = json.loads(row["summary"]) if row["summary"] else None
-    return row
+    return public(row)
 
 
-@app.get("/submissions/{submission_id}/metrics")
-def metrics(submission_id: int, x_token: str | None = Header(default=None)):
-    user = authenticate(x_token)
-    row = get_store().get(submission_id)
-    if row is None or row["user"] != user:
-        raise HTTPException(status_code=404, detail="no such submission")
-    path = get_store().report_dir(submission_id) / METRICS_FILE  # written by the worker; never the report or the logs
-    if not path.is_file():
-        raise HTTPException(status_code=404, detail="no metrics yet")
-    return FileResponse(path, media_type="application/json")
-
-
-@app.get("/mine")
-def mine(x_token: str | None = Header(default=None)):
-    user = authenticate(x_token)
-    rows = get_store().list(user=user)
-    for row in rows:
-        row["summary"] = json.loads(row["summary"]) if row["summary"] else None
-    return rows
-
-
-@app.get("/leaderboard.json")
-def leaderboard_json():
-    return get_store().leaderboard()
-
-
-@app.get("/leaderboard", response_class=HTMLResponse)
-@app.get("/", response_class=HTMLResponse)
-def leaderboard():
-    points = get_store().leaderboard()
-    parts = ["<!doctype html><html><head><meta charset='utf-8'><title>Pose challenge leaderboard</title>",
-             "<style>body{font-family:system-ui,sans-serif;margin:2em;max-width:1100px}table{border-collapse:collapse;margin-bottom:2em}",
-             "td,th{border:1px solid #ccc;padding:4px 8px;text-align:right}th{background:#eee}td:first-child,td:nth-child(2){text-align:left}",
-             ".pareto{font-weight:bold}</style></head><body><h1>Relative pose challenge</h1>",
-             f"<p>{len(get_store().list(limit=100000))} submissions, {len(get_store().list(status='queued'))} queued, {len(get_store().list(status='running'))} running. ",
-             "Submit with <code>curl -F file=@solution.wasm -F label=v1 -H 'X-Token: ...' /submit</code>.</p>"]
-    for dataset, rows in sorted(points.items()):
-        front = {rows[i]["id"] for i in pareto_front([(row["fuel"], row["rpe"]) for row in rows])}
-        parts.append(f"<h2>{html.escape(dataset)}</h2><table><tr><th>user</th><th>label</th><th>RPE [m/1 s]</th><th>ATE [m]</th>"
-                     "<th>fuel/frame</th><th>fuel p95</th><th>ms/frame</th><th>episodes</th><th>id</th><th>when</th></tr>")
-        for row in sorted(rows, key=lambda r: r["rpe"]):
-            when = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["created"]))
-            css = " class='pareto'" if row["id"] in front else ""
-            parts.append(f"<tr{css}><td>{html.escape(row['user'])}</td><td>{html.escape(row['label'] or '')}</td><td>{row['rpe']:.3f}</td>"
-                         f"<td>{row['ate']:.3f}</td><td>{row['fuel']:,.0f}</td><td>{row['fuel_p95']:,.0f}</td><td>{row['ms']:.1f}</td>"
-                         f"<td>{row['completed']}/{row['episodes']}</td><td>{row['id']}</td><td>{when}</td></tr>")
-        parts.append("</table>")
-    parts.append("<p>Bold rows are on the Pareto front (no other submission has both lower fuel and lower RPE).</p></body></html>")
-    return "".join(parts)
+@app.get("/config")
+def configuration(authorization: str | None = Header(default=None)):
+    authenticate(authorization)
+    return get_store().config.as_dict()

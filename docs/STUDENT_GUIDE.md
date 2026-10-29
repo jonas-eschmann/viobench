@@ -34,13 +34,19 @@ relpose debug my_solution data/val                 # in-process, with breakpoint
 
 ## Submit
 
+Your team gets a token from the instructors; only that token sees your submissions.
+
 ```bash
-curl -F file=@my_solution.wasm -F label="klt+imu v3" -H "X-Token: $TOKEN" https://<server>/submit
+curl -F file=@my_solution.wasm -F label="klt+imu v3" -H "Authorization: Bearer $TOKEN" https://<server>/submissions
+curl -H "Authorization: Bearer $TOKEN" https://<server>/submissions          # yours, newest first: id, times, status
+curl -H "Authorization: Bearer $TOKEN" https://<server>/submissions/<id>     # one of them, with results once done
+curl -H "Authorization: Bearer $TOKEN" https://<server>/config               # the rules: quota, limits, timeouts
 ```
 
-The server evaluates on unpublished episodes and returns metrics only, at `/submissions/<id>/metrics`: no stdout,
-stderr or failure messages. An episode that fails shows up as `"completed": false`; reproduce it locally with
-`relpose evaluate`. Quota: 20 submissions per day.
+The server evaluates on unpublished episodes and returns metrics only: no stdout, stderr or failure messages. An
+episode that fails shows up as `"completed": false`; reproduce it locally with `relpose evaluate`, under the server's
+limits with `--limits "$(curl -s -H "Authorization: Bearer $TOKEN" https://<server>/config)"`. Quota: one submission
+per team and day (`daily_quota` in `/config`); the quota resets at midnight Pacific time.
 
 ## Tips
 

@@ -3,7 +3,7 @@ import ctypes
 import json
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -34,9 +34,19 @@ def tail(path, lines=40):
 class Limits:
     init_fuel: int = 200_000_000_000  # covers _initialize and init (interpreter start + imports)
     step_fuel: int = 20_000_000_000  # per step; exceeding it traps and ends the episode
-    memory_bytes: int = 2 << 30
+    memory_bytes: int = 2 << 30  # the module's one linear memory
+    table_elements: int = 1 << 20  # its one table (function references)
     init_wall_seconds: float = 300.0  # wall-clock safety nets only (fuel is the metric)
     step_wall_seconds: float = 60.0
+
+    @classmethod
+    def from_dict(cls, values):
+        """Limits from a JSON object: any subset of the fields (the rest keep their defaults), numbers converted."""
+        defaults = asdict(cls())
+        unknown = sorted(set(values) - set(defaults))
+        if unknown:
+            raise ValueError(f"unknown limits {unknown}; known: {sorted(defaults)}")
+        return cls(**{key: type(defaults[key])(value) for key, value in values.items()})
 
 
 @dataclass
@@ -97,7 +107,9 @@ class Sandbox:
             raise SandboxError(f"{self.path.name} is not a solution module: missing exports {missing} (has {sorted(export_names)})")
 
         self.store = wasmtime.Store(self.engine.wasmtime)
-        self.store.set_limits(memory_size=self.limits.memory_bytes)
+        # per-memory and per-table caps bound the total only with one of each (and one instance)
+        self.store.set_limits(memory_size=self.limits.memory_bytes, table_elements=self.limits.table_elements,
+                              instances=1, memories=1, tables=1)
         wasi = wasmtime.WasiConfig()
         wasi.argv = ["solution"]
         wasi.env = [("RELPOSE", "1")]
@@ -112,7 +124,10 @@ class Sandbox:
         linker.define_wasi()
 
         self._arm(self.limits.init_fuel, self.limits.init_wall_seconds)
-        self.instance = self._guard(lambda: linker.instantiate(self.store, module))
+        try:
+            self.instance = self._guard(lambda: linker.instantiate(self.store, module))
+        except wasmtime.WasmtimeError as error:  # not a trap: beyond the limits above, or an unknown import
+            raise SandboxError(f"{self.path.name} cannot be instantiated: {str(error).splitlines()[0]}") from None
         exports = self.instance.exports(self.store)
         self.memory = exports["memory"]
         self._alloc = exports["alloc"]

@@ -1,4 +1,4 @@
-"""Evaluation worker: polls the queue, runs `relpose evaluate` on the server's datasets, stores the summary.
+"""Evaluation worker: polls the queue, runs `relpose evaluate` on the server's datasets, stores the team's results.
 
     RELPOSE_DATASETS=/data/test/first:/data/test/second python -m relpose.tools.server.worker
 
@@ -13,19 +13,19 @@ import os
 import subprocess
 import sys
 import time
+from dataclasses import asdict
 from pathlib import Path
 
-from .store import METRICS_FILE, Store
+from .store import Store
 
 POLL_SECONDS = 3.0
-TIMEOUT_SECONDS = float(os.environ.get("RELPOSE_EVAL_TIMEOUT", "14400"))  # one submission's whole evaluation
 EPISODE_FIELDS = ("dataset", "name", "frames", "duration_s", "completed", "metrics", "fuel_init", "fuel_per_frame_median",
                   "fuel_per_frame_p95", "fuel_per_frame_mean", "fuel_total", "wall_init_s", "wall_per_frame_median_ms",
                   "wall_per_frame_p95_ms")  # allowlist: numbers, no text from the guest
 
 
-def public_metrics(report):
-    """The part of a report.json a student sees."""
+def public_results(report):
+    """The part of a report.json the team sees."""
     return {"summary": report["summary"], "episodes": [{key: episode[key] for key in EPISODE_FIELDS} for episode in report["episodes"]]}
 
 
@@ -44,28 +44,30 @@ def evaluate_submission(store, submission, datasets, log=print):
     wasm = store.upload_path(submission["id"])
     report_dir = store.report_dir(submission["id"])
     report_dir.mkdir(parents=True, exist_ok=True)
-    command = [sys.executable, "-m", "relpose", "evaluate", str(wasm), *map(str, datasets), "-o", str(report_dir)]
-    log(f"submission {submission['id']} by {submission['user']}: {' '.join(command)}")
+    config = store.config
+    command = [sys.executable, "-m", "relpose", "evaluate", str(wasm), *map(str, datasets), "-o", str(report_dir),
+               "--limits", json.dumps(asdict(config.limits))]
+    log(f"submission {submission['id']} by {submission['name']}: {' '.join(command)}")
     with open(report_dir / "worker.txt", "w") as output:
         try:
-            completed = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, timeout=TIMEOUT_SECONDS, check=False)
+            completed = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, timeout=config.evaluation_timeout_seconds, check=False)
         except subprocess.TimeoutExpired:
-            store.finish(submission["id"], error=f"evaluation exceeded {TIMEOUT_SECONDS:.0f} s")
+            store.finish(submission["id"], error=f"evaluation exceeded {config.evaluation_timeout_seconds:.0f} s")
             return
     report_path = report_dir / "report.json"
     if not report_path.is_file():
         store.finish(submission["id"], error=f"evaluate exited with {completed.returncode} without a report")  # its output: worker.txt
         return
     report = json.loads(report_path.read_text())
-    (report_dir / METRICS_FILE).write_text(json.dumps(public_metrics(report), indent=1))
-    store.finish(submission["id"], summary=report["summary"])
+    store.finish(submission["id"], results=public_results(report))
     log(f"submission {submission['id']}: done ({report['summary']['overall']['completed']}/{report['summary']['overall']['episodes']} episodes)")
 
 
 def main():
     store = Store()
     datasets = datasets_from_environment()
-    print(f"worker: {len(datasets)} dataset directories, polling {store.path}")
+    requeued = store.requeue_running()  # interrupted by a restart: there is only ever one worker
+    print(f"worker: {len(datasets)} dataset directories, polling {store.path}, {requeued} interrupted submission(s) requeued")
     while True:
         submission = store.claim_next()
         if submission is None:
@@ -74,7 +76,8 @@ def main():
         try:
             evaluate_submission(store, submission, datasets)
         except Exception as error:  # noqa: BLE001 - keep the worker alive
-            store.finish(submission["id"], error=f"worker error: {error}")
+            print(f"submission {submission['id']}: worker error: {error!r}")
+            store.finish(submission["id"], error="internal error")  # the details (host paths, ...) stay in the worker's log
 
 
 if __name__ == "__main__":
