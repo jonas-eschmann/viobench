@@ -70,10 +70,10 @@ fetch(open_vins https://github.com/rpng/open_vins/archive/refs/tags/v2.7.tar.gz
 if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
     # everything (Ceres included) links against the OpenCV of the Python runtime build, which uses wasm exceptions
     add_compile_options(-msimd128 -fwasm-exceptions "SHELL:-mllvm -wasm-use-legacy-eh=false")
-    get_filename_component(RELPOSE_REPO ${RELPOSE_NATIVE_DIR}/../../../.. ABSOLUTE)
-    set(RELPOSE_OPENCV_DIR ${RELPOSE_REPO}/build/runtime/opencv-build CACHE PATH "OpenCV built for wasm32-wasip1 by relpose/solution/runtime/python/build.sh")
+    get_filename_component(RELPOSE_WORKSPACE ${RELPOSE_NATIVE_DIR}/../.. ABSOLUTE)
+    set(RELPOSE_OPENCV_DIR ${RELPOSE_WORKSPACE}/build/runtime/opencv-build CACHE PATH "OpenCV built for wasm32-wasip1 by relpose build-runtime")
     if(NOT EXISTS ${RELPOSE_OPENCV_DIR}/OpenCVConfig.cmake)
-        message(FATAL_ERROR "no wasm OpenCV in ${RELPOSE_OPENCV_DIR}: run relpose/solution/runtime/python/build.sh first")
+        message(FATAL_ERROR "no wasm OpenCV in ${RELPOSE_OPENCV_DIR}: run relpose build-runtime first")
     endif()
     find_package(OpenCV REQUIRED COMPONENTS core imgproc features2d video calib3d PATHS ${RELPOSE_OPENCV_DIR} NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 else()
