@@ -30,7 +30,26 @@
  #include "utils/colors.h"
 --- a/ov_init/src/dynamic/DynamicInitializer.cpp
 +++ b/ov_init/src/dynamic/DynamicInitializer.cpp
-@@ -633,6 +633,7 @@
+@@ -97,7 +97,8 @@
+   // ======================================================
+ 
+   // Settings
+-  const int min_num_meas_to_optimize = (int)params.init_window_time;
++  // relpose: triangulation needs at least two observations, including for subsecond initialization windows.
++  const int min_num_meas_to_optimize = std::max(2, (int)params.init_window_time);
+   const int min_valid_features = 8;
+ 
+   // Validation information for features we can use
+@@ -534,7 +535,7 @@
+       Eigen::Vector4d q_ItoC = params.camera_extrinsics.at(cam_id).block(0, 0, 4, 1);
+       Eigen::Vector3d p_IinC = params.camera_extrinsics.at(cam_id).block(4, 0, 3, 1);
+       Eigen::Vector3d p_FinC0 = quat_2_Rot(q_ItoC) * p_FinI0 + p_IinC;
+-      if (p_FinC0(2) < 0) {
++      if (!p_FinC0.allFinite() || p_FinC0(2) <= 0.0) {
+         is_behind = true;
+       }
+     }
+@@ -633,6 +634,7 @@
    // options.linear_solver_ordering = ordering;
    options.function_tolerance = 1e-5;
    options.gradient_tolerance = 1e-4 * options.function_tolerance;
@@ -66,7 +85,8 @@
 -  }
 +  };
 +  initialize();
-   return false;
+-  return false;
++  return thread_init_success;
  }
  
 --- a/ov_msckf/src/core/VioManagerOptions.h

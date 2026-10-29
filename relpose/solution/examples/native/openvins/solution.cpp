@@ -127,7 +127,9 @@ ov_msckf::VioManagerOptions make_options(int width, int height, const double int
     // initialization: static while hovering (both halves of the window still), else dynamic (Ceres MLE, single-threaded and
     // bounded by iterations only, so the fuel does not depend on the machine)
     ov_init::InertialInitializerOptions& init = options.init_options;
-    init.init_window_time = 1.0;
+    // OpenVINS also requires 0.1 s of history before trying this window. Leave time to initialize during the
+    // simulator's one-second startup hover; both image disparity and IMU variance must still pass the static checks.
+    init.init_window_time = 0.5;
     init.init_imu_thresh = 1.0;
     init.init_max_disparity = 1.5;
     init.init_max_features = 75;
@@ -176,6 +178,7 @@ struct State {
     double gravity = 9.81;
     long frames = 0;
     double t0 = 0;
+    double next_init_warning = 5.0;
     std::vector<ov_core::ImuData> imu;  // every sample since the first frame, until the first camera pose is known
     Eigen::Matrix3d R_I0_I = Eigen::Matrix3d::Identity();  // gyro attitude before initialization
     bool anchored = false;
@@ -256,6 +259,11 @@ int32_t estimate(double t, const uint8_t* frame, const double* imu, int32_t imu_
     state.vio->feed_measurement_camera(message);
 
     if (!state.vio->started()) {  // the gyro attitude, in place
+        if (t - state.t0 >= state.next_init_warning) {
+            std::fprintf(stderr, "openvins: still initializing after %.1f s; position and linear velocity are unavailable "
+                                 "(returning zero translation and gyro-only rotation)\n", t - state.t0);
+            state.next_init_warning = t - state.t0 + 5.0;
+        }
         write(out, camera_pose(state.R_I0_I, Eigen::Vector3d::Zero()), Eigen::Vector3d::Zero(), state.R_ItoC * gyro_mean);
         return RELPOSE_STATUS_OK;
     }

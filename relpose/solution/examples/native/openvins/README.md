@@ -17,7 +17,7 @@ The first configure downloads OpenVINS 2.7, Ceres 2.1.0 and Eigen 3.4.1 (pinned 
 |---|---|
 | `solution.cpp` | the ABI around `VioManager`; all tuning is in `make_options` |
 | `CMakeLists.txt` | fetches the sources, builds Ceres (no threads, miniglog) and OpenVINS' `ov_core`, `ov_init`, `ov_msckf` |
-| `patches/open_vins.patch` | initialization in the calling thread, no `highgui`/`imgcodecs`, a silent Ceres log |
+| `patches/open_vins.patch` | synchronous initialization, valid dynamic-initialization landmarks, no `highgui`/`imgcodecs`, a silent Ceres log |
 | `compat/boost/` | the three Boost headers OpenVINS includes: timing, χ² quantiles, filesystem |
 
 ## Porting to wasm32-wasip1
@@ -36,7 +36,8 @@ The first configure downloads OpenVINS 2.7, Ceres 2.1.0 and Eigen 3.4.1 (pinned 
 
 ## From OpenVINS' state to the ABI
 
-- Before initialization: the gyro-integrated attitude, standing still.
+- Before initialization: the gyro-integrated attitude, standing still. If initialization takes more than five seconds,
+  stderr reports that position and linear velocity are unavailable, repeating every five seconds until initialization.
 - At initialization, the camera pose of the first frame in OpenVINS' gravity-aligned frame comes from integrating the
   buffered IMU back from the initial state. Every later pose is relative to it.
 - Each step: the filter's state at the frame time (propagated with `fast_state_propagate` while the filter has not
@@ -46,13 +47,27 @@ The first configure downloads OpenVINS 2.7, Ceres 2.1.0 and Eigen 3.4.1 (pinned 
 Zero-velocity updates stay on throughout. A hovering or creeping drone gives a monocular MSCKF too little parallax to
 triangulate, and without them it would drift on the IMU alone.
 
+Static initialization uses a 0.5-second window plus OpenVINS' 0.1-second history margin, so it can finish during the
+simulator's one-second startup hover. Image-disparity and IMU-variance checks still reject moving input. Dynamic
+initialization requires at least two observations per landmark and rejects nonfinite or nonpositive depths before
+constructing the Ceres problem; a single monocular observation cannot determine depth. Synchronous initialization
+reports success immediately so the same camera frame can use the initialized state.
+
+`openvins: initialized at ...` in stdout confirms filter initialization. The evaluator's `ok` only means the module
+returned usable numbers for every frame; it does not establish successful initialization or accurate tracking.
+
+After building the example, `pytest tests/test_openvins.py` checks stationary startup, moving-camera initialization
+with short feature tracks, and the warning when images have no features. Set `RELPOSE_OPENVINS` to test another build.
+
 ## Results
 
-On the demo episode (10 s; the drone hovers, then creeps forward at under 0.4 m/s): RPE 0.151 m/1 s (`python/minimal`:
-0.178), 33 M fuel per frame (p95 102 M, the largest step 275 M); a step that runs the dynamic initializer's Ceres solve
-costs around 0.8 G. Slow, nearly straight flight gives monocular VIO neither the parallax nor the acceleration to observe
-scale. `make_options` starts from OpenVINS' EuRoC configuration, adapted to 320 × 240 and a hovering start: tune it on
-the training episodes.
+On the demo episode (10 s; the drone hovers, then creeps forward at under 0.4 m/s): RPE 0.126 m/1 s (`python/minimal`:
+0.178), 33 M fuel per frame (p95 86 M). Slow, nearly straight flight gives monocular VIO neither the parallax nor the
+acceleration to observe scale. `make_options` starts from OpenVINS' EuRoC configuration, adapted to 320 × 240 and a
+hovering start: tune it on the training episodes.
+
+The 120-second `sim-ProcTHOR-Train-0-00000-00` recording initializes at 0.995 s, but subsequently loses tracking and
+drifts severely. Successful startup does not resolve this remaining tracking limitation.
 
 The host build (`docs/DEBUGGING.md`) needs OpenCV with `core`, `imgproc`, `features2d`, `video` and `calib3d`
 (Ubuntu: `sudo apt install libopencv-dev`; elsewhere `-DOpenCV_DIR=...`).
