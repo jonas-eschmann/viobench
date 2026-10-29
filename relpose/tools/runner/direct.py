@@ -128,7 +128,11 @@ def run(solution, dataset, output_dir=None, max_episodes=None, log=print):
             seconds.append(step.seconds)
         metrics = evaluate_trajectory(episode.ground_truth_state(), estimates, episode.frame_times)
         if output_dir is not None:
-            write_estimates(Path(output_dir) / episode.dataset / episode.name, episode.frame_times, estimates)
+            directory = Path(output_dir) / episode.dataset / episode.name
+            write_estimates(directory, episode.frame_times, estimates)
+            from .video import write_video
+
+            log(f"video: {write_video(episode, estimates, directory / 'trajectory.mp4')}")
         log(f"{episode.dataset}/{episode.name}: RPE {metrics.rpe_translation_rmse:.3f} m/1 s  ATE {metrics.ate_rmse:.3f} m  "
             f"rot {np.degrees(metrics.rotation_rmse):.1f} deg  vel {metrics.velocity_rmse:.3f} m/s  held {metrics.held}  "
             f"{np.median(seconds) * 1e3:.1f} ms/frame (host, no fuel)")
@@ -146,7 +150,7 @@ def add_arguments(parser):
     parser.add_argument("datasets", nargs="*", help="episode directories or directories of episodes")
     parser.add_argument("--simulate", type=int, metavar="N", help="also run on N fresh HyperDrone episodes (GPU; options below)")
     parser.add_argument("--max-episodes", type=int, help="stop after this many episodes")
-    parser.add_argument("-o", "--output", help="write estimate.tum and twist.txt per episode under this directory")
+    parser.add_argument("-o", "--output", help="write estimate.tum, twist.txt and trajectory.mp4 per episode under this directory")
     add_simulation_arguments(parser)
 
 

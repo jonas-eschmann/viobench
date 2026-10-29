@@ -8,3 +8,6 @@ relpose/solution/examples/native/*/build-host/
 report-*/
 server-data/
 *.egg-info/
+data
+/**/.DS_Store
+output

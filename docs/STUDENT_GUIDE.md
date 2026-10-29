@@ -26,6 +26,7 @@ cp -r relpose/solution/examples/python/dead_reckoning my_solution
 relpose bundle my_solution -o my_solution.wasm     # after every edit
 relpose check my_solution.wasm                     # a few synthetic frames: errors, fuel per step
 relpose evaluate my_solution.wasm data/val         # metrics and fuel; --simulate 8 for fresh episodes
+relpose evaluate my_solution.wasm data/val -o report-my_solution   # also save trajectory videos
 relpose debug my_solution data/val                 # in-process, with breakpoint() (docs/DEBUGGING.md)
 ```
 

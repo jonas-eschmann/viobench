@@ -8,7 +8,7 @@ feed: no fuel and no limits, and your host's libraries. `check` and `evaluate` r
 ```bash
 relpose debug my_solution data/val --max-episodes 1
 relpose debug my_solution --simulate 2             # fresh simulated episodes (GPU)
-relpose debug my_solution data/val -o out          # also writes estimate.tum and twist.txt per episode
+relpose debug my_solution data/val -o out          # writes estimate.tum, twist.txt and trajectory.mp4 under out/<dataset>/<episode>/
 ```
 
 `breakpoint()` works anywhere in your code; in VS Code, use the launch configuration *relpose: debug Python solution*.

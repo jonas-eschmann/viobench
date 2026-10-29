@@ -85,6 +85,10 @@ def test_direct_cli(tmp_path, capsys):
     assert "ATE" in capsys.readouterr().out
     assert (tmp_path / "out" / "set" / episode.name / "estimate.tum").is_file()
     assert (tmp_path / "out" / "set" / episode.name / "twist.txt").is_file()
+    from tests.test_video import read_video
+
+    fps, frames = read_video(tmp_path / "out" / "set" / episode.name / "trajectory.mp4")
+    assert fps == pytest.approx(20.0) and len(frames) == episode.num_frames
 
 
 def test_feed_and_score(tmp_path, capsys):
