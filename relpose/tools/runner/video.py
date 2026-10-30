@@ -23,7 +23,7 @@ def _text(image, text, position, colour=TEXT, scale=0.45):
 
 class _Minimap:
     def __init__(self, truth, estimates, axes):
-        points = np.concatenate([truth[:, axes], estimates[:, axes]])
+        points = truth[:, axes] if estimates is None else np.concatenate([truth[:, axes], estimates[:, axes]])
         lower, upper = points.min(axis=0), points.max(axis=0)
         centre = (lower + upper) / 2
         span = max(float(np.max(upper - lower)) * 1.15, 1.0)
@@ -33,7 +33,7 @@ class _Minimap:
             return np.rint(xy * [1, -1] + [110, 110]).astype(np.int32)
 
         self.truth = project(truth)
-        self.estimates = project(estimates)
+        self.estimates = None if estimates is None else project(estimates)
         self.trail = np.full((MAP_HEIGHT, MAP_WIDTH, 3), BACKGROUND, dtype=np.uint8)
         for offset in range(0, 165, 41):
             cv2.line(self.trail, (28 + offset, 28), (28 + offset, 192), (60, 68, 80))
@@ -46,23 +46,27 @@ class _Minimap:
 
     def draw(self, frame, index, left, top):
         for points, colour in ((self.truth, TRUTH), (self.estimates, ESTIMATE)):
-            if index:
+            if index and points is not None:
                 cv2.line(self.trail, tuple(points[index - 1]), tuple(points[index]), colour, 2, cv2.LINE_AA)
         panel = self.trail.copy()
         # A ring and a filled dot remain distinguishable when the two positions coincide.
         cv2.circle(panel, tuple(self.truth[index]), 6, TRUTH, 2, cv2.LINE_AA)
-        cv2.circle(panel, tuple(self.estimates[index]), 3, ESTIMATE, -1, cv2.LINE_AA)
+        if self.estimates is not None:
+            cv2.circle(panel, tuple(self.estimates[index]), 3, ESTIMATE, -1, cv2.LINE_AA)
         frame[top:top + MAP_HEIGHT, left:left + MAP_WIDTH] = panel
 
 
 def write_video(episode, estimates, path):
-    """Stream camera frames and camera-0 trajectory minimaps to an MP4 at the episode's frame rate."""
+    """Stream camera frames and camera-0 trajectory minimaps at the episode's frame rate; estimates=None shows truth only."""
     path = Path(path)
-    estimates = np.asarray(estimates, dtype=float)
-    if episode.num_frames == 0 or estimates.shape != (episode.num_frames, abi.STATE_VALUES):
-        raise ValueError("video needs one estimated state per frame and at least one frame")
-    usable = valid_states(estimates)
-    estimates = hold_last_state(estimates)[:, :3]
+    if episode.num_frames == 0:
+        raise ValueError("video needs at least one frame")
+    if estimates is not None:
+        estimates = np.asarray(estimates, dtype=float)
+        if estimates.shape != (episode.num_frames, abi.STATE_VALUES):
+            raise ValueError("video needs one estimated state per frame")
+        usable = valid_states(estimates)
+        estimates = hold_last_state(estimates)[:, :3]
     truth = episode.ground_truth_relative()[:, :3]
     maps = [_Minimap(truth, estimates, axes) for axes in ((0, 2), (1, 2))]
     fps = float(episode.config["episode"]["frame_rate_hz"])
@@ -84,12 +88,13 @@ def write_video(episode, estimates, path):
                 canvas = np.full((480, 640 + MAP_WIDTH, 3), BACKGROUND, dtype=np.uint8)
                 canvas[:, :640] = frame
                 elapsed = episode.frame_times[index] - episode.frame_times[0]
-                error = np.linalg.norm(estimates[index] - truth[index])
                 _text(canvas, f"t={elapsed:.2f}s  {index + 1}/{episode.num_frames}", (648, 17))
-                label = "Position error" if usable[index] else "Error (pose held)"
-                _text(canvas, f"{label}: {error:.2f} m", (648, 36), scale=0.4)
                 _text(canvas, "Ground truth", (648, 55), TRUTH, scale=0.4)
-                _text(canvas, "Estimate", (758, 55), ESTIMATE, scale=0.4)
+                if estimates is not None:
+                    error = np.linalg.norm(estimates[index] - truth[index])
+                    label = "Position error" if usable[index] else "Error (pose held)"
+                    _text(canvas, f"{label}: {error:.2f} m", (648, 36), scale=0.4)
+                    _text(canvas, "Estimate", (758, 55), ESTIMATE, scale=0.4)
                 maps[0].draw(canvas, index, 640, HEADER_HEIGHT)
                 maps[1].draw(canvas, index, 640, HEADER_HEIGHT + MAP_HEIGHT)
                 writer.write(canvas)

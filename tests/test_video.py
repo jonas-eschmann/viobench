@@ -30,7 +30,8 @@ def read_video(path):
 
 
 @pytest.mark.parametrize("channels,n_frames", [(1, 1), (3, 8)])
-def test_video_replays_lazy_frames_in_colour_and_at_source_rate(tmp_path, channels, n_frames):
+@pytest.mark.parametrize("with_estimates", [False, True])
+def test_video_replays_lazy_frames_in_colour_and_at_source_rate(tmp_path, channels, n_frames, with_estimates):
     episode = synthetic_episode(n_frames=n_frames, channels=channels, rate=10.0)
     loaded = []
 
@@ -42,7 +43,7 @@ def test_video_replays_lazy_frames_in_colour_and_at_source_rate(tmp_path, channe
     episode.frames = FrameSequence(frame, n_frames, episode.frames.shape[1:])
     estimates = episode.ground_truth_state()
     estimates[n_frames // 2:] = np.nan  # failed estimates, including a failure at the very first frame
-    path = write_video(episode, estimates, tmp_path / "trajectory.mp4")
+    path = write_video(episode, estimates if with_estimates else None, tmp_path / "trajectory.mp4")
     assert loaded == list(range(n_frames)), "read each frame once, without materialising the episode"
     fps, frames = read_video(path)
     assert fps == pytest.approx(10.0) and len(frames) == n_frames
@@ -68,6 +69,35 @@ def test_video_keeps_previous_output_if_frame_loading_fails(tmp_path):
         write_video(episode, estimates, path)
     assert path.read_bytes() == b"previous video"
     assert list(tmp_path.iterdir()) == [path]
+
+
+@pytest.mark.parametrize("no_video", [False, True])
+def test_simulate_cli_writes_video_in_each_episode_by_default(tmp_path, monkeypatch, no_video):
+    episodes = [synthetic_episode(n_frames=3, rate=10.0, channels=3) for _ in range(3)]
+    for index, episode in enumerate(episodes):
+        episode.name = f"sim-{index}"
+        episode.config["camera"]["horizontal_fov_degrees"] = 60.0
+    monkeypatch.setattr("relpose.tools.datasets.generate.simulation.dataset_from_arguments", lambda args: iter(episodes))
+    if no_video:
+        def unexpected(*args, **kwargs):
+            pytest.fail("video rendered with --no-video")
+
+        monkeypatch.setattr("relpose.tools.runner.video.write_video", unexpected)
+    output = tmp_path / "dataset"
+    args = ["simulate", "-o", str(output), "--episodes", "2"]
+    if no_video:
+        args.append("--no-video")
+    assert cli(args) == 0
+    assert sorted(path.name for path in output.iterdir()) == ["sim-0", "sim-1"]
+    for episode in episodes[:2]:
+        directory = output / episode.name
+        assert (directory / "episode.json").is_file()
+        assert len(list((directory / "mav0/cam0/data").glob("*.png"))) == episode.num_frames
+        video = directory / "trajectory.mp4"
+        assert video.is_file() == (not no_video)
+        if not no_video:
+            fps, frames = read_video(video)
+            assert fps == pytest.approx(10.0) and len(frames) == episode.num_frames
 
 
 # A native identity solution exercises the full evaluator without building the Python WASM runtime.

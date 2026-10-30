@@ -48,9 +48,10 @@ class SimConfig:
     frame_rate_hz: float = 20.0
     duration_seconds: float = 60.0  # flight time per episode; frames = duration x frame rate (HyperDrone's own step limit is informational)
     waypoints: int | None = None  # route length; None scales it with the duration (num_waypoints), the route cycles when exhausted
-    fov_range: float = 15.0  # horizontal FOV = nominal (63.8 deg) + U(-fov_range, fov_range) degrees per episode
+    fov_range: float = 15.0  # horizontal FOV = fov + U(-fov_range, fov_range) degrees per episode
     hold_seconds: float = 1.0  # hover before the route starts
     spool: str | None = None  # directory for the frames while a batch renders (default: $RELPOSE_SPOOL or the system temp dir)
+    fov: float = NOMINAL_FOV_DEGREES  # base horizontal FOV in degrees, before per-episode randomization
 
     @property
     def num_waypoints(self):
@@ -195,7 +196,9 @@ def simulate(sim, seeds, scenes=None, camera=nominal_camera, name="sim", log=pri
                 env.close()
             if header is None:
                 header = sim.render_header(200.0)
-            env = hyperdrone.HyperDrone([reference], config=hyperdrone.Config(num_worlds=1, spec_header=str(header)), seed=int(seed))
+            # A custom spec_header exposes indexed camera names, regardless of the preset's named mounts.
+            env = hyperdrone.HyperDrone([reference], config=hyperdrone.Config(num_worlds=1, spec_header=str(header)), seed=int(seed),
+                                       parameters={"cameras": {"camera0": {"fov": sim.fov}}})
             current_scene = scene_name
             imu_rate = float(round(1.0 / float(env.dt)))
             if header.name != sim.render_header(imu_rate).name:  # the preset's IMU rate differs from the assumed 200 Hz
@@ -331,7 +334,8 @@ def add_simulation_arguments(parser, scenes=SCENES):
     parser.add_argument("--frame-rate", type=float, default=20.0)
     parser.add_argument("--duration", type=float, default=60.0, help="seconds of flight per episode (frames = duration x frame rate)")
     parser.add_argument("--waypoints", type=int, help="route length (default: scales with --duration, 48 for a minute)")
-    parser.add_argument("--fov-range", type=float, default=15.0, help="horizontal FOV = 63.8 + U(-range, range) degrees")
+    parser.add_argument("--fov", type=float, default=NOMINAL_FOV_DEGREES, help="base horizontal FOV in degrees (default: 63.8)")
+    parser.add_argument("--fov-range", type=float, default=15.0, help="horizontal FOV = --fov + U(-range, range) degrees (default: 15; 0 fixes the FOV)")
     parser.add_argument("--hover", type=float, default=1.0, help="seconds of hover at the start of each episode")
     parser.add_argument("--spool", help="directory for the frames while a batch renders (default: $RELPOSE_SPOOL or the system temp dir)")
 
@@ -339,5 +343,6 @@ def add_simulation_arguments(parser, scenes=SCENES):
 def dataset_from_arguments(arguments, scenes=SCENES, camera=nominal_camera, name="sim"):
     """The ad-hoc Dataset provider configured from add_simulation_arguments() options."""
     sim = SimConfig(instances=arguments.instances, frame_rate_hz=arguments.frame_rate, duration_seconds=arguments.duration,
-                    waypoints=arguments.waypoints, fov_range=arguments.fov_range, hold_seconds=arguments.hover, spool=arguments.spool)
+                    waypoints=arguments.waypoints, fov_range=arguments.fov_range, hold_seconds=arguments.hover, spool=arguments.spool,
+                    fov=arguments.fov)
     return simulate(sim, itertools.count(arguments.seed), scenes=scenes[arguments.scenes](arguments.scene_names), camera=camera, name=name)

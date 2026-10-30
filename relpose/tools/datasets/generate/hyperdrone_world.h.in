@@ -32,8 +32,8 @@ namespace hyperdrone_user {
         static constexpr bool ENABLE_MOTION_BLUR = false;  // exposure is integrated over rendered sub-frames in Python
         static constexpr TI MOTION_BLUR_SAMPLES = 1;
         static constexpr bool SELF_VISIBLE = false;  // like the C++ visual-inertial localization harness
-        // the horizontal FOV is drawn per episode from nominal + U(-range, range) degrees (preset nominal: 63.8 degrees);
-        // the exact value is reported in the episode config
+        // the horizontal FOV is drawn per episode from nominal + U(-range, range) degrees;
+        // Python sets the nominal through constructor parameters (--fov); the exact value is reported in the episode config
         static constexpr T CAMERA_FOV_RANDOMIZATION_RANGE = @FOV_RANGE@;
         static constexpr T CAMERA_MOUNT_ROTATION_RANDOMIZATION_RANGE = 0;
         static constexpr T CAMERA_MOUNT_OFFSET_RANDOMIZATION_RANGE = 0;

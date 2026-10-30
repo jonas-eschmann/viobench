@@ -187,7 +187,11 @@ def command_simulate(arguments):
     output.mkdir(parents=True, exist_ok=True)
     written = 0
     for episode in itertools.islice(dataset_from_arguments(arguments), arguments.episodes):
-        write_episode(episode, output / episode.name)
+        directory = write_episode(episode, output / episode.name)
+        if not arguments.no_video:
+            from .runner.video import write_video
+
+            print(f"video: {write_video(episode, None, directory / 'trajectory.mp4')}")
         written += 1
         print(f"wrote {output / episode.name} ({episode.num_frames} frames, {episode.duration:.1f}s, fov {episode.config['camera']['horizontal_fov_degrees']:.1f} deg)")
     print(f"{written} episodes in {output}")
@@ -276,8 +280,9 @@ def main(argv=None):
     leaderboard.set_defaults(function=command_leaderboard)
 
     simulate = commands.add_parser("simulate", help="[datasets] write episodes generated with HyperDrone (needs a GPU and pip install relpose[sim])")
-    simulate.add_argument("-o", "--output", required=True, help="directory that receives one sub-directory per episode")
+    simulate.add_argument("-o", "--output", required=True, help="directory that receives one sub-directory per episode, including trajectory.mp4 by default")
     simulate.add_argument("--episodes", type=int, default=8, help="episodes to write (a batch of --instances flights per seed)")
+    simulate.add_argument("--no-video", action="store_true", help="skip the camera and ground-truth trajectory MP4 in each episode directory")
     add_simulation_arguments(simulate)
     simulate.set_defaults(function=command_simulate)
 
