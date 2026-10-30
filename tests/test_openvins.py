@@ -1,4 +1,4 @@
-"""OpenVINS startup regressions; build the example first or set RELPOSE_OPENVINS to its .wasm."""
+"""OpenVINS startup and tracking regressions; build first or set RELPOSE_OPENVINS to its .wasm."""
 import os
 from pathlib import Path
 
@@ -99,3 +99,116 @@ def test_missing_features_reports_uninitialized_state(openvins_path, engine, tmp
     output, errors = run_inputs(openvins_path, engine, tmp_path, lambda config: stationary_inputs(config, False, 5.5))
     assert "openvins: initialized at t=" not in output, output
     assert "still initializing after" in errors, errors
+
+
+def low_parallax_motion(t):
+    """Body pose, velocity, acceleration and body angular rate, all from one smooth trajectory.
+
+    A hovering drone settles, turns in place, then starts translating. In particular, the first
+    five seconds have rotational image motion but no translational baseline for triangulation.
+    """
+    roll = 0.015 * np.exp(-3 * t) * np.sin(10 * t)
+    pitch = 0.01 * np.exp(-3 * t) * np.sin(8 * t)
+    roll_rate = 0.015 * np.exp(-3 * t) * (10 * np.cos(10 * t) - 3 * np.sin(10 * t))
+    pitch_rate = 0.01 * np.exp(-3 * t) * (8 * np.cos(8 * t) - 3 * np.sin(8 * t))
+    u = np.clip((t - 1) / 2, 0, 1)
+    yaw = -0.8 * (10 * u**3 - 15 * u**4 + 6 * u**5)
+    yaw_rate = -0.4 * 30 * u**2 * (1 - u)**2
+    s = max(t - 5, 0)
+    yaw += 0.12 * (1 - np.cos(0.4 * s))
+    yaw_rate += 0.048 * np.sin(0.4 * s)
+    cr, sr, cp, sp, cy, sy = np.cos(roll), np.sin(roll), np.cos(pitch), np.sin(pitch), np.cos(yaw), np.sin(yaw)
+    rotation = (np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]]) @
+                np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]]) @
+                np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]]))
+    angular_velocity = np.array([roll_rate - yaw_rate * sp,
+                                 pitch_rate * cr + yaw_rate * sr * cp,
+                                 -pitch_rate * sr + yaw_rate * cr * cp])
+    position = np.array([0.3 * (s - np.sin(0.8 * s) / 0.8),
+                         0.5 * (1 - np.cos(0.5 * s)), 0.15 * (1 - np.cos(0.6 * s))])
+    velocity = np.array([0.3 * (1 - np.cos(0.8 * s)), 0.25 * np.sin(0.5 * s), 0.09 * np.sin(0.6 * s)])
+    acceleration = np.array([0.24 * np.sin(0.8 * s), 0.125 * np.cos(0.5 * s), 0.054 * np.cos(0.6 * s)])
+    if t <= 5:
+        acceleration[:] = 0
+    return rotation, position, velocity, acceleration, angular_velocity
+
+
+def low_parallax_inputs(config, seconds=15):
+    """Ray-cast fixed textured room walls, with noisy IMU and a separate analytic truth oracle.
+
+    Unlike screen-space corner sprites, wall texture undergoes the actual perspective warp,
+    including subpixel movement. The solution sees only RGB frames, calibration and IMU rows.
+    """
+    import cv2
+
+    from relpose.tools.abi.config import R_BODY_CAMERA_FORWARD
+    from relpose.tools.geometry import matrix_to_quaternion
+
+    rng = np.random.default_rng(19)
+    lower, upper = np.array([-4, -5, -3]), np.array([8, 5, 3])
+    textures = [cv2.GaussianBlur(cv2.resize(rng.integers(30, 230, (64, 64), dtype=np.uint8),
+                                          (512, 512), interpolation=cv2.INTER_NEAREST), (3, 3), 0.6)
+                for _ in range(6)]
+    yy, xx = np.mgrid[:config["height"], :config["width"]]
+    rays = np.stack([(xx - config["cx"]) / config["fx"],
+                     (yy - config["cy"]) / config["fy"], np.ones_like(xx)], axis=-1)
+    rotation0, position0, *_ = low_parallax_motion(0.05)
+    camera0 = rotation0 @ R_BODY_CAMERA_FORWARD
+    gyro_bias, accel_bias = np.array([0.01, -0.015, -0.015]), np.array([0.03, 0.08, 0.16])
+    for index in range(round(seconds * 20)):
+        t = (index + 1) / 20.0
+        rotation, position, velocity, _, angular_velocity = low_parallax_motion(t)
+        camera = rotation @ R_BODY_CAMERA_FORWARD
+        directions = rays @ camera.T
+        # The camera stays inside the room: the nearest forward intersection is its visible wall.
+        with np.errstate(divide="ignore"):
+            distances = np.where(directions > 0, upper - position, lower - position) / directions
+        axes = np.argmin(distances, axis=-1)
+        points = position + directions * np.min(distances, axis=-1)[..., None]
+        gray = np.zeros(xx.shape, np.uint8)
+        for axis in range(3):
+            a, b = [other for other in range(3) if other != axis]
+            map_x = ((points[..., a] - lower[a]) / (upper[a] - lower[a]) * 511).astype(np.float32)
+            map_y = ((points[..., b] - lower[b]) / (upper[b] - lower[b]) * 511).astype(np.float32)
+            for side in range(2):
+                visible = (axes == axis) & ((directions[..., axis] > 0) == bool(side))
+                texture = cv2.remap(textures[2 * axis + side], map_x, map_y, cv2.INTER_LINEAR,
+                                    borderMode=cv2.BORDER_REPLICATE)
+                gray[visible] = texture[visible]
+
+        times = (index * 10 + np.arange(1, 11)) / 200.0
+        imu = np.zeros((10, 7))
+        imu[:, 0] = times
+        for j, time in enumerate(times):
+            body_rotation, _, _, acceleration, body_rate = low_parallax_motion(time)
+            # Random walks are continuous-time densities; measurement noise is per sample.
+            accel_bias += rng.normal(0, 0.001 * np.sqrt(0.005), 3)
+            gyro_bias += rng.normal(0, 0.0006 * np.sqrt(0.005), 3)
+            imu[j, 1:4] = body_rotation.T @ (acceleration + [0, 0, 9.81]) + accel_bias + rng.normal(0, 0.28, 3)
+            imu[j, 4:7] = body_rate + gyro_bias + rng.normal(0, 0.07, 3)
+        truth = np.r_[camera0.T @ (position - position0), matrix_to_quaternion(camera0.T @ camera),
+                      camera.T @ velocity, R_BODY_CAMERA_FORWARD.T @ angular_velocity]
+        yield t, np.repeat(gray[..., None], 3, axis=2), imu, truth
+
+
+def test_tracking_after_turning_in_place(openvins_path, engine, tmp_path):
+    from relpose.tools.runner.metrics import evaluate_trajectory
+
+    sandbox = Sandbox(openvins_path, engine, log_dir=tmp_path)
+    width, height = sandbox.resolution
+    # A wide-angle camera makes slow motion subpixel, as in the ProcTHOR recordings.
+    config = default_guest_config(width=width, height=height, horizontal_fov_degrees=120)
+    sandbox.init(config)
+    times, estimates, truth = [], [], []
+    for t, frame, imu, expected in low_parallax_inputs(config):
+        result = sandbox.step(t, frame, imu)
+        times.append(t)
+        estimates.append(np.r_[result.pose, result.twist])
+        truth.append(expected)
+    metrics = evaluate_trajectory(truth, estimates, times)
+    assert metrics.held == 0, metrics
+    # Initialization alone is insufficient: bias drift used to destroy the trajectory after
+    # the rotation-only interval. These bounds also reject an always-stationary solution.
+    assert metrics.rpe_translation_rmse < 0.25, metrics
+    assert metrics.final_drift < 1.0, metrics
+    assert metrics.rotation_rmse < 0.15, metrics

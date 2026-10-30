@@ -1,5 +1,5 @@
 // OpenVINS (github.com/rpng/open_vins, GPL-3.0) as a relpose solution: ov_msckf::VioManager, a monocular MSCKF with KLT tracking,
-// static initialization with zero-velocity updates, dynamic initialization (Ceres). This file adapts the ABI (relpose_abi.h) to it: the
+// rotation-aware stationary startup, and dynamic initialization (Ceres). This file adapts the ABI (relpose_abi.h) to it: the
 // configuration from the init() JSON, IMU rows and the frame per step, and the filter's IMU state re-expressed as the pose and
 // twist of the camera relative to the first frame.
 // Build:  relpose/solution/runtime/native/build.sh relpose/solution/examples/native/openvins   ->   build/solution.wasm
@@ -24,7 +24,9 @@
 #include "core/VioManagerOptions.h"
 #include "state/Propagator.h"
 #include "state/State.h"
+#include "rotation_update.h"
 #include "track/TrackBase.h"
+#include "track/TrackKLT.h"
 #include "types/IMU.h"
 #include "utils/print.h"
 #include "utils/quat_ops.h"
@@ -52,22 +54,22 @@ std::vector<double> numbers(const std::string& json, const char* key, size_t cou
     return values;
 }
 
-// Filter settings. Noise densities: the simulator's IMU preset (relpose/tools/abi/config.py DEFAULT_IMU, per-sample std at
-// 200 Hz) converted to continuous time; feature counts and thresholds for 320x240 frames.
+// The simulator's IMU preset (relpose/tools/abi/config.py DEFAULT_IMU). White noise
+// is per sample at 200 Hz; bias random walks are already continuous-time densities.
 ov_msckf::VioManagerOptions make_options(int width, int height, const double intrinsics[4], const Eigen::Matrix4d& T_cam_imu) {
     ov_msckf::VioManagerOptions options;
     const double imu_rate = 200.0;
     options.imu_noises.sigma_w = 0.07 / std::sqrt(imu_rate);
     options.imu_noises.sigma_a = 0.28 / std::sqrt(imu_rate);
-    options.imu_noises.sigma_wb = 0.0006 * std::sqrt(imu_rate);
-    options.imu_noises.sigma_ab = 0.001 * std::sqrt(imu_rate);
+    options.imu_noises.sigma_wb = 0.0006;
+    options.imu_noises.sigma_ab = 0.001;
     options.imu_noises.sigma_w_2 = std::pow(options.imu_noises.sigma_w, 2);
     options.imu_noises.sigma_a_2 = std::pow(options.imu_noises.sigma_a, 2);
     options.imu_noises.sigma_wb_2 = std::pow(options.imu_noises.sigma_wb, 2);
     options.imu_noises.sigma_ab_2 = std::pow(options.imu_noises.sigma_ab, 2);
     for (ov_msckf::UpdaterOptions* updater : {&options.msckf_options, &options.slam_options, &options.aruco_options}) {
-        updater->sigma_pix = 1.0;
-        updater->sigma_pix_sq = 1.0;
+        updater->sigma_pix = 0.5;
+        updater->sigma_pix_sq = updater->sigma_pix * updater->sigma_pix;
         updater->chi2_multipler = 1.0;
     }
     options.zupt_options.chi2_multipler = 0.0;  // zero-velocity detection by disparity only
@@ -85,13 +87,10 @@ ov_msckf::VioManagerOptions make_options(int width, int height, const double int
     state.feat_rep_slam = ov_type::LandmarkRepresentation::Representation::ANCHORED_MSCKF_INVERSE_DEPTH;
     options.dt_slam_delay = 1.0;
     options.gravity_mag = 9.81;
-    // zero-velocity updates whenever the image stands still (below 0.5 px per frame): the static initialization needs them,
-    // and while hovering or creeping a monocular MSCKF has no parallax to triangulate with and would drift on the IMU alone
+    // Permit static initialization without waiting for an acceleration jerk. The
+    // wrapper replaces the ordinary ZUPT with a rotation-aware startup update.
     options.try_zupt = true;
-    options.zupt_only_at_beginning = false;
-    options.zupt_max_velocity = 0.1;
-    options.zupt_noise_multiplier = 10.0;
-    options.zupt_max_disparity = 0.5;
+    options.zupt_only_at_beginning = true;
 
     // tracking
     options.use_stereo = false;
@@ -105,7 +104,7 @@ ov_msckf::VioManagerOptions make_options(int width, int height, const double int
     options.grid_x = 5;
     options.grid_y = 4;
     options.min_px_dist = 8;
-    options.histogram_method = ov_core::TrackBase::HistogramMethod::HISTOGRAM;
+    options.histogram_method = ov_core::TrackBase::HistogramMethod::NONE;
 
     // ideal IMU intrinsics: identity scale and misalignment (Kalibr layout), no gravity sensitivity
     options.vec_dw << 1, 0, 0, 1, 0, 1;
@@ -129,10 +128,13 @@ ov_msckf::VioManagerOptions make_options(int width, int height, const double int
     ov_init::InertialInitializerOptions& init = options.init_options;
     // OpenVINS also requires 0.1 s of history before trying this window. Leave time to initialize during the
     // simulator's one-second startup hover; both image disparity and IMU variance must still pass the static checks.
-    init.init_window_time = 0.5;
+    init.init_window_time = 0.8;
     init.init_imu_thresh = 1.0;
     init.init_max_disparity = 1.5;
     init.init_max_features = 75;
+    // A uniform initial bias in [-0.2, 0.2] m/s^2 cannot be distinguished from tilt
+    // in one stationary pose; retain its prior uncertainty for subsequent updates.
+    init.init_static_sigma_ba = 0.2 / std::sqrt(3.0);
     init.init_dyn_use = true;
     init.init_dyn_mle_opt_calib = false;
     init.init_dyn_mle_max_iter = 50;
@@ -162,6 +164,47 @@ ov_msckf::VioManagerOptions make_options(int width, int height, const double int
 struct Vio : ov_msckf::VioManager {
     using VioManager::VioManager;
     bool started() const { return is_initialized_vio; }
+    RotationOnlyStartup rotation_startup;
+    // Rotation of IMU bearings between images; remove estimated gyro bias after initialization.
+    Eigen::Matrix3d tracking_rotation = Eigen::Matrix3d::Identity();
+    ov_core::ImuData previous_imu;
+    bool have_previous_imu = false;
+    void feed_measurement_imu(const ov_core::ImuData& measurement) {
+        if (have_previous_imu) {
+            Eigen::Vector3d bias = Eigen::Vector3d::Zero();
+            if (is_initialized_vio) bias = get_state()->_imu->bias_g();
+            const Eigen::Vector3d omega = 0.5 * (previous_imu.wm + measurement.wm) - bias;
+            tracking_rotation = ov_core::exp_so3(-omega * (measurement.timestamp - previous_imu.timestamp)) * tracking_rotation;
+        }
+        previous_imu = measurement;
+        have_previous_imu = true;
+        VioManager::feed_measurement_imu(measurement);
+    }
+    void feed_measurement_camera(const ov_core::CameraData& message) {
+        rT1 = boost::posix_time::microsec_clock::local_time();
+        const Eigen::Matrix3d R_ItoC = get_state()->_calib_IMUtoCAM.at(0)->Rot();
+        std::dynamic_pointer_cast<ov_core::TrackKLT>(trackFEATS)->set_temporal_rotation(
+            0, R_ItoC * tracking_rotation * R_ItoC.transpose());
+        trackFEATS->feed_new_camera(message);
+        tracking_rotation.setIdentity();
+        rT2 = boost::posix_time::microsec_clock::local_time();
+        if (!is_initialized_vio) {
+            is_initialized_vio = try_to_initialize(message);
+            if (!is_initialized_vio) return;
+        }
+        has_moved_since_zupt = true;
+        updaterZUPT.reset();
+        const bool was_active = rotation_startup.active();
+        if (rotation_startup.update(get_state(), get_propagator(), trackFEATS->get_feature_database(), message.timestamp)) return;
+        if (was_active) {
+            // Give translating tracks a full window before adding persistent landmarks.
+            startup_time = message.timestamp;
+            std::printf("openvins: full VIO at %.3f after %d rotation updates (rms %.3f, inliers %.2f)\n",
+                        message.timestamp, rotation_startup.updates(), rotation_startup.fit_rms_pixels(),
+                        rotation_startup.inlier_fraction());
+        }
+        do_feature_propagate_update(message);
+    }
 };
 
 struct Pose {  // a frame in a world frame: p_world = R p_frame + p

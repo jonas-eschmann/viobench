@@ -1,13 +1,14 @@
 # openvins
 
 [OpenVINS](https://github.com/rpng/open_vins) 2.7 as a native submission: `solution.cpp` drives `ov_msckf::VioManager`, a
-monocular MSCKF with KLT tracking, a static initializer with zero-velocity updates and the dynamic (Ceres) initializer, and
+monocular MSCKF with KLT tracking, rotation-aware stationary startup and the dynamic (Ceres) initializer, and
 reports the filter's IMU state as the camera's pose and twist relative to the first frame.
 
 ```bash
 relpose/solution/runtime/python/build.sh                                            # once: the wasm OpenCV it links against
-relpose/solution/runtime/native/build.sh relpose/solution/examples/native/openvins    # → build/solution.wasm, 8 MB
-relpose check relpose/solution/examples/native/openvins/build/solution.wasm
+relpose bundle relpose/solution/examples/native/openvins -o openvins.wasm
+relpose check openvins.wasm
+relpose evaluate openvins.wasm /path/to/sim-ProcTHOR-Train-1-00000-00 -o openvins-results
 ```
 
 The first configure downloads OpenVINS 2.7, Ceres 2.1.0 and Eigen 3.4.1 (pinned by SHA256, 150 MB, cached in
@@ -15,9 +16,10 @@ The first configure downloads OpenVINS 2.7, Ceres 2.1.0 and Eigen 3.4.1 (pinned 
 
 | | |
 |---|---|
-| `solution.cpp` | the ABI around `VioManager`; all tuning is in `make_options` |
+| `solution.cpp` | the ABI around `VioManager`; sensor and estimator settings in `make_options` |
+| `rotation_update.h` | calibrated visual rotation and stationary constraints during startup |
 | `CMakeLists.txt` | fetches the sources, builds Ceres (no threads, miniglog) and OpenVINS' `ov_core`, `ov_init`, `ov_msckf` |
-| `patches/open_vins.patch` | synchronous initialization, valid dynamic-initialization landmarks, no `highgui`/`imgcodecs`, a silent Ceres log |
+| `patches/open_vins.patch` | synchronous initialization, configurable static bias covariance, valid triangulation/refinement, rotation-compensated KLT with forward/backward checks, no `highgui`/`imgcodecs`, a silent Ceres log |
 | `compat/boost/` | the three Boost headers OpenVINS includes: timing, χ² quantiles, filesystem |
 
 ## Porting to wasm32-wasip1
@@ -44,30 +46,53 @@ The first configure downloads OpenVINS 2.7, Ceres 2.1.0 and Eigen 3.4.1 (pinned 
   processed the frame), moved from the IMU to the camera with `T_cam_imu`. The angular velocity is the frame interval's
   mean gyro minus the estimated bias.
 
-Zero-velocity updates stay on throughout. A hovering or creeping drone gives a monocular MSCKF too little parallax to
-triangulate, and without them it would drift on the IMU alone.
+The simulator's white IMU noise is specified per sample at 200 Hz, so its standard deviations are divided by
+`sqrt(200)` for OpenVINS. Its bias random walks are already continuous-time densities: they must **not** be multiplied
+by `sqrt(200)`. Static initialization retains the accelerometer bias uncertainty of the simulator's uniform
+`[-0.2, 0.2] m/s²` prior; gravity alone cannot distinguish horizontal bias from tilt.
 
-Static initialization uses a 0.5-second window plus OpenVINS' 0.1-second history margin, so it can finish during the
-simulator's one-second startup hover. Image-disparity and IMU-variance checks still reject moving input. Dynamic
+Static initialization uses a 0.8-second window plus OpenVINS' 0.1-second history margin. This avoids estimating gyro
+bias from the initial settling motion. Image-disparity and IMU-variance checks still reject moving input. Dynamic
 initialization requires at least two observations per landmark and rejects nonfinite or nonpositive depths before
-constructing the Ceres problem; a single monocular observation cannot determine depth. Synchronous initialization
-reports success immediately so the same camera frame can use the initialized state.
+constructing the Ceres problem. Failed triangulations are not sent to the feature refiner.
+
+KLT uses the integrated gyro rotation to warp each new image into the previous camera orientation before tracking.
+This handles patch deformation during wide-angle turns. Forward/backward consistency rejects mismatches, and only
+valid tracks enter epipolar RANSAC; stored observations remain in the original calibrated image coordinates.
+
+A hovering camera can turn without providing a baseline for triangulation. During startup, `rotation_update.h` fits
+calibrated rotations to spatially distributed feature tracks over half-second windows. Accepted fits update relative
+orientation, relative position and zero linear velocity, allowing the drone to turn in place. Consumed measurements
+are removed before normal VIO uses them. Once the rotation model fails on sufficient tracks, ordinary MSCKF/SLAM
+updates take over permanently. A missing reference or temporary feature dropout gets a bounded one-second retry
+without zero-motion constraints. The ordinary zero-velocity detector is disabled: its raw per-frame disparity test can
+mistake slow translation for rest and incorrectly absorb that motion into the IMU biases.
 
 `openvins: initialized at ...` in stdout confirms filter initialization. The evaluator's `ok` only means the module
 returned usable numbers for every frame; it does not establish successful initialization or accurate tracking.
 
 After building the example, `pytest tests/test_openvins.py` checks stationary startup, moving-camera initialization
-with short feature tracks, and the warning when images have no features. Set `RELPOSE_OPENVINS` to test another build.
+with short feature tracks, the warning when images have no features, and tracking after a noisy hovering turn.
+The last test renders a textured room from an independent analytic trajectory and checks translation error, orientation error and final drift. Set `RELPOSE_OPENVINS` to test another build.
 
 ## Results
 
-On the demo episode (10 s; the drone hovers, then creeps forward at under 0.4 m/s): RPE 0.126 m/1 s (`python/minimal`:
-0.178), 33 M fuel per frame (p95 86 M). Slow, nearly straight flight gives monocular VIO neither the parallax nor the
-acceleration to observe scale. `make_options` starts from OpenVINS' EuRoC configuration, adapted to 320 × 240 and a
-hovering start: tune it on the training episodes.
+On `sim-ProcTHOR-Train-1-00000-00` (120 s, 2,400 frames, 32.16 m travelled), the same evaluation before and after
+these changes gives:
 
-The 120-second `sim-ProcTHOR-Train-0-00000-00` recording initializes at 0.995 s, but subsequently loses tracking and
-drifts severely. Successful startup does not resolve this remaining tracking limitation.
+| Metric | Previous example | Fixed example |
+|---|---:|---:|
+| Translation RPE, 1 s | 109.37 m | 0.248 m |
+| ATE | 4,386.31 m | 3.000 m |
+| Final position drift | about 8,412 m | 4.057 m |
+
+The fixed example initializes at 1.195 s and applies eight rotation-aware startup updates before full VIO at 5.695 s.
+Median fuel is about 92 M per frame (p95 149 M). On the neighboring `sim-ProcTHOR-Train-1-00000-01` recording,
+RPE improves from 14.554 m to 0.254 m, and ATE from 95.624 m to 1.976 m.
+
+These are measurements on the named recordings, not an accuracy guarantee. Slow monocular motion still leaves
+metric scale weakly constrained: the target recording has a fitted Sim(3) scale of 0.552, despite a much improved
+trajectory shape. The reported RPE and ATE above do not apply that scale correction.
 
 The host build (`docs/DEBUGGING.md`) needs OpenCV with `core`, `imgproc`, `features2d`, `video` and `calib3d`
 (Ubuntu: `sudo apt install libopencv-dev`; elsewhere `-DOpenCV_DIR=...`).
