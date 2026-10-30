@@ -1,0 +1,566 @@
+--- a/vins_estimator/src/estimator.cpp
++++ b/vins_estimator/src/estimator.cpp
+@@ -17,6 +17,7 @@
+     ProjectionFactor::sqrt_info = FOCAL_LENGTH / 1.5 * Matrix2d::Identity();
+     ProjectionTdFactor::sqrt_info = FOCAL_LENGTH / 1.5 * Matrix2d::Identity();
+     td = TD;
++    g = G;
+ }
+ 
+ void Estimator::clearState()
+@@ -221,7 +222,7 @@
+     //check imu observibility
+     {
+         map<double, ImageFrame>::iterator frame_it;
+-        Vector3d sum_g;
++        Vector3d sum_g = Vector3d::Zero();
+         for (frame_it = all_image_frame.begin(), frame_it++; frame_it != all_image_frame.end(); frame_it++)
+         {
+             double dt = frame_it->second.pre_integration->sum_dt;
+@@ -627,12 +628,12 @@
+     }
+     if (Bas[WINDOW_SIZE].norm() > 2.5)
+     {
+-        ROS_INFO(" big IMU acc bias estimation %f", Bas[WINDOW_SIZE].norm());
++        ROS_WARN(" big IMU acc bias estimation %f", Bas[WINDOW_SIZE].norm());
+         return true;
+     }
+     if (Bgs[WINDOW_SIZE].norm() > 1.0)
+     {
+-        ROS_INFO(" big IMU gyr bias estimation %f", Bgs[WINDOW_SIZE].norm());
++        ROS_WARN(" big IMU gyr bias estimation %f", Bgs[WINDOW_SIZE].norm());
+         return true;
+     }
+     /*
+@@ -645,9 +646,9 @@
+     Vector3d tmp_P = Ps[WINDOW_SIZE];
+     if ((tmp_P - last_P).norm() > 5)
+     {
+-        ROS_INFO(" big translation");
++        ROS_WARN(" big translation");
+         return true;
+     }
+     if (abs(tmp_P.z() - last_P.z()) > 1)
+     {
+-        ROS_INFO(" big z translation");
++        ROS_WARN(" big z translation");
+@@ -809,13 +810,14 @@
+     //options.use_explicit_schur_complement = true;
+     //options.minimizer_progress_to_stdout = true;
+     //options.use_nonmonotonic_steps = true;
+-    if (marginalization_flag == MARGIN_OLD)
+-        options.max_solver_time_in_seconds = SOLVER_TIME * 4.0 / 5.0;
+-    else
+-        options.max_solver_time_in_seconds = SOLVER_TIME;
+-    TicToc t_solver;
++    // A host wall clock must not change the metered work performed by a reactor.
++    options.max_solver_time_in_seconds = 1e9;
++    options.logging_type = ceres::SILENT;
++
+     ceres::Solver::Summary summary;
+     ceres::Solve(options, &problem, &summary);
++    if (!summary.IsSolutionUsable())
++        throw std::runtime_error("VINS sliding-window optimization failed");
+     //cout << summary.BriefReport() << endl;
+     ROS_DEBUG("Iterations : %d", static_cast<int>(summary.iterations.size()));
+     ROS_DEBUG("solver costs: %f", t_solver.toc());
+--- a/vins_estimator/src/estimator.h
++++ b/vins_estimator/src/estimator.h
+@@ -82,7 +82,7 @@
+     Vector3d back_P0, last_P, last_P0;
+     std_msgs::Header Headers[(WINDOW_SIZE + 1)];
+ 
+-    IntegrationBase *pre_integrations[(WINDOW_SIZE + 1)];
++    IntegrationBase *pre_integrations[(WINDOW_SIZE + 1)] = {};
+     Vector3d acc_0, gyr_0;
+ 
+     vector<double> dt_buf[(WINDOW_SIZE + 1)];
+@@ -116,11 +116,11 @@
+ 
+     int loop_window_index;
+ 
+-    MarginalizationInfo *last_marginalization_info;
++    MarginalizationInfo *last_marginalization_info = nullptr;
+     vector<double *> last_marginalization_parameter_blocks;
+ 
+     map<double, ImageFrame> all_image_frame;
+-    IntegrationBase *tmp_pre_integration;
++    IntegrationBase *tmp_pre_integration = nullptr;
+ 
+     //relocalization variable
+     bool relocalization_info;
+--- a/vins_estimator/src/factor/imu_factor.h
++++ b/vins_estimator/src/factor/imu_factor.h
+@@ -1,7 +1,7 @@
+ #pragma once
+ #include <ros/assert.h>
+ #include <iostream>
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+ 
+ #include "../utility/utility.h"
+ #include "../parameters.h"
+--- a/vins_estimator/src/factor/marginalization_factor.cpp
++++ b/vins_estimator/src/factor/marginalization_factor.cpp
+@@ -230,7 +230,6 @@
+ 
+ 
+     TicToc t_thread_summing;
+-    pthread_t tids[NUM_THREADS];
+     ThreadsStruct threadsstruct[NUM_THREADS];
+     int i = 0;
+     for (auto it : factors)
+@@ -246,16 +245,11 @@
+         threadsstruct[i].b = Eigen::VectorXd::Zero(pos);
+         threadsstruct[i].parameter_block_size = parameter_block_size;
+         threadsstruct[i].parameter_block_idx = parameter_block_idx;
+-        int ret = pthread_create( &tids[i], NULL, ThreadsConstructA ,(void*)&(threadsstruct[i]));
+-        if (ret != 0)
+-        {
+-            ROS_WARN("pthread_create error");
+-            ROS_BREAK();
+-        }
++        // The relpose reactor is single-threaded. Preserve the same accumulation order.
++        ThreadsConstructA(&threadsstruct[i]);
+     }
+     for( int i = NUM_THREADS - 1; i >= 0; i--)  
+     {
+-        pthread_join( tids[i], NULL ); 
+         A += threadsstruct[i].A;
+         b += threadsstruct[i].b;
+     }
+--- a/vins_estimator/src/factor/marginalization_factor.h
++++ b/vins_estimator/src/factor/marginalization_factor.h
+@@ -3,7 +3,7 @@
+ #include <ros/ros.h>
+ #include <ros/console.h>
+ #include <cstdlib>
+-#include <pthread.h>
++#include <numeric>
+ #include <ceres/ceres.h>
+ #include <unordered_map>
+ 
+--- a/vins_estimator/src/factor/pose_local_parameterization.h
++++ b/vins_estimator/src/factor/pose_local_parameterization.h
+@@ -1,6 +1,6 @@
+ #pragma once
+ 
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+ #include <ceres/ceres.h>
+ #include "../utility/utility.h"
+ 
+--- a/vins_estimator/src/feature_manager.h
++++ b/vins_estimator/src/feature_manager.h
+@@ -7,7 +7,7 @@
+ #include <numeric>
+ using namespace std;
+ 
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+ using namespace Eigen;
+ 
+ #include <ros/console.h>
+--- a/vins_estimator/src/initial/initial_aligment.cpp
++++ b/vins_estimator/src/initial/initial_aligment.cpp
+@@ -61,14 +61,15 @@
+     int n_state = all_frame_count * 3 + 2 + 1;
+ 
+     MatrixXd A{n_state, n_state};
+-    A.setZero();
+     VectorXd b{n_state};
+-    b.setZero();
+ 
+     map<double, ImageFrame>::iterator frame_i;
+     map<double, ImageFrame>::iterator frame_j;
+     for(int k = 0; k < 4; k++)
+     {
++        // Each iteration solves in a new tangent plane. Do not accumulate the old system.
++        A.setZero();
++        b.setZero();
+         MatrixXd lxly(3, 2);
+         lxly = TangentBasis(g0);
+         int i = 0;
+@@ -181,7 +182,7 @@
+     ROS_DEBUG("estimated scale: %f", s);
+     g = x.segment<3>(n_state - 4);
+     ROS_DEBUG_STREAM(" result g     " << g.norm() << " " << g.transpose());
+-    if(fabs(g.norm() - G.norm()) > 1.0 || s < 0)
++    if(!x.allFinite() || fabs(g.norm() - G.norm()) > 1.0 || s <= 0)
+     {
+         return false;
+     }
+@@ -190,7 +191,7 @@
+     s = (x.tail<1>())(0) / 100.0;
+     (x.tail<1>())(0) = s;
+     ROS_DEBUG_STREAM(" refine     " << g.norm() << " " << g.transpose());
+-    if(s < 0.0 )
++    if(!x.allFinite() || !g.allFinite() || s <= 0.0)
+         return false;   
+     else
+         return true;
+--- a/vins_estimator/src/initial/initial_alignment.h
++++ b/vins_estimator/src/initial/initial_alignment.h
+@@ -1,5 +1,5 @@
+ #pragma once
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+ #include <iostream>
+ #include "../factor/imu_factor.h"
+ #include "../utility/utility.h"
+--- a/vins_estimator/src/initial/initial_ex_rotation.h
++++ b/vins_estimator/src/initial/initial_ex_rotation.h
+@@ -6,7 +6,7 @@
+ 
+ #include <opencv2/opencv.hpp>
+ 
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+ using namespace Eigen;
+ #include <ros/console.h>
+ 
+--- a/vins_estimator/src/initial/initial_sfm.cpp
++++ b/vins_estimator/src/initial/initial_sfm.cpp
+@@ -274,9 +274,12 @@
+ 	ceres::Solver::Options options;
+ 	options.linear_solver_type = ceres::DENSE_SCHUR;
+ 	//options.minimizer_progress_to_stdout = true;
+-	options.max_solver_time_in_seconds = 0.2;
++	options.max_num_iterations = 50;
++	options.max_solver_time_in_seconds = 1e9;
++	options.logging_type = ceres::SILENT;
+ 	ceres::Solver::Summary summary;
+ 	ceres::Solve(options, &problem, &summary);
++	if (!summary.IsSolutionUsable()) return false;
+ 	//std::cout << summary.BriefReport() << "\n";
+ 	if (summary.termination_type == ceres::CONVERGENCE || summary.final_cost < 5e-03)
+ 	{
+--- a/vins_estimator/src/initial/initial_sfm.h
++++ b/vins_estimator/src/initial/initial_sfm.h
+@@ -1,7 +1,7 @@
+ #pragma once 
+ #include <ceres/ceres.h>
+ #include <ceres/rotation.h>
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+ #include <iostream>
+ #include <cstdlib>
+ #include <deque>
+--- a/vins_estimator/src/initial/solve_5pts.cpp
++++ b/vins_estimator/src/initial/solve_5pts.cpp
+@@ -1,193 +1,4 @@
+ #include "solve_5pts.h"
+-
+-
+-namespace cv {
+-    void decomposeEssentialMat( InputArray _E, OutputArray _R1, OutputArray _R2, OutputArray _t )
+-    {
+-
+-        Mat E = _E.getMat().reshape(1, 3);
+-        CV_Assert(E.cols == 3 && E.rows == 3);
+-
+-        Mat D, U, Vt;
+-        SVD::compute(E, D, U, Vt);
+-
+-        if (determinant(U) < 0) U *= -1.;
+-        if (determinant(Vt) < 0) Vt *= -1.;
+-
+-        Mat W = (Mat_<double>(3, 3) << 0, 1, 0, -1, 0, 0, 0, 0, 1);
+-        W.convertTo(W, E.type());
+-
+-        Mat R1, R2, t;
+-        R1 = U * W * Vt;
+-        R2 = U * W.t() * Vt;
+-        t = U.col(2) * 1.0;
+-
+-        R1.copyTo(_R1);
+-        R2.copyTo(_R2);
+-        t.copyTo(_t);
+-    }
+-
+-    int recoverPose( InputArray E, InputArray _points1, InputArray _points2, InputArray _cameraMatrix,
+-                         OutputArray _R, OutputArray _t, InputOutputArray _mask)
+-    {
+-
+-        Mat points1, points2, cameraMatrix;
+-        _points1.getMat().convertTo(points1, CV_64F);
+-        _points2.getMat().convertTo(points2, CV_64F);
+-        _cameraMatrix.getMat().convertTo(cameraMatrix, CV_64F);
+-
+-        int npoints = points1.checkVector(2);
+-        CV_Assert( npoints >= 0 && points2.checkVector(2) == npoints &&
+-                                  points1.type() == points2.type());
+-
+-        CV_Assert(cameraMatrix.rows == 3 && cameraMatrix.cols == 3 && cameraMatrix.channels() == 1);
+-
+-        if (points1.channels() > 1)
+-        {
+-            points1 = points1.reshape(1, npoints);
+-            points2 = points2.reshape(1, npoints);
+-        }
+-
+-        double fx = cameraMatrix.at<double>(0,0);
+-        double fy = cameraMatrix.at<double>(1,1);
+-        double cx = cameraMatrix.at<double>(0,2);
+-        double cy = cameraMatrix.at<double>(1,2);
+-
+-        points1.col(0) = (points1.col(0) - cx) / fx;
+-        points2.col(0) = (points2.col(0) - cx) / fx;
+-        points1.col(1) = (points1.col(1) - cy) / fy;
+-        points2.col(1) = (points2.col(1) - cy) / fy;
+-
+-        points1 = points1.t();
+-        points2 = points2.t();
+-
+-        Mat R1, R2, t;
+-        decomposeEssentialMat(E, R1, R2, t);
+-        Mat P0 = Mat::eye(3, 4, R1.type());
+-        Mat P1(3, 4, R1.type()), P2(3, 4, R1.type()), P3(3, 4, R1.type()), P4(3, 4, R1.type());
+-        P1(Range::all(), Range(0, 3)) = R1 * 1.0; P1.col(3) = t * 1.0;
+-        P2(Range::all(), Range(0, 3)) = R2 * 1.0; P2.col(3) = t * 1.0;
+-        P3(Range::all(), Range(0, 3)) = R1 * 1.0; P3.col(3) = -t * 1.0;
+-        P4(Range::all(), Range(0, 3)) = R2 * 1.0; P4.col(3) = -t * 1.0;
+-
+-        // Do the cheirality check.
+-        // Notice here a threshold dist is used to filter
+-        // out far away points (i.e. infinite points) since
+-        // there depth may vary between postive and negtive.
+-        double dist = 50.0;
+-        Mat Q;
+-        triangulatePoints(P0, P1, points1, points2, Q);
+-        Mat mask1 = Q.row(2).mul(Q.row(3)) > 0;
+-        Q.row(0) /= Q.row(3);
+-        Q.row(1) /= Q.row(3);
+-        Q.row(2) /= Q.row(3);
+-        Q.row(3) /= Q.row(3);
+-        mask1 = (Q.row(2) < dist) & mask1;
+-        Q = P1 * Q;
+-        mask1 = (Q.row(2) > 0) & mask1;
+-        mask1 = (Q.row(2) < dist) & mask1;
+-
+-        triangulatePoints(P0, P2, points1, points2, Q);
+-        Mat mask2 = Q.row(2).mul(Q.row(3)) > 0;
+-        Q.row(0) /= Q.row(3);
+-        Q.row(1) /= Q.row(3);
+-        Q.row(2) /= Q.row(3);
+-        Q.row(3) /= Q.row(3);
+-        mask2 = (Q.row(2) < dist) & mask2;
+-        Q = P2 * Q;
+-        mask2 = (Q.row(2) > 0) & mask2;
+-        mask2 = (Q.row(2) < dist) & mask2;
+-
+-        triangulatePoints(P0, P3, points1, points2, Q);
+-        Mat mask3 = Q.row(2).mul(Q.row(3)) > 0;
+-        Q.row(0) /= Q.row(3);
+-        Q.row(1) /= Q.row(3);
+-        Q.row(2) /= Q.row(3);
+-        Q.row(3) /= Q.row(3);
+-        mask3 = (Q.row(2) < dist) & mask3;
+-        Q = P3 * Q;
+-        mask3 = (Q.row(2) > 0) & mask3;
+-        mask3 = (Q.row(2) < dist) & mask3;
+-
+-        triangulatePoints(P0, P4, points1, points2, Q);
+-        Mat mask4 = Q.row(2).mul(Q.row(3)) > 0;
+-        Q.row(0) /= Q.row(3);
+-        Q.row(1) /= Q.row(3);
+-        Q.row(2) /= Q.row(3);
+-        Q.row(3) /= Q.row(3);
+-        mask4 = (Q.row(2) < dist) & mask4;
+-        Q = P4 * Q;
+-        mask4 = (Q.row(2) > 0) & mask4;
+-        mask4 = (Q.row(2) < dist) & mask4;
+-
+-        mask1 = mask1.t();
+-        mask2 = mask2.t();
+-        mask3 = mask3.t();
+-        mask4 = mask4.t();
+-
+-        // If _mask is given, then use it to filter outliers.
+-        if (!_mask.empty())
+-        {
+-            Mat mask = _mask.getMat();
+-            CV_Assert(mask.size() == mask1.size());
+-            bitwise_and(mask, mask1, mask1);
+-            bitwise_and(mask, mask2, mask2);
+-            bitwise_and(mask, mask3, mask3);
+-            bitwise_and(mask, mask4, mask4);
+-        }
+-        if (_mask.empty() && _mask.needed())
+-        {
+-            _mask.create(mask1.size(), CV_8U);
+-        }
+-
+-        CV_Assert(_R.needed() && _t.needed());
+-        _R.create(3, 3, R1.type());
+-        _t.create(3, 1, t.type());
+-
+-        int good1 = countNonZero(mask1);
+-        int good2 = countNonZero(mask2);
+-        int good3 = countNonZero(mask3);
+-        int good4 = countNonZero(mask4);
+-
+-        if (good1 >= good2 && good1 >= good3 && good1 >= good4)
+-        {
+-            R1.copyTo(_R);
+-            t.copyTo(_t);
+-            if (_mask.needed()) mask1.copyTo(_mask);
+-            return good1;
+-        }
+-        else if (good2 >= good1 && good2 >= good3 && good2 >= good4)
+-        {
+-            R2.copyTo(_R);
+-            t.copyTo(_t);
+-            if (_mask.needed()) mask2.copyTo(_mask);
+-            return good2;
+-        }
+-        else if (good3 >= good1 && good3 >= good2 && good3 >= good4)
+-        {
+-            t = -t;
+-            R1.copyTo(_R);
+-            t.copyTo(_t);
+-            if (_mask.needed()) mask3.copyTo(_mask);
+-            return good3;
+-        }
+-        else
+-        {
+-            t = -t;
+-            R2.copyTo(_R);
+-            t.copyTo(_t);
+-            if (_mask.needed()) mask4.copyTo(_mask);
+-            return good4;
+-        }
+-    }
+-
+-    int recoverPose( InputArray E, InputArray _points1, InputArray _points2, OutputArray _R,
+-                         OutputArray _t, double focal, Point2d pp, InputOutputArray _mask)
+-    {
+-        Mat cameraMatrix = (Mat_<double>(3,3) << focal, 0, pp.x, 0, focal, pp.y, 0, 0, 1);
+-        return cv::recoverPose(E, _points1, _points2, cameraMatrix, _R, _t, _mask);
+-    }
+-}
+ 
+ 
+ bool MotionEstimator::solveRelativeRT(const vector<pair<Vector3d, Vector3d>> &corres, Matrix3d &Rotation, Vector3d &Translation)
+@@ -202,6 +13,7 @@
+         }
+         cv::Mat mask;
+         cv::Mat E = cv::findFundamentalMat(ll, rr, cv::FM_RANSAC, 0.3 / 460, 0.99, mask);
++        if (E.rows != 3 || E.cols != 3 || !cv::checkRange(E)) return false;
+         cv::Mat cameraMatrix = (cv::Mat_<double>(3, 3) << 1, 0, 0, 0, 1, 0, 0, 0, 1);
+         cv::Mat rot, trans;
+         int inlier_cnt = cv::recoverPose(E, ll, rr, cameraMatrix, rot, trans, mask);
+--- a/vins_estimator/src/initial/solve_5pts.h
++++ b/vins_estimator/src/initial/solve_5pts.h
+@@ -5,7 +5,7 @@
+ 
+ #include <opencv2/opencv.hpp>
+ //#include <opencv2/core/eigen.hpp>
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+ using namespace Eigen;
+ 
+ #include <ros/console.h>
+--- a/vins_estimator/src/parameters.h
++++ b/vins_estimator/src/parameters.h
+@@ -2,7 +2,7 @@
+ 
+ #include <ros/ros.h>
+ #include <vector>
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+ #include "utility/utility.h"
+ #include <opencv2/opencv.hpp>
+ #include <opencv2/core/eigen.hpp>
+--- a/vins_estimator/src/utility/tic_toc.h
++++ b/vins_estimator/src/utility/tic_toc.h
+@@ -1,29 +1,10 @@
+ #pragma once
+ 
+-#include <ctime>
+-#include <cstdlib>
+-#include <chrono>
+-
++// Timing is diagnostic only. Keep it independent of the host clock in the reactor.
+ class TicToc
+ {
+   public:
+-    TicToc()
+-    {
+-        tic();
+-    }
+-
+-    void tic()
+-    {
+-        start = std::chrono::system_clock::now();
+-    }
+-
+-    double toc()
+-    {
+-        end = std::chrono::system_clock::now();
+-        std::chrono::duration<double> elapsed_seconds = end - start;
+-        return elapsed_seconds.count() * 1000;
+-    }
+-
+-  private:
+-    std::chrono::time_point<std::chrono::system_clock> start, end;
++    TicToc() = default;
++    void tic() {}
++    double toc() const { return 0.0; }
+ };
+--- a/vins_estimator/src/utility/utility.h
++++ b/vins_estimator/src/utility/utility.h
+@@ -7,7 +7,7 @@
+ #include <cmath>
+ #include <cassert>
+ #include <cstring>
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+ 
+ class Utility
+ {
+@@ -142,44 +142,3 @@
+             two_pi * std::floor((-angle_degrees + T(180)) / two_pi);
+     };
+ };
+-
+-class FileSystemHelper
+-{
+-  public:
+-
+-    /******************************************************************************
+-     * Recursively create directory if `path` not exists.
+-     * Return 0 if success.
+-     *****************************************************************************/
+-    static int createDirectoryIfNotExists(const char *path)
+-    {
+-        struct stat info;
+-        int statRC = stat(path, &info);
+-        if( statRC != 0 )
+-        {
+-            if (errno == ENOENT)  
+-            {
+-                printf("%s not exists, trying to create it \n", path);
+-                if (! createDirectoryIfNotExists(dirname(strdupa(path))))
+-                {
+-                    if (mkdir(path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) != 0)
+-                    {
+-                        fprintf(stderr, "Failed to create folder %s \n", path);
+-                        return 1;
+-                    }
+-                    else
+-                        return 0;
+-                }
+-                else 
+-                    return 1;
+-            } // directory not exists
+-            if (errno == ENOTDIR) 
+-            { 
+-                fprintf(stderr, "%s is not a directory path \n", path);
+-                return 1; 
+-            } // something in path prefix is not a dir
+-            return 1;
+-        }
+-        return ( info.st_mode & S_IFDIR ) ? 0 : 1;
+-    }
+-};

@@ -1,6 +1,6 @@
 """Workspaces: solutions next to their own copy of the build recipe (toolchain/, runtime/), free to be changed.
 
-`relpose init` creates one from this package: toolchain/ and runtime/, a minimal example as solution/, and build/ for
+`relpose init` creates one from this package: toolchain/ and runtime/, an example as solution/, and build/ for
 everything built there (toolchain downloads, runtime.wasm). In a source checkout, relpose/solution is the workspace.
 Commands find the workspace of a solution directory by walking up from it.
 """
@@ -73,7 +73,7 @@ def build_native(directory, output):
 
 
 def init(flavour, directory):
-    """Creates a workspace with the minimal example of flavour (python, native) as solution/."""
+    """Creates a workspace with the selected example as solution/."""
     directory = Path(directory)
     if directory.exists() and any(directory.iterdir()):
         raise WorkspaceError(f"{directory} exists and is not empty")

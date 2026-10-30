@@ -1,6 +1,6 @@
 """The `relpose` command line (also `python -m relpose`).
 
-solution     init                              new workspace: a minimal solution with its own toolchain
+solution     init                              new workspace: an example solution with its own toolchain
              bundle, unbundle                  solution directory (Python, or native with a CMakeLists.txt) <-> solution.wasm
              build-runtime                     (re)build the workspace's Python runtime; bundle does when it is missing
 runner       check, evaluate, leaderboard      run a module on synthetic frames / on a dataset (disk or freshly simulated); aggregate reports
@@ -219,14 +219,15 @@ def command_feed(arguments):
 # --- parser ----------------------------------------------------------------------------------------------------
 
 def main(argv=None):
+    from ..solution.workspace import EXAMPLES
     from .datasets.generate.simulation import add_simulation_arguments
     from .runner.direct import add_arguments as add_debug_arguments
 
     parser = argparse.ArgumentParser(prog="relpose", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True, metavar="command")
 
-    init = commands.add_parser("init", help="[solution] create a workspace: the minimal Python or native (C++) solution with its own toolchain")
-    init.add_argument("flavour", choices=["python", "native"])
+    init = commands.add_parser("init", help="[solution] create a workspace: minimal Python/C++ with its own toolchain")
+    init.add_argument("flavour", choices=list(EXAMPLES))
     init.add_argument("directory", help="new (or empty) directory")
     init.set_defaults(function=command_init)
 

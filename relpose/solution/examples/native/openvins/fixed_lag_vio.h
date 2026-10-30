@@ -80,9 +80,20 @@ public:
             for (int size : {4, 3, 3, 3, 3}) mutable_parameter_block_sizes()->push_back(size);
         valid = true;
     }
+    // Repeated marginal priors are already square roots. Their rows may be
+    // fewer than their tangent columns; zero and weak rows are preserved.
+    LocalPrior(const Eigen::VectorXd& x, const Eigen::MatrixXd& S, const Eigen::VectorXd& b, int numerical_rank)
+        : linearization(x), offset(b), root_information(S), rank(numerical_rank) {
+        if (x.size() == 0 || x.size() % 16 != 0 || S.cols() != 15 * (x.size() / 16) || S.rows() == 0 ||
+            b.size() != S.rows() || !x.allFinite() || !S.allFinite() || !b.allFinite()) return;
+        set_num_residuals(S.rows());
+        for (int i = 0; i < x.size() / 16; ++i)
+            for (int size : {4, 3, 3, 3, 3}) mutable_parameter_block_sizes()->push_back(size);
+        valid = true;
+    }
     bool Evaluate(double const* const* parameters, double* residuals, double** jacobians) const override {
         if (!valid) return false;
-        Eigen::VectorXd delta = Eigen::VectorXd::Zero(num_residuals());
+        Eigen::VectorXd delta = Eigen::VectorXd::Zero(root_information.cols());
         for (int i = 0; i < linearization.size() / 16; ++i) {
             Eigen::Vector4d q = Eigen::Map<const Eigen::Vector4d>(parameters[5 * i]);
             Eigen::Vector4d q0 = linearization.segment<4>(16 * i);
@@ -117,6 +128,7 @@ public:
     size_t maximum_new_features = 25; // stagger track lifetimes and later marginalization
     int maximum_iterations = 6;
     double pixel_sigma = 0.75;
+    double huber_scale = 2.0;
     double sigma_w = 0.07 / std::sqrt(200.0), sigma_a = 0.28 / std::sqrt(200.0);
     double sigma_wb = 0.0006, sigma_ab = 0.001;
     Eigen::Vector3d gravity = Eigen::Vector3d(0, 0, 9.81);
@@ -162,8 +174,15 @@ public:
         prior_times_.push_back(t);
         prior_x_ = first.x;
         Eigen::MatrixXd covariance = ov_msckf::StateHelper::get_marginal_covariance(state, {state->_imu});
-        if (!pseudo_inverse(covariance, prior_H_)) { fail(); return; }
-        prior_g_ = Eigen::VectorXd::Zero(15);
+        // Convert the EKF covariance once at initialization. All subsequent
+        // priors stay in square-root form without forming H.
+        Eigen::MatrixXd initial_H;
+        if (!pseudo_inverse(covariance, initial_H)) { fail(); return; }
+        LocalPrior initial_prior(prior_x_, initial_H, Eigen::VectorXd::Zero(15));
+        if (!initial_prior.valid) { fail(); return; }
+        prior_S_ = initial_prior.root_information;
+        prior_b_ = initial_prior.offset;
+        prior_rank_ = initial_prior.rank;
         last_frame_ = -1;
     }
 
@@ -266,8 +285,9 @@ private:
     Eigen::Matrix<double, 7, 1> extrinsics_;
     int image_width_ = 0, image_height_ = 0;
     std::vector<double> prior_times_;
-    Eigen::VectorXd prior_x_, prior_g_;
-    Eigen::MatrixXd prior_H_;
+    Eigen::VectorXd prior_x_, prior_b_;
+    Eigen::MatrixXd prior_S_;
+    int prior_rank_ = 0;
     double last_frame_ = -1;
     mutable bool failed_ = false; // state_at can also discover a hard integration failure
 
@@ -286,6 +306,14 @@ private:
         return 5 * row + column;
     }
 
+    static Eigen::VectorXd column_scaling(const Eigen::MatrixXd& J) {
+        Eigen::VectorXd scaling(J.cols());
+        for (int column = 0; column < J.cols(); ++column) {
+            const double norm = J.col(column).stableNorm();
+            scaling(column) = norm > 0 ? 1.0 / norm : 1.0;
+        }
+        return scaling;
+    }
     static bool pseudo_inverse(const Eigen::MatrixXd& H, Eigen::MatrixXd& inverse) {
         if (H.rows() == 0 || H.rows() != H.cols() || !H.allFinite()) return false;
         const Eigen::VectorXd scaling = information_scaling(H);
@@ -400,7 +428,7 @@ private:
         for (double* p : {extrinsics_.data(), extrinsics_.data() + 4, calibration_.data()}) problem.SetParameterBlockConstant(p);
         std::vector<double*> prior_parameters;
         for (double t : prior_times_) { auto blocks = nodes_.at(t).blocks(); prior_parameters.insert(prior_parameters.end(), blocks.begin(), blocks.end()); }
-        auto* prior = new LocalPrior(prior_x_, prior_H_, prior_g_);
+        auto* prior = new LocalPrior(prior_x_, prior_S_, prior_b_, prior_rank_);
         if (!prior->valid) { delete prior; return fail(); }
         last_prior_rank = prior->rank;
         last_prior_min_eigenvalue = prior->minimum_eigenvalue;
@@ -426,7 +454,7 @@ private:
             for (const auto& obs : f.observations) {
                 auto& n = nodes_.at(obs.first);
                 auto* factor = new ov_init::Factor_ImageReprojCalib(obs.second, pixel_sigma, false);
-                image_factors[entry.first].push_back(problem.AddResidualBlock(factor, new ceres::HuberLoss(2.0), n.q(), n.p(), f.position.data(), extrinsics_.data(), extrinsics_.data() + 4, calibration_.data()));
+                image_factors[entry.first].push_back(problem.AddResidualBlock(factor, new ceres::HuberLoss(huber_scale), n.q(), n.p(), f.position.data(), extrinsics_.data(), extrinsics_.data() + 4, calibration_.data()));
                 ++last_visual_factors;
             }
         }
@@ -483,32 +511,71 @@ private:
         Eigen::MatrixXd J = Eigen::MatrixXd::Zero(sparse.num_rows, sparse.num_cols);
         for (int r = 0; r < sparse.num_rows; ++r)
             for (int k = sparse.rows[r]; k < sparse.rows[r + 1]; ++k) J(r, sparse.cols[k]) = sparse.values[k];
-        const Eigen::MatrixXd H = J.transpose() * J;
-        const Eigen::VectorXd g = J.transpose() * Eigen::Map<Eigen::VectorXd>(residuals.data(), residuals.size());
-        if (!H.allFinite() || !g.allFinite() || !kept_x.allFinite()) return false;
-        const int kept = H.rows() - eliminated;
-        Eigen::MatrixXd eliminated_inverse;
-        if (!pseudo_inverse(H.topLeftCorner(eliminated, eliminated), eliminated_inverse)) return false;
-        Eigen::MatrixXd transfer = H.bottomLeftCorner(kept, eliminated) * eliminated_inverse;
-        Eigen::MatrixXd candidate_H = H.bottomRightCorner(kept, kept) - transfer * H.topRightCorner(eliminated, kept);
-        candidate_H = (0.5 * (candidate_H + candidate_H.transpose())).eval();
-        Eigen::VectorXd candidate_g = g.tail(kept) - transfer * g.head(eliminated);
-        if (!candidate_H.allFinite() || !candidate_g.allFinite()) return false;
-        // Only the first retained node receives the marginalized IMU factor.
-        // All later nodes participate through image poses only. Preserve these
-        // exact structural zeros rather than equilibrating numerical remnants.
-        for (size_t node = 1; node < kept_times.size(); ++node) {
-            const int offset = static_cast<int>(15 * node + 6);
-            candidate_H.middleRows(offset, 9).setZero();
-            candidate_H.middleCols(offset, 9).setZero();
-            candidate_g.segment(offset, 9).setZero();
+        const Eigen::VectorXd residual = Eigen::Map<Eigen::VectorXd>(residuals.data(), residuals.size());
+        if (!J.allFinite() || !residual.allFinite() || !kept_x.allFinite() ||
+            J.rows() != residual.size() || J.cols() <= eliminated) return false;
+        const int kept = J.cols() - eliminated;
+        const Eigen::VectorXd eliminated_scaling = column_scaling(J.leftCols(eliminated));
+        if (!eliminated_scaling.allFinite()) return false;
+        // E D P = Q R. Scaling and pivoting do not change E's column space.
+        // Only the orthogonal complement can constrain retained variables after
+        // minimizing over the eliminated variables. Work on Jacobians directly.
+        Eigen::ColPivHouseholderQR<Eigen::MatrixXd> elimination_qr(
+            J.leftCols(eliminated) * eliminated_scaling.asDiagonal());
+        elimination_qr.setThreshold(1e-12);
+        if (!elimination_qr.matrixQR().allFinite() || !elimination_qr.hCoeffs().allFinite()) return false;
+        const int eliminated_rank = elimination_qr.rank();
+        Eigen::MatrixXd augmented(J.rows(), kept + 1);
+        augmented.leftCols(kept) = J.rightCols(kept);
+        augmented.col(kept) = residual;
+        const Eigen::MatrixXd projected = elimination_qr.householderQ().adjoint() * augmented;
+        const int remaining_rows = J.rows() - eliminated_rank;
+        if (remaining_rows <= 0 || !projected.allFinite()) return false;
+        Eigen::MatrixXd retained = projected.bottomRows(remaining_rows).leftCols(kept);
+        const Eigen::VectorXd retained_residual = projected.bottomRows(remaining_rows).col(kept);
+        // Later states have image pose factors only: preserve their exact absent
+        // velocity/bias support before any column normalization.
+        for (size_t node = 1; node < kept_times.size(); ++node)
+            retained.middleCols(static_cast<int>(15 * node + 6), 9).setZero();
+        const Eigen::VectorXd retained_scaling = column_scaling(retained);
+        if (!retained_scaling.allFinite()) return false;
+        // K D P = Q R, hence S = R P^T D^-1 and b = Q^T r.
+        // Keep every triangular row, regardless of numerical rank. Only trailing
+        // residual rows that are constant in retained variables are discarded.
+        Eigen::ColPivHouseholderQR<Eigen::MatrixXd> compression_qr(retained * retained_scaling.asDiagonal());
+        compression_qr.setThreshold(1e-12); // diagnostic only: never clips root rows
+        if (!compression_qr.matrixQR().allFinite() || !compression_qr.hCoeffs().allFinite()) return false;
+        const int root_rows = std::min(remaining_rows, kept);
+        Eigen::MatrixXd triangular = compression_qr.matrixR().topRows(root_rows).template triangularView<Eigen::Upper>();
+        Eigen::MatrixXd candidate_S = triangular * compression_qr.colsPermutation().transpose() *
+            retained_scaling.cwiseInverse().asDiagonal();
+        const Eigen::VectorXd compressed_residual = compression_qr.householderQ().adjoint() * retained_residual;
+        Eigen::VectorXd candidate_b = compressed_residual.head(root_rows);
+        for (size_t node = 1; node < kept_times.size(); ++node)
+            candidate_S.middleCols(static_cast<int>(15 * node + 6), 9).setZero();
+        if (!candidate_S.allFinite() || !candidate_b.allFinite()) return false;
+        // Constant-only residual rows do not constrain the state. Remove only
+        // exact zero rows, so accumulated constants cannot change Ceres's relative
+        // stopping test. Every weak but nonzero Jacobian row remains unchanged.
+        int nonzero_rows = 0;
+        for (int row = 0; row < candidate_S.rows(); ++row) {
+            if ((candidate_S.row(row).array() == 0.0).all()) continue;
+            if (row != nonzero_rows) {
+                candidate_S.row(nonzero_rows) = candidate_S.row(row);
+                candidate_b(nonzero_rows) = candidate_b(row);
+            }
+            ++nonzero_rows;
         }
-        // Commit the complete prior together; failures above preserve the old
-        // prior and graph. The caller makes such a failure sticky and stops input.
-        prior_H_.swap(candidate_H);
-        prior_g_.swap(candidate_g);
+        if (nonzero_rows == 0) return false;
+        candidate_S.conservativeResize(nonzero_rows, kept);
+        candidate_b.conservativeResize(nonzero_rows);
+        // Commit root, residual offset and linearization together after all
+        // checks. No squared-condition normal matrix or Schur subtraction occurs.
+        prior_S_.swap(candidate_S);
+        prior_b_.swap(candidate_b);
         prior_x_.swap(kept_x);
         prior_times_.swap(kept_times);
+        prior_rank_ = compression_qr.rank();
         last_consumed = consumed.size(); // includes untriangulated tracks discarded with the old node
         // All factors of a consumed landmark were incorporated above. Future
         // observations of this same tracker ID form a fresh independent segment;

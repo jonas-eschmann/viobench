@@ -18,6 +18,7 @@
 #include <vector>
 
 #include <Eigen/Dense>
+#include "consensus_output.h"
 #include <opencv2/imgproc.hpp>
 
 #include "cam/CamRadtan.h"
@@ -164,22 +165,34 @@ ov_msckf::VioManagerOptions make_options(int width, int height, const double int
 
 // VioManager keeps "has an initial state" protected; initialized() becomes true only after the first visual update
 struct Vio : ov_msckf::VioManager {
-    explicit Vio(ov_msckf::VioManagerOptions& options) : VioManager(options) {
-        smoother.sigma_w = options.imu_noises.sigma_w;
-        smoother.sigma_wb = options.imu_noises.sigma_wb;
-        smoother.sigma_a = options.imu_noises.sigma_a;
-        smoother.sigma_ab = options.imu_noises.sigma_ab;
-        smoother.gravity = Eigen::Vector3d(0, 0, options.gravity_mag);
+    Vio(ov_msckf::VioManagerOptions& options, bool use_anchor, bool use_conservative)
+        : VioManager(options), anchored_tracking(use_anchor) {
+        if (use_conservative) {
+            conservative = std::make_unique<relpose_openvins::FixedLagVio>();
+            conservative->pixel_sigma = 1.5;
+            conservative->huber_scale = 1.0;
+        }
+        for (auto* graph : {&smoother, conservative.get()}) {
+            if (!graph) continue;
+            graph->sigma_w = options.imu_noises.sigma_w;
+            graph->sigma_wb = options.imu_noises.sigma_wb;
+            graph->sigma_a = options.imu_noises.sigma_a;
+            graph->sigma_ab = options.imu_noises.sigma_ab;
+            graph->gravity = Eigen::Vector3d(0, 0, options.gravity_mag);
+        }
     }
     bool started() const { return is_initialized_vio; }
     RotationOnlyStartup rotation_startup;
     relpose_openvins::FixedLagVio smoother;
+    std::unique_ptr<relpose_openvins::FixedLagVio> conservative;
+    bool anchored_tracking = false;
     // Rotation of IMU bearings between images; remove estimated gyro bias after initialization.
     Eigen::Matrix3d tracking_rotation = Eigen::Matrix3d::Identity();
     ov_core::ImuData previous_imu;
     bool have_previous_imu = false;
     void feed_measurement_imu(const ov_core::ImuData& measurement) {
         smoother.feed_imu(measurement);
+        if (conservative) conservative->feed_imu(measurement);
         if (have_previous_imu) {
             Eigen::Vector3d bias = Eigen::Vector3d::Zero();
             if (is_initialized_vio) bias = get_state()->_imu->bias_g();
@@ -215,9 +228,18 @@ struct Vio : ov_msckf::VioManager {
         }
         // Bootstrap once, then optimize raw IMU and image factors independently.
         // The fast EKF remains active to supply the gyro bias for image warping.
-        if (!smoother.initialized()) smoother.initialize(get_state());
+        if (!smoother.initialized()) {
+            // Both chain graphs copy the same untouched EKF state/covariance.
+            // Subsequent optimization only consumes their own raw factor copies.
+            smoother.initialize(get_state());
+            if (conservative) conservative->initialize(get_state());
+            if (anchored_tracking)
+                std::dynamic_pointer_cast<ov_core::TrackKLT>(trackFEATS)->enable_temporal_anchor(message.timestamp, smoother.keyframe_interval);
+        }
         smoother.feed_camera(message.timestamp, trackFEATS->get_feature_database());
-        if (smoother.failed()) throw std::runtime_error("fixed-lag estimator could not maintain finite state constraints");
+        if (conservative) conservative->feed_camera(message.timestamp, trackFEATS->get_feature_database());
+        if (smoother.failed() || (conservative && conservative->failed()))
+            throw std::runtime_error("fixed-lag estimator could not maintain finite state constraints");
         do_feature_propagate_update(message);
     }
 };
@@ -242,17 +264,19 @@ struct State {
     bool anchored = false;
     Pose camera0;  // the first camera frame in the world frame: the first IMU frame until initialization, then OpenVINS' global frame
     double last[RELPOSE_STATE_VALUES] = {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0};
+    double last_conservative[RELPOSE_STATE_VALUES] = {0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0};
 };
 
-State state;
+State chain_state, anchor_state;
+ConsensusOutput consensus;
 
-Pose camera_pose(const Eigen::Matrix3d& R_world_imu, const Eigen::Vector3d& p_imu) {
+Pose camera_pose(const State& state, const Eigen::Matrix3d& R_world_imu, const Eigen::Vector3d& p_imu) {
     return {R_world_imu * state.R_ItoC.transpose(), p_imu + R_world_imu * state.p_CinI};
 }
 
 // The IMU pose at the first frame, integrating the measurements back from the initial state (time, R_GtoI, p_IinG, v_IinG,
 // biases) with the propagator's mean model; OpenVINS starts its window later than the first frame.
-Pose imu_pose_at_first_frame(double time, Eigen::Matrix3d R_GtoI, Eigen::Vector3d p, Eigen::Vector3d v, const Eigen::Vector3d& bias_g,
+Pose imu_pose_at_first_frame(const State& state, double time, Eigen::Matrix3d R_GtoI, Eigen::Vector3d p, Eigen::Vector3d v, const Eigen::Vector3d& bias_g,
                              const Eigen::Vector3d& bias_a, double gravity) {
     const Eigen::Vector3d g(0, 0, gravity);
     for (size_t j = state.imu.size(); j-- > 1;) {
@@ -269,7 +293,8 @@ Pose imu_pose_at_first_frame(double time, Eigen::Matrix3d R_GtoI, Eigen::Vector3
     return {R_GtoI.transpose(), p};
 }
 
-void write(double* out, const Pose& camera, const Eigen::Vector3d& v_cam, const Eigen::Vector3d& w_cam) {
+void write(State& state, double* out, const Pose& camera, const Eigen::Vector3d& v_cam, const Eigen::Vector3d& w_cam, bool conservative = false) {
+    double* last = conservative ? state.last_conservative : state.last;
     // relative to the first camera: p_c0 = R p_ck + t
     const Eigen::Matrix3d R = state.camera0.R.transpose() * camera.R;
     const Eigen::Vector3d t = state.camera0.R.transpose() * (camera.p - state.camera0.p);
@@ -279,15 +304,12 @@ void write(double* out, const Pose& camera, const Eigen::Vector3d& v_cam, const 
                                                  v_cam.x(), v_cam.y(), v_cam.z(), w_cam.x(), w_cam.y(), w_cam.z()};
     bool finite = true;
     for (double value : values) finite = finite && std::isfinite(value);
-    if (finite) {
-        for (int i = 0; i < RELPOSE_STATE_VALUES; i++) state.last[i] = values[i];
-    } else {  // keep the last estimate, standing still
-        for (int i = 7; i < RELPOSE_STATE_VALUES; i++) state.last[i] = 0;
-    }
-    for (int i = 0; i < RELPOSE_STATE_VALUES; i++) out[i] = state.last[i];
+    if (!finite) throw std::runtime_error("nonfinite estimator output candidate");
+    for (int i = 0; i < RELPOSE_STATE_VALUES; i++) last[i] = values[i];
+    for (int i = 0; i < RELPOSE_STATE_VALUES; i++) out[i] = last[i];
 }
 
-int32_t estimate(double t, const uint8_t* frame, const double* imu, int32_t imu_count, double* out) {
+int32_t estimate(State& state, double t, const uint8_t* frame, const double* imu, int32_t imu_count, double* out, double* conservative_out = nullptr) {
     Eigen::Vector3d gyro_mean = Eigen::Vector3d::Zero();
     for (int32_t i = 0; i < imu_count; i++) {
         const double* row = imu + RELPOSE_IMU_ROW_VALUES * i;
@@ -322,15 +344,19 @@ int32_t estimate(double t, const uint8_t* frame, const double* imu, int32_t imu_
                                  "(returning zero translation and gyro-only rotation)\n", t - state.t0);
             state.next_init_warning = t - state.t0 + 5.0;
         }
-        write(out, camera_pose(state.R_I0_I, Eigen::Vector3d::Zero()), Eigen::Vector3d::Zero(), state.R_ItoC * gyro_mean);
+        write(state, out, camera_pose(state, state.R_I0_I, Eigen::Vector3d::Zero()), Eigen::Vector3d::Zero(), state.R_ItoC * gyro_mean);
+        if (conservative_out) {
+            std::copy(out, out + RELPOSE_STATE_VALUES, conservative_out);
+            std::copy(out, out + RELPOSE_STATE_VALUES, state.last_conservative);
+        }
         return RELPOSE_STATUS_OK;
     }
     std::shared_ptr<ov_msckf::State> filter = state.vio->get_state();
     if (!state.anchored) {
         std::shared_ptr<ov_type::IMU> initial = filter->_imu;
-        Pose imu0 = imu_pose_at_first_frame(filter->_timestamp, initial->Rot(), initial->pos(), initial->vel(), initial->bias_g(),
+        Pose imu0 = imu_pose_at_first_frame(state, filter->_timestamp, initial->Rot(), initial->pos(), initial->vel(), initial->bias_g(),
                                             initial->bias_a(), state.gravity);
-        state.camera0 = camera_pose(imu0.R, imu0.p);
+        state.camera0 = camera_pose(state, imu0.R, imu0.p);
         state.anchored = true;
         state.imu.clear();
         state.imu.shrink_to_fit();
@@ -347,27 +373,71 @@ int32_t estimate(double t, const uint8_t* frame, const double* imu, int32_t imu_
     } else {
         Eigen::Matrix<double, 13, 1> propagated;  // q_GtoI (JPL), p_IinG, v_IinI, w_IinI
         Eigen::Matrix<double, 12, 12> covariance;
-        if (!state.vio->get_propagator()->fast_state_propagate(filter, t, propagated, covariance)) {
-            for (int i = 0; i < RELPOSE_STATE_VALUES; i++) out[i] = state.last[i];
-            return RELPOSE_STATUS_OK;
-        }
+        if (!state.vio->get_propagator()->fast_state_propagate(filter, t, propagated, covariance))
+            throw std::runtime_error("EKF output propagation failed");
         R_GtoI = ov_core::quat_2_Rot(propagated.block<4, 1>(0, 0));
         p_IinG = propagated.block<3, 1>(4, 0);
         v_IinI = propagated.block<3, 1>(7, 0);
     }
-    Eigen::Matrix<double, 16, 1> smoothed;
-    Eigen::Vector3d gyro_bias = filter->_imu->bias_g();
-    if (state.vio->smoother.state_at(t, smoothed)) {
-        R_GtoI = ov_core::quat_2_Rot(smoothed.head<4>());
-        p_IinG = smoothed.segment<3>(4);
-        v_IinI = R_GtoI * smoothed.segment<3>(7);
-        gyro_bias = smoothed.segment<3>(10);
+    // Re-express each independent graph in this frontend's first-camera frame.
+    // The conservative graph never changes the EKF, tracker, or primary graph.
+    auto write_graph = [&](relpose_openvins::FixedLagVio& graph, double* destination, bool is_conservative) {
+        Eigen::Matrix3d rotation = R_GtoI;
+        Eigen::Vector3d position = p_IinG, velocity = v_IinI, gyro_bias = filter->_imu->bias_g();
+        Eigen::Matrix<double, 16, 1> smoothed;
+        if (graph.state_at(t, smoothed)) {
+            rotation = ov_core::quat_2_Rot(smoothed.head<4>());
+            position = smoothed.segment<3>(4);
+            velocity = rotation * smoothed.segment<3>(7);
+            gyro_bias = smoothed.segment<3>(10);
+        }
+        if (graph.failed()) throw std::runtime_error("fixed-lag IMU propagation failed");
+        const Eigen::Vector3d w_IinI = gyro_mean - gyro_bias;
+        const Eigen::Vector3d v_cam = state.R_ItoC * (velocity + w_IinI.cross(state.p_CinI));
+        write(state, destination, camera_pose(state, rotation.transpose(), position), v_cam, state.R_ItoC * w_IinI, is_conservative);
+    };
+    write_graph(state.vio->smoother, out, false);
+    if (conservative_out) {
+        if (state.vio->conservative) write_graph(*state.vio->conservative, conservative_out, true);
+        else std::copy(out, out + RELPOSE_STATE_VALUES, conservative_out);
     }
-    if (state.vio->smoother.failed()) throw std::runtime_error("fixed-lag IMU propagation failed");
-    const Eigen::Vector3d w_IinI = gyro_mean - gyro_bias;  // mean over the frame interval
-    const Eigen::Vector3d v_cam = state.R_ItoC * (v_IinI + w_IinI.cross(state.p_CinI));
-    write(out, camera_pose(R_GtoI.transpose(), p_IinG), v_cam, state.R_ItoC * w_IinI);
     return RELPOSE_STATUS_OK;
+}
+
+void initialize_state(State& state, int width, int height, const double intrinsics[4], const Eigen::Matrix4d& T_cam_imu,
+                      bool use_anchor, bool use_conservative) {
+    state = State{};
+    state.width = width;
+    state.height = height;
+    state.R_ItoC = T_cam_imu.block<3, 3>(0, 0);
+    state.p_CinI = -state.R_ItoC.transpose() * T_cam_imu.block<3, 1>(0, 3);
+    state.mask = cv::Mat::zeros(height, width, CV_8UC1);
+    state.camera0 = camera_pose(state, Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
+    // Construct fresh calibration objects for each EKF/frontend context.
+    ov_msckf::VioManagerOptions options = make_options(width, height, intrinsics, T_cam_imu);
+    state.gravity = options.gravity_mag;
+    state.vio = std::make_unique<Vio>(options, use_anchor, use_conservative);
+}
+
+Output output_from_abi(double timestamp, const double* values) {
+    Output result;
+    result.timestamp = timestamp;
+    result.position = Eigen::Map<const Eigen::Vector3d>(values);
+    result.rotation = Eigen::Quaterniond(values[6], values[3], values[4], values[5]).toRotationMatrix();
+    result.linear_velocity = Eigen::Map<const Eigen::Vector3d>(values + 7);
+    result.angular_velocity = Eigen::Map<const Eigen::Vector3d>(values + 10);
+    return result;
+}
+
+void output_to_abi(const Output& value, double* out) {
+    const Eigen::Quaterniond q = Eigen::Quaterniond(value.rotation).normalized();
+    Eigen::Map<Eigen::Vector3d> position(out);
+    Eigen::Map<Eigen::Vector4d> quaternion(out + 3);
+    Eigen::Map<Eigen::Vector3d> velocity(out + 7), angular_velocity(out + 10);
+    position = value.position;
+    quaternion << q.x(), q.y(), q.z(), q.w();
+    velocity = value.linear_velocity;
+    angular_velocity = value.angular_velocity;
 }
 
 }  // namespace
@@ -390,21 +460,15 @@ int32_t init(const char* json, uint32_t length) {
             std::fprintf(stderr, "config without width, height, fx, fy, cx, cy or T_cam_imu\n");
             return RELPOSE_STATUS_ERROR;
         }
-        state.width = static_cast<int>(size[0]);
-        state.height = static_cast<int>(height[0]);
+        const int width = static_cast<int>(size[0]), image_height = static_cast<int>(height[0]);
         Eigen::Matrix4d T_cam_imu;
         for (int i = 0; i < 16; i++) T_cam_imu(i / 4, i % 4) = T[i];
-        state.R_ItoC = T_cam_imu.block<3, 3>(0, 0);
-        state.p_CinI = -state.R_ItoC.transpose() * T_cam_imu.block<3, 1>(0, 3);
-        state.mask = cv::Mat::zeros(state.height, state.width, CV_8UC1);
-        state.camera0 = camera_pose(Eigen::Matrix3d::Identity(), Eigen::Vector3d::Zero());
-
         ov_core::Printer::setPrintLevel(ov_core::Printer::PrintLevel::WARNING);
         const double intrinsics[4] = {fx[0], fy[0], cx[0], cy[0]};
-        ov_msckf::VioManagerOptions options = make_options(state.width, state.height, intrinsics, T_cam_imu);
-        state.gravity = options.gravity_mag;
-        state.vio = std::make_unique<Vio>(options);
-        std::printf("openvins: %dx%d fx=%.1f fy=%.1f cx=%.1f cy=%.1f\n", state.width, state.height, fx[0], fy[0], cx[0], cy[0]);
+        initialize_state(chain_state, width, image_height, intrinsics, T_cam_imu, false, true);
+        initialize_state(anchor_state, width, image_height, intrinsics, T_cam_imu, true, false);
+        consensus.reset();
+        std::printf("openvins consensus: %dx%d fx=%.1f fy=%.1f cx=%.1f cy=%.1f\n", width, image_height, fx[0], fy[0], cx[0], cy[0]);
         return RELPOSE_STATUS_OK;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "init: %s\n", error.what());
@@ -414,7 +478,18 @@ int32_t init(const char* json, uint32_t length) {
 
 int32_t step(double t, const uint8_t* frame, const double* imu, int32_t imu_count, double* out) {
     try {
-        return estimate(t, frame, imu, imu_count, out);
+        double chain_values[RELPOSE_STATE_VALUES], anchor_values[RELPOSE_STATE_VALUES], conservative_values[RELPOSE_STATE_VALUES];
+        const int32_t chain_status = estimate(chain_state, t, frame, imu, imu_count, chain_values, conservative_values);
+        if (chain_status != RELPOSE_STATUS_OK) return chain_status;
+        const int32_t anchor_status = estimate(anchor_state, t, frame, imu, imu_count, anchor_values);
+        if (anchor_status != RELPOSE_STATUS_OK) return anchor_status;
+        const Output chain = output_from_abi(t, chain_values), anchor = output_from_abi(t, anchor_values),
+                     conservative = output_from_abi(t, conservative_values);
+        Output combined;
+        if (!consensus.update(chain, anchor, conservative, combined))
+            throw std::runtime_error("consensus output rejected invalid candidates");
+        output_to_abi(combined, out);
+        return RELPOSE_STATUS_OK;
     } catch (const std::exception& error) {
         std::fprintf(stderr, "step at t=%.3f: %s\n", t, error.what());
         return RELPOSE_STATUS_ERROR;

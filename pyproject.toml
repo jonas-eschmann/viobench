@@ -33,7 +33,7 @@ namespaces = true
 [tool.setuptools.package-data]
 "relpose.tools.datasets.generate" = ["*.h.in"]
 "relpose.tools" = ["config.json"]
-# the build recipe and the minimal examples, which `relpose init` copies into new workspaces
+# the build recipe and examples that `relpose init` copies into new workspaces
 "relpose.solution" = [
     "toolchain/*", "runtime/native/*", "runtime/python/*", "runtime/python/guest/*", "runtime/python/cpython/*",
     "runtime/python/cpython/patches/*", "runtime/python/cpython/scripts/*", "examples/python/minimal/*", "examples/native/cpp_minimal/*",

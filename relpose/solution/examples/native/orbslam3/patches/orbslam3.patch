@@ -1,0 +1,527 @@
+--- a/include/Map.h
++++ b/include/Map.h
+@@ -24,7 +24,7 @@
+ #include "KeyFrame.h"
+ 
+ #include <set>
+-#include <pangolin/pangolin.h>
++#include <iterator>
+ #include <mutex>
+ 
+ #include <boost/serialization/base_object.hpp>
+@@ -188,7 +188,7 @@
+ 
+ 
+     // View of the map in aerial sight (for the AtlasViewer)
+-    GLubyte* mThumbnail;
++    unsigned char* mThumbnail;
+ 
+     bool mIsInUse;
+     bool mHasTumbnail;
+--- a/include/Frame.h
++++ b/include/Frame.h
+@@ -34,6 +34,7 @@
+ #include "Settings.h"
+ 
+ #include <mutex>
++#include <memory>
+ #include <opencv2/opencv.hpp>
+ 
+ #include "Eigen/Core"
+@@ -320,7 +321,7 @@
+ 
+     bool mbImuPreintegrated;
+ 
+-    std::mutex *mpMutexImu;
++    std::shared_ptr<std::mutex> mpMutexImu = std::make_shared<std::mutex>();
+ 
+ public:
+     GeometricCamera* mpCamera, *mpCamera2;
+--- a/include/LocalMapping.h
++++ b/include/LocalMapping.h
+@@ -50,6 +50,7 @@
+ 
+     // Main function
+     void Run();
++    void RunOnce();
+ 
+     void InsertKeyFrame(KeyFrame* pKF);
+     void EmptyQueue();
+--- a/include/Tracking.h
++++ b/include/Tracking.h
+@@ -290,7 +290,7 @@
+     cv::Mat mK;
+     Eigen::Matrix3f mK_;
+     cv::Mat mDistCoef;
+-    float mbf;
++    float mbf = 0;
+     float mImageScale;
+ 
+     float mImuFreq;
+@@ -307,7 +307,7 @@
+     // Threshold close/far points
+     // Points seen as close by the stereo/RGBD sensor are considered reliable
+     // and inserted from just one frame. Far points requiere a match in two keyframes.
+-    float mThDepth;
++    float mThDepth = 0;
+ 
+     // For RGB-D inputs only. For some datasets (e.g. TUM) the depthmap values are scaled.
+     float mDepthMapFactor;
+--- a/src/Tracking.cc
++++ b/src/Tracking.cc
+@@ -53,7 +53,7 @@
+         newParameterLoader(settings);
+     }
+     else{
+-        cv::FileStorage fSettings(strSettingPath, cv::FileStorage::READ);
++        cv::FileStorage fSettings(strSettingPath, cv::FileStorage::READ | cv::FileStorage::MEMORY);
+ 
+         bool b_parse_cam = ParseCamParamFile(fSettings);
+         if(!b_parse_cam)
+@@ -604,7 +604,7 @@
+     Sophus::SE3f Tbc = settings->Tbc();
+     mInsertKFsLost = settings->insertKFsWhenLost();
+     mImuFreq = settings->imuFrequency();
+-    mImuPer = 0.001; //1.0 / (double) mImuFreq;     //TODO: ESTO ESTA BIEN?
++    mImuPer = 1e-8; // timestamp comparison tolerance, not sample spacing     //TODO: ESTO ESTA BIEN?
+     float Ng = settings->noiseGyro();
+     float Na = settings->noiseAcc();
+     float Ngw = settings->gyroWalk();
+@@ -1341,7 +1341,7 @@
+     if(!node.empty() && node.isInt())
+     {
+         mImuFreq = node.operator int();
+-        mImuPer = 0.001; //1.0 / (double) mImuFreq;
++        mImuPer = 1e-8; // timestamp comparison tolerance, not sample spacing
+     }
+     else
+     {
+@@ -3935,7 +3935,7 @@
+ 
+ void Tracking::ChangeCalibration(const string &strSettingPath)
+ {
+-    cv::FileStorage fSettings(strSettingPath, cv::FileStorage::READ);
++    cv::FileStorage fSettings(strSettingPath, cv::FileStorage::READ | cv::FileStorage::MEMORY);
+     float fx = fSettings["Camera.fx"];
+     float fy = fSettings["Camera.fy"];
+     float cx = fSettings["Camera.cx"];
+--- a/src/ORBextractor.cc
++++ b/src/ORBextractor.cc
+@@ -53,7 +53,7 @@
+ 
+ 
+ #include <opencv2/core/core.hpp>
+-#include <opencv2/highgui/highgui.hpp>
++#include <iterator>
+ #include <opencv2/features2d/features2d.hpp>
+ #include <opencv2/imgproc/imgproc.hpp>
+ #include <vector>
+--- a/src/OptimizableTypes.cpp
++++ b/src/OptimizableTypes.cpp
+@@ -147,7 +147,7 @@
+         double y = xyz_trans[1];
+         double z = xyz_trans[2];
+ 
+-        auto projectJac = -pCamera->projectJac(xyz_trans);
++        Eigen::Matrix<double,2,3> projectJac = -pCamera->projectJac(xyz_trans);
+ 
+         _jacobianOplusXi =  projectJac * T.rotation().toRotationMatrix();
+ 
+--- a/src/Map.cc
++++ b/src/Map.cc
+@@ -30,7 +30,7 @@
+ mbFail(false), mIsInUse(false), mHasTumbnail(false), mbBad(false), mnMapChangeNotified(0), mbIsInertial(false), mbIMU_BA1(false), mbIMU_BA2(false)
+ {
+     mnId=nNextId++;
+-    mThumbnail = static_cast<GLubyte*>(NULL);
++    mThumbnail = static_cast<unsigned char*>(NULL);
+ }
+ 
+ Map::Map(int initKFid):mnInitKFid(initKFid), mnMaxKFid(initKFid),/*mnLastLoopKFid(initKFid),*/ mnBigChangeIdx(0), mIsInUse(false),
+@@ -38,7 +38,7 @@
+                        mnMapChange(0), mbFail(false), mnMapChangeNotified(0), mbIsInertial(false), mbIMU_BA1(false), mbIMU_BA2(false)
+ {
+     mnId=nNextId++;
+-    mThumbnail = static_cast<GLubyte*>(NULL);
++    mThumbnail = static_cast<unsigned char*>(NULL);
+ }
+ 
+ Map::~Map()
+@@ -51,7 +51,7 @@
+ 
+     if(mThumbnail)
+         delete mThumbnail;
+-    mThumbnail = static_cast<GLubyte*>(NULL);
++    mThumbnail = static_cast<unsigned char*>(NULL);
+ 
+     mvpReferenceMapPoints.clear();
+     mvpKeyFrameOrigins.clear();
+--- a/src/LocalMapping.cc
++++ b/src/LocalMapping.cc
+@@ -61,11 +61,10 @@
+     mpTracker=pTracker;
+ }
+ 
+-void LocalMapping::Run()
++void LocalMapping::RunOnce()
+ {
+     mbFinished = false;
+ 
+-    while(1)
+     {
+         // Tracking will see that Local Mapping is busy
+         SetAcceptKeyFrames(false);
+@@ -133,17 +132,11 @@
+ 
+                         if(dist>0.05)
+                             mTinit += mpCurrentKeyFrame->mTimeStamp - mpCurrentKeyFrame->mPrevKF->mTimeStamp;
+-                        if(!mpCurrentKeyFrame->GetMap()->GetIniertialBA2())
+-                        {
+-                            if((mTinit<10.f) && (dist<0.02))
+-                            {
+-                                cout << "Not enough motion for initializing. Reseting..." << endl;
+-                                unique_lock<mutex> lock(mMutexReset);
+-                                mbResetRequestedActiveMap = true;
+-                                mpMapToReset = mpCurrentKeyFrame->GetMap();
+-                                mbBadImu = true;
+-                            }
+-                        }
++                        // The asynchronous mapper resets on two very close keyframes during
++                        // IMU startup. Our synchronous mapper accepts keyframes immediately;
++                        // a short baseline can simply mean the camera has slowed or stopped.
++                        // Keep the initialized map and defer timed inertial refinements until
++                        // mTinit accumulates sufficient motion above, instead of resetting it.
+ 
+                         bool bLarge = ((mpTracker->GetMatchesInliers()>75)&&mbMonocular)||((mpTracker->GetMatchesInliers()>100)&&!mbMonocular);
+                         Optimizer::LocalInertialBA(mpCurrentKeyFrame, &mbAbortBA, mpCurrentKeyFrame->GetMap(),num_FixedKF_BA,num_OptKF_BA,num_MPs_BA,num_edges_BA, bLarge, !mpCurrentKeyFrame->GetMap()->GetIniertialBA2());
+@@ -256,29 +249,15 @@
+             vdLMTotal_ms.push_back(timeLocalMap);
+ #endif
+         }
+-        else if(Stop() && !mbBadImu)
+-        {
+-            // Safe area to stop
+-            while(isStopped() && !CheckFinish())
+-            {
+-                usleep(3000);
+-            }
+-            if(CheckFinish())
+-                break;
+-        }
+-
+         ResetIfRequested();
+ 
+         // Tracking will see that Local Mapping is busy
+         SetAcceptKeyFrames(true);
+ 
+-        if(CheckFinish())
+-            break;
+-
+-        usleep(3000);
+-    }
+-
+-    SetFinish();
++
++    }
++
++
+ }
+ 
+ void LocalMapping::InsertKeyFrame(KeyFrame *pKF)
+@@ -1062,15 +1041,7 @@
+     }
+     cout << "LM: Map reset, waiting..." << endl;
+ 
+-    while(1)
+-    {
+-        {
+-            unique_lock<mutex> lock2(mMutexReset);
+-            if(!mbResetRequested)
+-                break;
+-        }
+-        usleep(3000);
+-    }
++    ResetIfRequested();
+     cout << "LM: Map reset, Done!!!" << endl;
+ }
+ 
+@@ -1084,15 +1055,7 @@
+     }
+     cout << "LM: Active map reset, waiting..." << endl;
+ 
+-    while(1)
+-    {
+-        {
+-            unique_lock<mutex> lock2(mMutexReset);
+-            if(!mbResetRequestedActiveMap)
+-                break;
+-        }
+-        usleep(3000);
+-    }
++    ResetIfRequested();
+     cout << "LM: Active map reset, Done!!!" << endl;
+ }
+ 
+@@ -1301,12 +1264,13 @@
+     }
+ 
+     std::chrono::steady_clock::time_point t4 = std::chrono::steady_clock::now();
++    // Bound each synchronous update; local BA refines the solution on later keyframes.
+     if (bFIBA)
+     {
+         if (priorA!=0.f)
+-            Optimizer::FullInertialBA(mpAtlas->GetCurrentMap(), 100, false, mpCurrentKeyFrame->mnId, NULL, true, priorG, priorA);
++            Optimizer::FullInertialBA(mpAtlas->GetCurrentMap(), 10, false, mpCurrentKeyFrame->mnId, NULL, true, priorG, priorA);
+         else
+-            Optimizer::FullInertialBA(mpAtlas->GetCurrentMap(), 100, false, mpCurrentKeyFrame->mnId, NULL, false);
++            Optimizer::FullInertialBA(mpAtlas->GetCurrentMap(), 10, false, mpCurrentKeyFrame->mnId, NULL, false);
+     }
+ 
+     std::chrono::steady_clock::time_point t5 = std::chrono::steady_clock::now();
+--- a/src/Optimizer.cc
++++ b/src/Optimizer.cc
+@@ -18,6 +18,7 @@
+ 
+ 
+ #include "Optimizer.h"
++#include "ScaleGauge.h"
+ 
+ 
+ #include <complex>
+@@ -1240,6 +1241,31 @@
+             maxKFid=pKFi->mnId;
+         // DEBUG LBA
+         pCurrentMap->msFixedKFs.insert(pKFi->mnId);
++    }
++
++    // A single fixed camera removes the rigid gauge, but monocular scale is
++    // still free. Preserve one existing baseline until inertial measurements
++    // establish metric units. Otherwise local BA can rescale the map without
++    // rescaling the tracker's frame-relative translations or camera lever arm.
++    if (num_fixedKF == 1 && pMap->IsInertial() && !pMap->isImuInitialized()) {
++        KeyFrame* fixed = lFixedCameras.empty() ? nullptr : lFixedCameras.front();
++        for (KeyFrame* candidate : lLocalKeyFrames)
++            if (candidate->mnId == pMap->GetInitKFid()) fixed = candidate;
++        KeyFrame* anchor = nullptr;
++        if (fixed) {
++            for (KeyFrame* candidate : lLocalKeyFrames) {
++                if (candidate == fixed || (candidate->GetCameraCenter() - fixed->GetCameraCenter()).norm() < 1e-4)
++                    continue;
++                if (!anchor || candidate->mnId < anchor->mnId) anchor = candidate;
++            }
++        }
++        if (anchor) {
++            const Eigen::Vector3d center = fixed->GetCameraCenter().cast<double>();
++            const double baseline = (anchor->GetCameraCenter().cast<double>() - center).norm();
++            auto* edge = new relpose_orbslam3::ScaleGauge(center, baseline);
++            edge->setVertex(0, optimizer.vertex(anchor->mnId));
++            optimizer.addEdge(edge);
++        }
+     }
+ 
+     // Set MapPoint vertices
+--- a/src/Frame.cc
++++ b/src/Frame.cc
+@@ -119,10 +119,8 @@
+ #ifdef REGISTER_TIMES
+     std::chrono::steady_clock::time_point time_StartExtORB = std::chrono::steady_clock::now();
+ #endif
+-    thread threadLeft(&Frame::ExtractORB,this,0,imLeft,0,0);
+-    thread threadRight(&Frame::ExtractORB,this,1,imRight,0,0);
+-    threadLeft.join();
+-    threadRight.join();
++    ExtractORB(0,imLeft,0,0);
++    ExtractORB(1,imRight,0,0);
+ #ifdef REGISTER_TIMES
+     std::chrono::steady_clock::time_point time_EndExtORB = std::chrono::steady_clock::now();
+ 
+@@ -183,7 +181,7 @@
+         mVw.setZero();
+     }
+ 
+-    mpMutexImu = new std::mutex();
++
+ 
+     //Set no stereo fisheye information
+     Nleft = -1;
+@@ -271,7 +269,7 @@
+         mVw.setZero();
+     }
+ 
+-    mpMutexImu = new std::mutex();
++
+ 
+     //Set no stereo fisheye information
+     Nleft = -1;
+@@ -378,7 +376,7 @@
+         mVw.setZero();
+     }
+ 
+-    mpMutexImu = new std::mutex();
++
+ }
+ 
+ 
+@@ -1056,10 +1054,8 @@
+ #ifdef REGISTER_TIMES
+     std::chrono::steady_clock::time_point time_StartExtORB = std::chrono::steady_clock::now();
+ #endif
+-    thread threadLeft(&Frame::ExtractORB,this,0,imLeft,static_cast<KannalaBrandt8*>(mpCamera)->mvLappingArea[0],static_cast<KannalaBrandt8*>(mpCamera)->mvLappingArea[1]);
+-    thread threadRight(&Frame::ExtractORB,this,1,imRight,static_cast<KannalaBrandt8*>(mpCamera2)->mvLappingArea[0],static_cast<KannalaBrandt8*>(mpCamera2)->mvLappingArea[1]);
+-    threadLeft.join();
+-    threadRight.join();
++    ExtractORB(0,imLeft,static_cast<KannalaBrandt8*>(mpCamera)->mvLappingArea[0],static_cast<KannalaBrandt8*>(mpCamera)->mvLappingArea[1]);
++    ExtractORB(1,imRight,static_cast<KannalaBrandt8*>(mpCamera2)->mvLappingArea[0],static_cast<KannalaBrandt8*>(mpCamera2)->mvLappingArea[1]);
+ #ifdef REGISTER_TIMES
+     std::chrono::steady_clock::time_point time_EndExtORB = std::chrono::steady_clock::now();
+ 
+@@ -1117,7 +1113,7 @@
+ 
+     AssignFeaturesToGrid();
+ 
+-    mpMutexImu = new std::mutex();
++
+ 
+     UndistortKeyPoints();
+ 
+--- a/src/TwoViewReconstruction.cc
++++ b/src/TwoViewReconstruction.cc
+@@ -102,12 +102,10 @@
+         float SH, SF;
+         Eigen::Matrix3f H, F;
+ 
+-        thread threadH(&TwoViewReconstruction::FindHomography,this,ref(vbMatchesInliersH), ref(SH), ref(H));
+-        thread threadF(&TwoViewReconstruction::FindFundamental,this,ref(vbMatchesInliersF), ref(SF), ref(F));
++        FindHomography(vbMatchesInliersH, SH, H);
++        FindFundamental(vbMatchesInliersF, SF, F);
+ 
+         // Wait until both threads have finished
+-        threadH.join();
+-        threadF.join();
+ 
+         // Compute ratio of scores
+         if(SH+SF == 0.f) return false;
+--- a/Thirdparty/g2o/g2o/core/estimate_propagator.h
++++ b/Thirdparty/g2o/g2o/core/estimate_propagator.h
+@@ -37,7 +37,7 @@
+ #ifdef _MSC_VER
+ #include <unordered_map>
+ #else
+-#include <tr1/unordered_map>
++#include <unordered_map>
+ #endif
+ 
+ namespace g2o {
+@@ -135,7 +135,7 @@
+           size_t operator ()(const OptimizableGraph::Vertex* v) const { return v->id();}
+       };
+ 
+-      typedef std::tr1::unordered_map<OptimizableGraph::Vertex*, AdjacencyMapEntry, VertexIDHashFunction> AdjacencyMap;
++      typedef std::unordered_map<OptimizableGraph::Vertex*, AdjacencyMapEntry, VertexIDHashFunction> AdjacencyMap;
+ 
+     public:
+       EstimatePropagator(OptimizableGraph* g);
+--- a/Thirdparty/g2o/g2o/core/sparse_block_matrix_ccs.h
++++ b/Thirdparty/g2o/g2o/core/sparse_block_matrix_ccs.h
+@@ -37,7 +37,7 @@
+ #ifdef _MSC_VER
+ #include <unordered_map>
+ #else
+-#include <tr1/unordered_map>
++#include <unordered_map>
+ #endif
+ 
+ namespace g2o {
+@@ -223,7 +223,7 @@
+       //! rows of the matrix
+       int rows() const {return _rowBlockIndices.size() ? _rowBlockIndices.back() : 0;}
+ 
+-      typedef std::tr1::unordered_map<int, MatrixType*> SparseColumn;
++      typedef std::unordered_map<int, MatrixType*> SparseColumn;
+ 
+       SparseBlockMatrixHashMap(const std::vector<int>& rowIndices, const std::vector<int>& colIndices) :
+         _rowBlockIndices(rowIndices), _colBlockIndices(colIndices)
+--- a/Thirdparty/g2o/g2o/core/hyper_graph.h
++++ b/Thirdparty/g2o/g2o/core/hyper_graph.h
+@@ -38,7 +38,7 @@
+ #ifdef _MSC_VER
+ #include <unordered_map>
+ #else
+-#include <tr1/unordered_map>
++#include <unordered_map>
+ #endif
+ 
+ 
+@@ -90,7 +90,7 @@
+       typedef std::set<Edge*>                           EdgeSet;
+       typedef std::set<Vertex*>                         VertexSet;
+ 
+-      typedef std::tr1::unordered_map<int, Vertex*>     VertexIDMap;
++      typedef std::unordered_map<int, Vertex*>     VertexIDMap;
+       typedef std::vector<Vertex*>                      VertexContainer;
+ 
+       //! abstract Vertex, your types must derive from that one
+--- a/Thirdparty/g2o/g2o/core/robust_kernel.h
++++ b/Thirdparty/g2o/g2o/core/robust_kernel.h
+@@ -30,7 +30,7 @@
+ #ifdef _MSC_VER
+ #include <memory>
+ #else
+-#include <tr1/memory>
++#include <memory>
+ #endif
+ #include <Eigen/Core>
+ 
+@@ -74,7 +74,7 @@
+     protected:
+       double _delta;
+   };
+-  typedef std::tr1::shared_ptr<RobustKernel> RobustKernelPtr;
++  typedef std::shared_ptr<RobustKernel> RobustKernelPtr;
+ 
+ } // end namespace g2o
+ 
+--- a/Thirdparty/g2o/g2o/core/marginal_covariance_cholesky.h
++++ b/Thirdparty/g2o/g2o/core/marginal_covariance_cholesky.h
+@@ -36,7 +36,7 @@
+ #ifdef _MSC_VER
+ #include <unordered_map>
+ #else
+-#include <tr1/unordered_map>
++#include <unordered_map>
+ #endif
+ 
+ 
+@@ -50,7 +50,7 @@
+       /**
+        * hash struct for storing the matrix elements needed to compute the covariance
+        */
+-      typedef std::tr1::unordered_map<int, double>     LookupMap;
++      typedef std::unordered_map<int, double>     LookupMap;
+     
+     public:
+       MarginalCovarianceCholesky();
+--- a/Thirdparty/DBoW2/DBoW2/FORB.cpp
++++ b/Thirdparty/DBoW2/DBoW2/FORB.cpp
+@@ -13,7 +13,7 @@
+ #include <vector>
+ #include <string>
+ #include <sstream>
+-#include <stdint-gcc.h>
++#include <cstdint>
+ 
+ #include "FORB.h"
+ 
+--- a/Thirdparty/DBoW2/DUtils/Random.cpp
++++ b/Thirdparty/DBoW2/DUtils/Random.cpp
+@@ -16,9 +16,7 @@
+ bool DUtils::Random::m_already_seeded = false;
+ 
+ void DUtils::Random::SeedRand(){
+-	Timestamp time;
+-	time.setToCurrentTime();
+-	srand((unsigned)time.getFloatTime()); 
++	srand(0);
+ }
+ 
+ void DUtils::Random::SeedRandOnce()
