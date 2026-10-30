@@ -1,6 +1,6 @@
-// OpenVINS (github.com/rpng/open_vins, GPL-3.0) as a relpose solution: ov_msckf::VioManager, a monocular MSCKF with KLT tracking,
-// rotation-aware stationary startup, and dynamic initialization (Ceres). This file adapts the ABI (relpose_abi.h) to it: the
-// configuration from the init() JSON, IMU rows and the frame per step, and the filter's IMU state re-expressed as the pose and
+// OpenVINS (github.com/rpng/open_vins, GPL-3.0) as a relpose solution: KLT tracking, rotation-aware startup,
+// and Ceres fixed-lag visual-inertial smoothing. This file adapts the ABI (relpose_abi.h) to it: the
+// configuration from the init() JSON, IMU rows and the frame per step, and the estimated IMU state re-expressed as the pose and
 // twist of the camera relative to the first frame.
 // Build:  relpose/solution/runtime/native/build.sh relpose/solution/examples/native/openvins   ->   build/solution.wasm
 #include "relpose_abi.h"
@@ -14,6 +14,7 @@
 #include <exception>
 #include <memory>
 #include <string>
+#include <stdexcept>
 #include <vector>
 
 #include <Eigen/Dense>
@@ -25,6 +26,7 @@
 #include "state/Propagator.h"
 #include "state/State.h"
 #include "rotation_update.h"
+#include "fixed_lag_vio.h"
 #include "track/TrackBase.h"
 #include "track/TrackKLT.h"
 #include "types/IMU.h"
@@ -162,14 +164,22 @@ ov_msckf::VioManagerOptions make_options(int width, int height, const double int
 
 // VioManager keeps "has an initial state" protected; initialized() becomes true only after the first visual update
 struct Vio : ov_msckf::VioManager {
-    using VioManager::VioManager;
+    explicit Vio(ov_msckf::VioManagerOptions& options) : VioManager(options) {
+        smoother.sigma_w = options.imu_noises.sigma_w;
+        smoother.sigma_wb = options.imu_noises.sigma_wb;
+        smoother.sigma_a = options.imu_noises.sigma_a;
+        smoother.sigma_ab = options.imu_noises.sigma_ab;
+        smoother.gravity = Eigen::Vector3d(0, 0, options.gravity_mag);
+    }
     bool started() const { return is_initialized_vio; }
     RotationOnlyStartup rotation_startup;
+    relpose_openvins::FixedLagVio smoother;
     // Rotation of IMU bearings between images; remove estimated gyro bias after initialization.
     Eigen::Matrix3d tracking_rotation = Eigen::Matrix3d::Identity();
     ov_core::ImuData previous_imu;
     bool have_previous_imu = false;
     void feed_measurement_imu(const ov_core::ImuData& measurement) {
+        smoother.feed_imu(measurement);
         if (have_previous_imu) {
             Eigen::Vector3d bias = Eigen::Vector3d::Zero();
             if (is_initialized_vio) bias = get_state()->_imu->bias_g();
@@ -203,6 +213,11 @@ struct Vio : ov_msckf::VioManager {
                         message.timestamp, rotation_startup.updates(), rotation_startup.fit_rms_pixels(),
                         rotation_startup.inlier_fraction());
         }
+        // Bootstrap once, then optimize raw IMU and image factors independently.
+        // The fast EKF remains active to supply the gyro bias for image warping.
+        if (!smoother.initialized()) smoother.initialize(get_state());
+        smoother.feed_camera(message.timestamp, trackFEATS->get_feature_database());
+        if (smoother.failed()) throw std::runtime_error("fixed-lag estimator could not maintain finite state constraints");
         do_feature_propagate_update(message);
     }
 };
@@ -340,7 +355,16 @@ int32_t estimate(double t, const uint8_t* frame, const double* imu, int32_t imu_
         p_IinG = propagated.block<3, 1>(4, 0);
         v_IinI = propagated.block<3, 1>(7, 0);
     }
-    const Eigen::Vector3d w_IinI = gyro_mean - filter->_imu->bias_g();  // mean over the frame interval
+    Eigen::Matrix<double, 16, 1> smoothed;
+    Eigen::Vector3d gyro_bias = filter->_imu->bias_g();
+    if (state.vio->smoother.state_at(t, smoothed)) {
+        R_GtoI = ov_core::quat_2_Rot(smoothed.head<4>());
+        p_IinG = smoothed.segment<3>(4);
+        v_IinI = R_GtoI * smoothed.segment<3>(7);
+        gyro_bias = smoothed.segment<3>(10);
+    }
+    if (state.vio->smoother.failed()) throw std::runtime_error("fixed-lag IMU propagation failed");
+    const Eigen::Vector3d w_IinI = gyro_mean - gyro_bias;  // mean over the frame interval
     const Eigen::Vector3d v_cam = state.R_ItoC * (v_IinI + w_IinI.cross(state.p_CinI));
     write(out, camera_pose(R_GtoI.transpose(), p_IinG), v_cam, state.R_ItoC * w_IinI);
     return RELPOSE_STATUS_OK;

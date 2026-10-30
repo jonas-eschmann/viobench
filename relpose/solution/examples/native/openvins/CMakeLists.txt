@@ -98,7 +98,7 @@ endif()
 set(Eigen3_DIR ${CMAKE_BINARY_DIR}/eigen3 CACHE PATH "" FORCE)
 find_package(Eigen3 REQUIRED NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
 
-# Ceres, for the dynamic initializer only: no threads, miniglog, Eigen for dense and sparse algebra, no optional backends
+# Ceres, for dynamic initialization and fixed-lag smoothing: no threads, miniglog, Eigen for dense and sparse algebra, no optional backends
 set(CERES_THREADING_MODEL NO_THREADS CACHE STRING "" FORCE)
 foreach(option MINIGLOG EIGENSPARSE)
     set(${option} ON CACHE BOOL "" FORCE)
@@ -107,6 +107,9 @@ foreach(option GFLAGS SUITESPARSE CXSPARSE ACCELERATESPARSE CUDA LAPACK SCHUR_SP
                BUILD_BENCHMARKS BUILD_DOCUMENTATION BUILD_SHARED_LIBS PROVIDE_UNINSTALL_TARGET EXPORT_BUILD_DIR)
     set(${option} OFF CACHE BOOL "" FORCE)
 endforeach()
+# miniglog otherwise enables every VLOG level, including allocation diagnostics
+# on every smoother update. Preserve warnings/errors without formatting verbose logs.
+add_compile_definitions(MAX_LOG_LEVEL=-1)
 add_subdirectory(${ceres_DIR} ${CMAKE_BINARY_DIR}/ceres EXCLUDE_FROM_ALL)
 
 # OpenVINS: ov_core (tracking, features), ov_init (initializers), ov_msckf (the filter); no ROS, simulator or ArUco

@@ -133,7 +133,7 @@ def low_parallax_motion(t):
     return rotation, position, velocity, acceleration, angular_velocity
 
 
-def low_parallax_inputs(config, seconds=15):
+def low_parallax_inputs(config, seconds=15, imu_phase=0.0):
     """Ray-cast fixed textured room walls, with noisy IMU and a separate analytic truth oracle.
 
     Unlike screen-space corner sprites, wall texture undergoes the actual perspective warp,
@@ -176,7 +176,8 @@ def low_parallax_inputs(config, seconds=15):
                                     borderMode=cv2.BORDER_REPLICATE)
                 gray[visible] = texture[visible]
 
-        times = (index * 10 + np.arange(1, 11)) / 200.0
+        # Camera exposures need not coincide with the newest causal IMU sample.
+        times = (index * 10 + np.arange(1, 11)) / 200.0 - imu_phase
         imu = np.zeros((10, 7))
         imu[:, 0] = times
         for j, time in enumerate(times):
@@ -191,7 +192,9 @@ def low_parallax_inputs(config, seconds=15):
         yield t, np.repeat(gray[..., None], 3, axis=2), imu, truth
 
 
-def test_tracking_after_turning_in_place(openvins_path, engine, tmp_path):
+@pytest.mark.parametrize("blank_images,imu_phase", [(False, 0.0), (True, 0.0), (False, 0.0025)],
+                         ids=["normal", "image_dropout", "camera_between_imu_samples"])
+def test_tracking_after_turning_in_place(openvins_path, engine, tmp_path, blank_images, imu_phase):
     from relpose.tools.runner.metrics import evaluate_trajectory
 
     sandbox = Sandbox(openvins_path, engine, log_dir=tmp_path)
@@ -200,7 +203,9 @@ def test_tracking_after_turning_in_place(openvins_path, engine, tmp_path):
     config = default_guest_config(width=width, height=height, horizontal_fov_degrees=120)
     sandbox.init(config)
     times, estimates, truth = [], [], []
-    for t, frame, imu, expected in low_parallax_inputs(config):
+    for t, frame, imu, expected in low_parallax_inputs(config, imu_phase=imu_phase):
+        if blank_images and 9.0 <= t < 10.0:
+            frame = np.zeros_like(frame)
         result = sandbox.step(t, frame, imu)
         times.append(t)
         estimates.append(np.r_[result.pose, result.twist])
@@ -209,6 +214,9 @@ def test_tracking_after_turning_in_place(openvins_path, engine, tmp_path):
     assert metrics.held == 0, metrics
     # Initialization alone is insufficient: bias drift used to destroy the trajectory after
     # the rotation-only interval. These bounds also reject an always-stationary solution.
-    assert metrics.rpe_translation_rmse < 0.25, metrics
-    assert metrics.final_drift < 1.0, metrics
-    assert metrics.rotation_rmse < 0.15, metrics
+    # A complete one-second image dropout must survive window marginalization
+    # and recover when textured images return, without losing metric scale.
+    assert metrics.rpe_translation_rmse < 0.15, metrics
+    assert metrics.ate_rmse < 0.6, metrics
+    assert metrics.final_drift < 0.6, metrics
+    assert metrics.rotation_rmse < 0.1, metrics
