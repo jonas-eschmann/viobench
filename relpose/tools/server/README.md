@@ -26,6 +26,10 @@ A team has one submission in flight at a time and `daily_quota` per day (from mi
 `daily_failed_quota` failed ones (crashed, timed out or no episode completed; no results) do not count. Teams never
 see the guest's output: `report.json` and the logs stay in `reports/<id>/`.
 
+Results include maximum, mean, median, p95 and p99 fuel per attempted frame, total step fuel and attempted-frame counts
+per episode, per dataset and overall. Dataset and overall statistics pool the frames. Judging uses the overall maximum;
+the other statistics are diagnostics. Initialization fuel is reported separately per episode.
+
 Deployment: [`compose.yaml`](compose.yaml) (usage in its header) runs the app on 0.0.0.0:8000 and the worker
 unprivileged, without network and with a memory limit (wasmtime sandboxes the guest, not the host process); put TLS in
 front of the app; keep the `server-data` volume private (the sqlite holds the tokens) and back it up.

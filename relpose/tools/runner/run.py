@@ -23,12 +23,15 @@ class EpisodeReport:
     name: str
     dataset: str
     frames: int
+    frames_attempted: int  # includes a failing step, excludes frames held after the failure
     duration_s: float  # first to last frame; episodes of one set share it, sets may differ
     completed: bool  # all frames were fed; otherwise the episode failed and the remaining frames repeat the last pose
     failure: str | None  # why it ended early: init failed, a step failed or returned an unusable state, a trap
     fuel_init: int
+    fuel_per_frame_max: int
     fuel_per_frame_median: float
     fuel_per_frame_p95: float
+    fuel_per_frame_p99: float
     fuel_per_frame_mean: float
     fuel_total: int
     wall_init_s: float
@@ -41,8 +44,22 @@ class EpisodeReport:
         return asdict(self)
 
 
+def fuel_statistics(fuel):
+    """Statistics over actual attempted frames; no samples are added for unprocessed frames or init failures."""
+    median, p95, p99 = np.percentile(fuel, [50, 95, 99]) if fuel.size else (0.0, 0.0, 0.0)
+    return {
+        "frames_attempted": int(fuel.size),
+        "fuel_per_frame_max": int(fuel.max(initial=0)),
+        "fuel_per_frame_mean": float(fuel.mean()) if fuel.size else 0.0,
+        "fuel_per_frame_median": float(median),
+        "fuel_per_frame_p95": float(p95),
+        "fuel_per_frame_p99": float(p99),
+        "fuel_total": int(fuel.sum()),
+    }
+
+
 def run_episode(wasm_path, episode, engine, limits, log_dir):
-    """One episode through a fresh Sandbox; returns (EpisodeReport, estimates (N, 13) with NaN rows from where it failed)."""
+    """Returns (EpisodeReport, estimates (N, 13) with NaN rows after failure, fuel for attempted frames)."""
     estimates = np.full((episode.num_frames, abi.STATE_VALUES), np.nan)
     fuel = np.zeros(episode.num_frames)
     wall = np.zeros(episode.num_frames)
@@ -50,13 +67,19 @@ def run_episode(wasm_path, episode, engine, limits, log_dir):
     completed = False
     fuel_init = 0
     wall_init = 0.0
+    fed = 0
     try:
         sandbox = Sandbox(wasm_path, engine, limits=limits, log_dir=log_dir)
         config, frames = episode.adapt(sandbox.resolution)
         sandbox.init(config)
         fuel_init, wall_init = sandbox.init_fuel, sandbox.init_wall_seconds
         for index, (t, frame, imu) in enumerate(episode.steps(frames)):
-            result = sandbox.step(t, frame, imu)
+            fed = index + 1
+            try:
+                result = sandbox.step(t, frame, imu)
+            except SandboxError as error:
+                fuel[index], wall[index] = error.fuel, error.wall_seconds
+                raise
             fuel[index], wall[index] = result.fuel, result.wall_seconds
             estimates[index] = np.concatenate([result.pose, result.twist])
         completed = True
@@ -64,10 +87,9 @@ def run_episode(wasm_path, episode, engine, limits, log_dir):
         failure = f"trap {trap.trap_code}: {trap.trap_message}"
     except SandboxError as error:
         failure = str(error).splitlines()[0]
-    fed = episode.num_frames if completed else max(int(np.count_nonzero(fuel)), 1)
     metrics = evaluate_trajectory(episode.ground_truth_state(), estimates, episode.frame_times)
     per_frame_fuel = fuel[:fed]
-    per_frame_wall = wall[:fed]
+    per_frame_wall = wall[:max(fed, 1)]
     return EpisodeReport(
         name=episode.name,
         dataset=episode.dataset,
@@ -76,21 +98,21 @@ def run_episode(wasm_path, episode, engine, limits, log_dir):
         completed=completed,
         failure=failure,
         fuel_init=int(fuel_init),
-        fuel_per_frame_median=float(np.median(per_frame_fuel)),
-        fuel_per_frame_p95=float(np.percentile(per_frame_fuel, 95)),
-        fuel_per_frame_mean=float(per_frame_fuel.mean()),
-        fuel_total=int(fuel.sum()),
+        **fuel_statistics(per_frame_fuel),
         wall_init_s=float(wall_init),
         wall_per_frame_median_ms=float(np.median(per_frame_wall) * 1e3),
         wall_per_frame_p95_ms=float(np.percentile(per_frame_wall, 95) * 1e3),
         metrics=metrics.as_dict(),
         stderr_tail=tail(Path(log_dir) / STDERR_FILE, 20),  # also when the Sandbox could not even be constructed
-    ), estimates
+    ), estimates, per_frame_fuel
 
 
-def summarize(reports):
-    """Per-dataset medians of the headline numbers, plus overall."""
-    def summary(group):
+def summarize(reports, frame_fuels):
+    """Per-dataset and overall fuel distributions pooled across attempted frames; accuracy uses episode medians."""
+    entries = list(zip(reports, frame_fuels, strict=True))
+
+    def summary(entries):
+        group, fuel = zip(*entries)
         completed = [r for r in group if r.completed]
         return {
             "episodes": len(group),
@@ -102,13 +124,12 @@ def summarize(reports):
             "rotation_rmse_median": float(np.median([r.metrics["rotation_rmse"] for r in group])),
             "velocity_rmse_median": float(np.median([r.metrics["velocity_rmse"] for r in group])),
             "angular_velocity_rmse_median": float(np.median([r.metrics["angular_velocity_rmse"] for r in group])),
-            "fuel_per_frame_median": float(np.median([r.fuel_per_frame_median for r in group])),
-            "fuel_per_frame_p95": float(np.median([r.fuel_per_frame_p95 for r in group])),
+            **fuel_statistics(np.concatenate(fuel)),
             "wall_per_frame_median_ms": float(np.median([r.wall_per_frame_median_ms for r in group])),
         }
 
     datasets = sorted({r.dataset for r in reports})
-    return {"overall": summary(reports), "datasets": {name: summary([r for r in reports if r.dataset == name]) for name in datasets}}
+    return {"overall": summary(entries), "datasets": {name: summary([entry for entry in entries if entry[0].dataset == name]) for name in datasets}}
 
 
 def as_dataset(dataset):
@@ -132,17 +153,19 @@ def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_
     output_dir = Path(output_dir) if output_dir else Path.cwd() / f"report-{wasm_path.stem}"
     output_dir.mkdir(parents=True, exist_ok=True)
     reports = []
+    frame_fuels = []
     started = time.perf_counter()
     for count, episode in enumerate(as_dataset(dataset)):
         if max_episodes is not None and count >= max_episodes:
             break
         log_dir = output_dir / "logs" / episode.dataset / episode.name
-        report, estimates = run_episode(wasm_path, episode, engine, limits, log_dir)
+        report, estimates, fuel = run_episode(wasm_path, episode, engine, limits, log_dir)
         reports.append(report)
+        frame_fuels.append(fuel)
         write_estimates(log_dir, episode.frame_times, estimates)
         m = report.metrics
         log(f"{episode.dataset}/{episode.name}: {'ok' if report.completed else 'FAILED'} RPE {m['rpe_translation_rmse']:.3f} m/1 s  ATE {m['ate_rmse']:.3f} m  "
-            f"rot {np.degrees(m['rotation_rmse']):.1f} deg  vel {m['velocity_rmse']:.3f} m/s  held {m['held']}  fuel/frame {report.fuel_per_frame_median:,.0f} (p95 {report.fuel_per_frame_p95:,.0f})  "
+            f"rot {np.degrees(m['rotation_rmse']):.1f} deg  vel {m['velocity_rmse']:.3f} m/s  held {m['held']}  fuel/frame max {report.fuel_per_frame_max:,.0f} (p95 {report.fuel_per_frame_p95:,.0f})  "
             f"wall/frame {report.wall_per_frame_median_ms:.1f} ms" + (f"  [{report.failure}]" if report.failure else ""))
         if save_video:
             from .video import write_video
@@ -157,7 +180,7 @@ def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_
         "host": platform.platform(),
         "limits": asdict(limits),
         "elapsed_s": time.perf_counter() - started,
-        "summary": summarize(reports),
+        "summary": summarize(reports, frame_fuels),
         "episodes": [report.as_dict() for report in reports],
     }
     (output_dir / "report.json").write_text(json.dumps(result, indent=1, default=lambda v: float(v) if isinstance(v, np.floating) else str(v)))

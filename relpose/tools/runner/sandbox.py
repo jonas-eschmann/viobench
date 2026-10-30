@@ -62,7 +62,12 @@ class StepResult:
 
 
 class SandboxError(Exception):
-    """The solution failed: init or a step returned an error, a step returned an unusable state, or the protocol was broken."""
+    """The solution failed. Failed step calls carry their consumed fuel and wall time for the report."""
+
+    def __init__(self, message):
+        super().__init__(message)
+        self.fuel = 0
+        self.wall_seconds = 0.0
 
 
 class SandboxTrap(SandboxError):
@@ -241,13 +246,18 @@ class Sandbox:
         self.write(self.out_pointer, UNWRITTEN)
         self._arm(self.limits.step_fuel, self.limits.step_wall_seconds)
         started = time.perf_counter()
-        status = self._guard(lambda: self._step(self.store, float(t), self.frame_pointer, self.imu_pointer, len(imu), self.out_pointer))
-        wall = time.perf_counter() - started
-        fuel = self._consumed(self.limits.step_fuel)
-        if status != abi.STATUS_OK:
-            raise SandboxError(f"step failed (status {status})\n--- stderr tail ---\n{self.stderr_tail()}")
-        state = np.frombuffer(self.read(self.out_pointer, abi.STATE_VALUES * abi.F64_BYTES), dtype=np.float64).copy()
-        if not valid_states(state[None])[0]:
-            raise SandboxError(f"step returned an unusable state {state.tolist()} (not all {abi.STATE_VALUES} values written, NaN/inf, "
-                               "or an all-zero quaternion)")
+        try:
+            status = self._guard(lambda: self._step(self.store, float(t), self.frame_pointer, self.imu_pointer, len(imu), self.out_pointer))
+            wall = time.perf_counter() - started
+            fuel = self._consumed(self.limits.step_fuel)
+            if status != abi.STATUS_OK:
+                raise SandboxError(f"step failed (status {status})\n--- stderr tail ---\n{self.stderr_tail()}")
+            state = np.frombuffer(self.read(self.out_pointer, abi.STATE_VALUES * abi.F64_BYTES), dtype=np.float64).copy()
+            if not valid_states(state[None])[0]:
+                raise SandboxError(f"step returned an unusable state {state.tolist()} (not all {abi.STATE_VALUES} values written, NaN/inf, "
+                                   "or an all-zero quaternion)")
+        except SandboxError as error:
+            error.fuel = self._consumed(self.limits.step_fuel)
+            error.wall_seconds = time.perf_counter() - started
+            raise
         return StepResult(state[:abi.POSE_VALUES], state[abi.POSE_VALUES:], fuel, wall)

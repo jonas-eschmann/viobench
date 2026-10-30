@@ -22,11 +22,18 @@ Per episode (`relpose.tools.runner.metrics`):
 - ATE: position RMSE in frame-0 coordinates, without alignment.
 - Rotation RMSE, velocity RMSE, angular-velocity RMSE.
 - Diagnostics: Sim(3)-aligned ATE and scale, final drift per metre, held frames.
-- Compute: fuel per frame (median and p95), Wasmtime's instruction count, identical on every machine; wall time for
-  reference.
+- Compute: the maximum fuel consumed by a single `step` call across all frames, episodes and test datasets.
+  This is Wasmtime's deterministic fuel count for a fixed module, input and runtime version. Failed calls count too.
+  Initialization fuel is reported separately and has its own budget.
 
-Per dataset, a submission is the point (median fuel per frame, median RPE). A failed episode is scored with its last
-pose held, standing still.
+Per dataset, a submission is the point (maximum fuel per frame across the entire test set, median RPE for that dataset).
+Every dataset's point uses the same compute value for a submission. A failed episode is scored with its last pose held,
+standing still; its attempted frames, including the failing call, contribute to the fuel maximum.
+
+For analysis, each episode, dataset and overall report also records mean, median, p95 and p99 fuel per frame,
+total step fuel and the number of attempted frames. Dataset and overall statistics pool all attempted frames, so the
+mean is weighted by frame count and percentiles describe the full frame distribution. Frames held after a failure
+add no samples. With no attempted frames, the count and fuel statistics are zero. Wall time is reported for reference.
 
 ## Limits (`relpose.tools.runner.sandbox.Limits`)
 

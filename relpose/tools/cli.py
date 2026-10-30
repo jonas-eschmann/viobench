@@ -134,7 +134,9 @@ def command_evaluate(arguments):
         result = evaluate(arguments.wasm, dataset(), output_dir=arguments.output, max_episodes=max_episodes)
         summary = result["summary"]["overall"]
         print(f"overall: {summary['completed']}/{summary['episodes']} episodes completed, RPE median {summary['rpe_translation_rmse_median']:.3f} m/1 s, "
-              f"fuel/frame median {summary['fuel_per_frame_median']:,.0f}")
+              f"fuel/frame max (all datasets) {summary['fuel_per_frame_max']:,.0f} "
+              f"(mean {summary['fuel_per_frame_mean']:,.0f}, median {summary['fuel_per_frame_median']:,.0f}, "
+              f"p95 {summary['fuel_per_frame_p95']:,.0f}, p99 {summary['fuel_per_frame_p99']:,.0f})")
         return 0 if summary["completed"] == summary["episodes"] else 1
 
     return run_with_large_stack(run)
@@ -156,7 +158,11 @@ def command_score(arguments):
 def command_leaderboard(arguments):
     from .runner.leaderboard import load_reports, markdown_table, plot, rows
 
-    table = rows(load_reports(arguments.reports))
+    try:
+        table = rows(load_reports(arguments.reports))
+    except ValueError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
     if not table:
         print("no reports found", file=sys.stderr)
         return 1
