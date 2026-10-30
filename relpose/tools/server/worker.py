@@ -18,8 +18,8 @@ from pathlib import Path
 from .store import Store
 
 POLL_SECONDS = 3.0
-EPISODE_FIELDS = ("dataset", "name", "frames", "duration_s", "completed", "metrics", "fuel_init", "fuel_per_frame_median",
-                  "fuel_per_frame_p95", "fuel_per_frame_mean", "fuel_total", "wall_init_s", "wall_per_frame_median_ms",
+EPISODE_FIELDS = ("dataset", "name", "frames", "frames_attempted", "duration_s", "completed", "metrics", "fuel_init", "fuel_per_frame_max", "fuel_per_frame_median",
+                  "fuel_per_frame_p95", "fuel_per_frame_p99", "fuel_per_frame_mean", "fuel_total", "wall_init_s", "wall_per_frame_median_ms",
                   "wall_per_frame_p95_ms")  # allowlist: numbers, no text from the guest
 
 

@@ -19,10 +19,15 @@ def load_reports(paths):
 
 
 def rows(reports):
-    """One row per (submission, dataset) with the headline numbers."""
+    """Per-dataset accuracy paired with the submission's worst-frame fuel across all evaluated datasets."""
     out = []
     for label, report in reports:
+        overall = report["summary"]["overall"]
+        if "fuel_per_frame_max" not in overall:
+            raise ValueError(f"{label}: report has no maximum fuel per frame; rerun `relpose evaluate` with the current evaluator")
         for dataset, summary in sorted(report["summary"]["datasets"].items()):
+            if "fuel_per_frame_mean" not in summary or "fuel_per_frame_p99" not in summary:
+                raise ValueError(f"{label}: report lacks frame-fuel diagnostics; rerun `relpose evaluate` with the current evaluator")
             out.append({
                 "submission": label,
                 "dataset": dataset,
@@ -32,8 +37,11 @@ def rows(reports):
                 "rpe_m": summary["rpe_translation_rmse_median"],  # the headline: m over 1 s windows
                 "ate_m": summary["ate_rmse_median"],
                 "rot_deg": float(np.degrees(summary["rotation_rmse_median"])),
-                "fuel_per_frame": summary["fuel_per_frame_median"],
+                "fuel_per_frame": overall["fuel_per_frame_max"],
+                "fuel_mean": summary["fuel_per_frame_mean"],
+                "fuel_median": summary["fuel_per_frame_median"],
                 "fuel_p95": summary["fuel_per_frame_p95"],
+                "fuel_p99": summary["fuel_per_frame_p99"],
                 "ms_per_frame": summary["wall_per_frame_median_ms"],
             })
     return out
@@ -51,16 +59,17 @@ def pareto_front(points):
 
 
 def markdown_table(table):
-    header = "| submission | dataset | episodes | s/episode | RPE [m/1 s] | ATE [m] | rot [deg] | fuel/frame | fuel p95 | ms/frame |\n|---|---|---|---|---|---|---|---|---|---|\n"
+    header = "| submission | dataset | episodes | s/episode | RPE [m/1 s] | ATE [m] | rot [deg] | max fuel/frame (all datasets) | fuel mean | fuel median | fuel p95 | fuel p99 | ms/frame |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
     lines = []
     for row in sorted(table, key=lambda r: (r["dataset"], r["rpe_m"])):
         lines.append(f"| {row['submission']} | {row['dataset']} | {row['completed']}/{row['episodes']} | {row['seconds']:.0f} | {row['rpe_m']:.3f} | {row['ate_m']:.3f} | "
-                     f"{row['rot_deg']:.1f} | {row['fuel_per_frame']:,.0f} | {row['fuel_p95']:,.0f} | {row['ms_per_frame']:.1f} |")
-    return header + "\n".join(lines) + "\n"
+                     f"{row['rot_deg']:.1f} | {row['fuel_per_frame']:,.0f} | {row['fuel_mean']:,.0f} | {row['fuel_median']:,.0f} | "
+                     f"{row['fuel_p95']:,.0f} | {row['fuel_p99']:,.0f} | {row['ms_per_frame']:.1f} |")
+    return header + "\n".join(lines) + "\n\nMaximum fuel spans all datasets; mean, median, p95 and p99 are per-frame diagnostics for the row's dataset.\n"
 
 
 def plot(table, path):
-    """RPE vs fuel per frame, one panel per dataset (needs matplotlib)."""
+    """Per-dataset RPE vs maximum fuel per frame across all datasets (needs matplotlib)."""
     import matplotlib
 
     matplotlib.use("Agg")
@@ -76,7 +85,7 @@ def plot(table, path):
             axis.annotate(label, (fuel, rpe), textcoords="offset points", xytext=(4, 4), fontsize=8)
         axis.set_xscale("log")
         axis.set_yscale("log")
-        axis.set_xlabel("fuel per frame (median)")
+        axis.set_xlabel("max fuel per frame (all datasets)")
         axis.set_ylabel("RPE over 1 s [m] (median over episodes)")
         axis.set_title(dataset)
         axis.grid(True, which="both", alpha=0.3)
