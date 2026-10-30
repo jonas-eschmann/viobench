@@ -12,7 +12,7 @@ from relpose.tools.abi.config import default_guest_config
 from relpose.tools.runner.metrics import IDENTITY_STATE, evaluate_trajectory
 from relpose.tools.runner.sandbox import SandboxError
 
-from vio_scene import moving_room_inputs
+from vio_scene import hovering_room_inputs, moving_room_inputs
 
 
 @pytest.fixture(scope="module")
@@ -94,3 +94,27 @@ def test_metric_tracking_with_camera_imu_offset(vins_mono_path, engine, tmp_path
     assert metrics.velocity_rmse < 0.4, metrics
     assert metrics.angular_velocity_rmse < 0.05, metrics
     assert 0.8 < metrics.sim3_scale < 1.2, metrics
+
+
+@pytest.mark.parametrize("settling_scale", [1.0, 3.0], ids=["mild_settling", "strong_settling"])
+def test_noisy_tracking_after_hovering_turn(vins_mono_path, engine, tmp_path, settling_scale):
+    sandbox = Sandbox(vins_mono_path, engine, log_dir=tmp_path)
+    width, height = sandbox.resolution
+    config = default_guest_config(width=width, height=height, horizontal_fov_degrees=120)
+    sandbox.init(config)
+    times, estimates, truth = [], [], []
+    for t, frame, imu, expected in hovering_room_inputs(config, settling_scale=settling_scale):
+        result = sandbox.step(t, frame, imu)
+        times.append(t)
+        estimates.append(np.r_[result.pose, result.twist])
+        truth.append(expected)
+    assert "vins_mono: initialized at t=" in sandbox.stdout_path.read_text(), sandbox.stdout_tail()
+    # Score the full sequence in the original camera frame. Discarding startup or
+    # aligning the trajectory would hide a late origin, gravity tilt or scale drift.
+    # These bounds reject both a stationary output and the previous noisy startup.
+    metrics = evaluate_trajectory(truth, estimates, times)
+    assert metrics.held == 0, metrics
+    assert metrics.rpe_translation_rmse < 0.15, metrics
+    assert metrics.ate_rmse < 0.6, metrics
+    assert metrics.final_drift < 0.6, metrics
+    assert metrics.rotation_rmse < 0.1, metrics

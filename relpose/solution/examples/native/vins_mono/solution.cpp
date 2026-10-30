@@ -38,7 +38,13 @@ struct State {
     double integration_time = -std::numeric_limits<double>::infinity();
     double last_imu_time = -std::numeric_limits<double>::infinity();
     double next_warning = 5;
-    bool started = false, anchored = false;
+    bool started = false, anchored = false, output_ready = false;
+    bool have_previous_imu = false;
+    Measurement previous_imu;
+    Mat3 tracking_rotation = Mat3::Identity();  // previous IMU bearings -> current IMU bearings
+    Mat3 initial_rotation = Mat3::Identity();   // current IMU axes -> first exposure IMU axes
+    double reference_time = 0;
+    bool refining_reference = false;
     Pose camera0;
     std::vector<Measurement> history;
 };
@@ -98,14 +104,14 @@ Pose camera_pose(const Mat3& rotation, const Vec3& position) {
     return {rotation * state.R_camera_imu.transpose(), position + rotation * state.p_camera_in_imu};
 }
 
-// Initialization may discard early images. Integrate backwards from the oldest optimized
+// Initialization may discard early images. Integrate backwards from a retained optimized
 // IMU state to the first input exposure, so the ABI origin never becomes a later keyframe.
-Pose first_camera_pose() {
+Pose first_camera_pose(int reference) {
     const auto& estimator = *state.estimator;
-    Mat3 rotation = estimator.Rs[0];
-    Vec3 position = estimator.Ps[0], velocity = estimator.Vs[0];
-    const Vec3 bias_g = estimator.Bgs[0], bias_a = estimator.Bas[0];
-    double cursor = estimator.Headers[0].stamp.toSec();
+    Mat3 rotation = estimator.Rs[reference];
+    Vec3 position = estimator.Ps[reference], velocity = estimator.Vs[reference];
+    const Vec3 bias_g = estimator.Bgs[reference], bias_a = estimator.Bas[reference];
+    double cursor = estimator.Headers[reference].stamp.toSec();
     for (size_t j = state.history.size(); j-- > 1;) {
         const auto& before = state.history[j - 1];
         const auto& after = state.history[j];
@@ -129,9 +135,19 @@ Pose first_camera_pose() {
 
 void feed_imu(const Measurement& measurement) {
     const double dt = std::isfinite(state.integration_time) ? measurement.time - state.integration_time : 0.0;
+    Vec3 bias = Vec3::Zero();
+    if (state.estimator->solver_flag == Estimator::NON_LINEAR) bias = state.estimator->Bgs[WINDOW_SIZE];
+    if (state.have_previous_imu) {
+        const Vec3 omega = 0.5 * (state.previous_imu.gyro + measurement.gyro) - bias;
+        state.tracking_rotation = increment(-omega * dt) * state.tracking_rotation;
+        const double attitude_dt = measurement.time - std::max(state.integration_time, state.first_time);
+        if (!state.output_ready && attitude_dt > 0) state.initial_rotation *= increment(omega * attitude_dt);
+    }
     state.estimator->processIMU(dt, measurement.acceleration, measurement.gyro);
     state.integration_time = measurement.time;
-    if (!state.anchored) state.history.push_back(measurement);
+    state.previous_imu = measurement;
+    state.have_previous_imu = true;
+    if (!state.output_ready) state.history.push_back(measurement);
 }
 }  // namespace
 
@@ -171,6 +187,7 @@ RELPOSE_EXPORT(step) int32_t step(double time, const uint8_t* pixels, const doub
             state.started = true;
         }
         Measurement latest;
+        Vec3 gyro_mean = Vec3::Zero();
         for (int i = 0; i < count; ++i) {
             const double* row = imu + i * RELPOSE_IMU_ROW_VALUES;
             for (int j = 0; j < RELPOSE_IMU_ROW_VALUES; ++j)
@@ -178,6 +195,7 @@ RELPOSE_EXPORT(step) int32_t step(double time, const uint8_t* pixels, const doub
             if (row[0] <= state.last_imu_time || row[0] <= state.last_time || row[0] > time + 1e-8)
                 throw std::runtime_error("IMU timestamps must increase and not exceed the exposure");
             latest = {row[0], Vec3(row[1], row[2], row[3]), Vec3(row[4], row[5], row[6])};
+            gyro_mean += latest.gyro / count;
             feed_imu(latest);
             state.last_imu_time = row[0];
         }
@@ -189,36 +207,74 @@ RELPOSE_EXPORT(step) int32_t step(double time, const uint8_t* pixels, const doub
         }
         cv::Mat rgb(state.height, state.width, CV_8UC3, const_cast<uint8_t*>(pixels)), gray;
         cv::cvtColor(rgb, gray, cv::COLOR_RGB2GRAY);
-        const auto observations = state.tracker.process(gray, time);
+        const auto observations = state.tracker.process(gray, time,
+            state.R_camera_imu * state.tracking_rotation * state.R_camera_imu.transpose());
+        state.tracking_rotation.setIdentity();
         std_msgs::Header header;
         header.stamp = ros::Time(time);
         auto& estimator = *state.estimator;
         estimator.processImage(observations, header);
         state.last_time = time;
         if (estimator.solver_flag != Estimator::NON_LINEAR) {
-            if (state.anchored) throw std::runtime_error("estimator reset after initialization; original camera frame was lost");
+            if (state.output_ready) throw std::runtime_error("estimator reset after initialization; original camera frame was lost");
+            state.anchored = false;
+            state.refining_reference = false;
+        } else {
+            if (!state.anchored) {
+                // Dynamic initialization's first scale/velocity estimate is tentative. Keep
+                // a named reference in the lag window and refine camera0 with that state's
+                // posterior until it leaves the window. Its integration interval never grows.
+                const int reference = estimator.static_initialized ? 0 : WINDOW_SIZE - 2;
+                state.reference_time = estimator.Headers[reference].stamp.toSec();
+                state.camera0 = first_camera_pose(reference);
+                state.anchored = true;
+                state.refining_reference = !estimator.static_initialized;
+            }
+            if (state.refining_reference) {
+                int reference = -1;
+                for (int i = 0; i <= WINDOW_SIZE; ++i)
+                    if (estimator.Headers[i].stamp.toSec() == state.reference_time) reference = i;
+                if (reference >= 0) state.camera0 = first_camera_pose(reference);
+                else state.refining_reference = false;
+            }
+            if (!state.refining_reference && !state.output_ready) {
+                // A stationary initializer has a metric zero-velocity constraint. A dynamic
+                // initializer instead waits for its reference to finish fixed-lag smoothing;
+                // publishing its provisional scale would create large fictitious motion.
+                state.output_ready = true;
+                state.history.clear();
+                state.history.shrink_to_fit();
+                std::printf("vins_mono: initialized at t=%.3f (origin t=%.3f)\n", time, state.first_time);
+            }
+        }
+        if (!state.output_ready) {
             if (time - state.first_time >= state.next_warning) {
-                std::fprintf(stderr, "vins_mono: still initializing after %.1f s; metric position and velocity unavailable\n",
+                std::fprintf(stderr, "vins_mono: still initializing after %.1f s; metric translation unavailable, reporting gyro attitude\n",
                              time - state.first_time);
                 state.next_warning += 5;
             }
             std::fill(out, out + RELPOSE_STATE_VALUES, 0.0);
-            out[6] = 1.0;
+            Eigen::Quaterniond orientation(state.R_camera_imu * state.initial_rotation * state.R_camera_imu.transpose());
+            orientation.normalize();
+            const Vec3 lever_position = state.R_camera_imu * (state.initial_rotation * state.p_camera_in_imu - state.p_camera_in_imu);
+            Vec3 omega = gyro_mean;
+            if (estimator.solver_flag == Estimator::NON_LINEAR) omega -= estimator.Bgs[WINDOW_SIZE];
+            const Vec3 angular_velocity = state.R_camera_imu * omega;
+            const Vec3 lever_velocity = state.R_camera_imu * omega.cross(state.p_camera_in_imu);
+            for (int i = 0; i < 3; ++i) {
+                out[i] = lever_position[i];
+                out[i + 7] = lever_velocity[i];
+                out[i + 10] = angular_velocity[i];
+            }
+            for (int i = 0; i < 4; ++i) out[i + 3] = orientation.coeffs()[i];
             return RELPOSE_STATUS_OK;
-        }
-        if (!state.anchored) {
-            state.camera0 = first_camera_pose();
-            state.anchored = true;
-            state.history.clear();
-            state.history.shrink_to_fit();
-            std::printf("vins_mono: initialized at t=%.3f (origin t=%.3f)\n", time, state.first_time);
         }
         const Pose camera = camera_pose(estimator.Rs[WINDOW_SIZE], estimator.Ps[WINDOW_SIZE]);
         const Vec3 position = state.camera0.rotation.transpose() * (camera.position - state.camera0.position);
         Eigen::Quaterniond orientation(state.camera0.rotation.transpose() * camera.rotation);
         orientation.normalize();
         if (orientation.w() < 0) orientation.coeffs() *= -1;
-        const Vec3 omega = latest.gyro - estimator.Bgs[WINDOW_SIZE];
+        const Vec3 omega = gyro_mean - estimator.Bgs[WINDOW_SIZE];
         const Vec3 velocity = camera.rotation.transpose() * estimator.Vs[WINDOW_SIZE] +
                                 state.R_camera_imu * omega.cross(state.p_camera_in_imu);
         const Vec3 angular_velocity = state.R_camera_imu * omega;
