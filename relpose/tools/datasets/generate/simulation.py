@@ -211,7 +211,8 @@ def simulate(sim, scenes, episodes, seed=0, camera=nominal_camera, name="sim", l
     episode raises RuntimeError, after yielding what it had.
 
     scenes: {name: reference} (scene_references). camera: how renders become frames (see nominal_camera).
-    name: prefix of the episode names and the episodes' dataset.
+    name: the episodes' dataset and the prefix of their names, `{name}-{scene}-{index:04d}` by order within the scene;
+    the round's seed and the flight's slot in it are rendering details and stay in the episode's meta.
     """
     import hyperdrone
 
@@ -236,9 +237,10 @@ def simulate(sim, scenes, episodes, seed=0, camera=nominal_camera, name="sim", l
                 if flown >= MAX_FLIGHTS_PER_EPISODE * episodes:
                     raise RuntimeError(f"{scene_name}: {written} of {episodes} episodes after {flown} flights ({crashed} crashed)")
                 landed = 0
-                for episode in _run_batch(env, sim, seed, scene_name, camera, name, log):
+                for episode in _run_batch(env, sim, seed, scene_name, camera, name, log, progress=(written, episodes)):
                     landed += 1
                     if written < episodes:
+                        episode.name = episode.config["episode"]["name"] = f"{name}-{scene_name}-{written:04d}"
                         written += 1
                         yield episode
                 flown += sim.instances
@@ -248,7 +250,9 @@ def simulate(sim, scenes, episodes, seed=0, camera=nominal_camera, name="sim", l
         if env is not None:
             env.close()
 
-def _run_batch(env, sim, seed, scene_name, camera, name, log):
+def _run_batch(env, sim, seed, scene_name, camera, name, log, progress=(0, None)):
+    """One round of `env.total_instances` parallel flights; yields the ones that did not crash (simulate() names them).
+    progress: (episodes of the scene before this round, episodes wanted) for the log line."""
     import time
 
     import cv2  # not at the top: the CLI loads this module for its arguments, without relpose[data]
@@ -317,8 +321,12 @@ def _run_batch(env, sim, seed, scene_name, camera, name, log):
     elapsed = time.perf_counter() - started
     pool.shutdown()
     fovs = [float((p["cameras"].get("front") or next(iter(p["cameras"].values())))["fov"]) for p in parameters]
-    log(f"seed {seed} scene {scene_name}: {steps} steps ({sim.duration_seconds:g} s) x {total} instances in {elapsed:.1f}s ({steps * total / elapsed:.0f} steps/s), "
-        f"{int(terminated.sum())} terminated, waypoints reached {waypoints_reached.tolist()} of {sim.num_waypoints}, fov {np.round(fovs, 1).tolist()}")
+    crashed = int(terminated.sum())
+    before, wanted = progress
+    last = min(before + total - crashed, before + total if wanted is None else wanted) - 1
+    span = (f"episodes {before}-{last}" if last >= before else "no episode") + ("" if wanted is None else f" of {wanted}")
+    log(f"{scene_name} {span}: {steps} steps ({sim.duration_seconds:g} s) x {total} flights in {elapsed:.1f}s ({steps * total / elapsed:.0f} steps/s), "
+        f"{crashed} crashed, waypoints reached {waypoints_reached.tolist()} of {sim.num_waypoints}, fov {np.round(fovs, 1).tolist()}")
 
     imu_rows = np.stack(imu_rows)  # (steps, total, 7)
     ground_truth = np.stack(ground_truth)  # (steps + 1, total, 8)
@@ -335,7 +343,7 @@ def _run_batch(env, sim, seed, scene_name, camera, name, log):
         intrinsics = pinhole_intrinsics(sim.width, sim.height, fov)
         config = make_config(width=sim.width, height=sim.height, channels=abi.CHANNELS, frame_rate_hz=sim.frame_rate_hz,
                              num_frames=len(frame_times), hover_seconds=sim.hold_seconds, T_body_camera=T_body_camera,
-                             intrinsics=intrinsics, episode_name=f"{name}-{scene_name}-{seed:05d}-{instance:02d}")
+                             intrinsics=intrinsics, episode_name=f"{name}-{scene_name}-{seed:05d}-{instance:02d}")  # provisional: simulate() names by order
         config["camera"]["horizontal_fov_degrees"] = fov
         config["episode"]["exposure_seconds"] = k * dt
         # frame k integrates the renders at steps c-k+1..c (c = closing step): mid-exposure is (c - (k-1)/2) dt

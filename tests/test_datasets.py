@@ -239,6 +239,61 @@ def test_sim_config_scales_with_duration(tmp_path, monkeypatch):
     assert SimConfig(duration_seconds=30).render_header(200.0) != minute.render_header(200.0)  # a different route length is a different JIT key
 
 
+
+def test_simulate_runs_scene_by_scene_and_names_episodes_by_order(tmp_path, monkeypatch):
+    """Rounds of sim.instances parallel flights per scene: crashed flights are dropped, the surplus of the last round is
+    discarded, survivors are named {name}-{scene}-{index:04d} by order within the scene, and a scene whose flights
+    keep crashing is given up with an error."""
+    import sys
+    import types
+
+    from relpose.tools.datasets.generate import simulation
+
+    monkeypatch.setenv("RELPOSE_CACHE", str(tmp_path))
+    environments = []
+
+    class FakeHyperDrone:
+        def __init__(self, references, config=None, seed=0, parameters=None):
+            self.reference, self.seed, self.dt, self.closed = references[0], seed, 0.005, False
+            environments.append(self)
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setitem(sys.modules, "hyperdrone", types.SimpleNamespace(HyperDrone=FakeHyperDrone, Config=lambda **kwargs: kwargs))
+    crashes = {("B", 7, 0)}  # (scene, seed, instance) flights that crash; every flight in scene C crashes
+    rounds = []
+
+    def fake_round(env, sim, seed, scene_name, camera, name, log, progress=(0, None)):
+        rounds.append((scene_name, seed, progress))
+        for instance in range(sim.instances):
+            if (scene_name, seed, instance) in crashes or scene_name == "C":
+                continue
+            episode = synthetic_episode(n_frames=2)
+            episode.name = episode.config["episode"]["name"] = f"{name}-{scene_name}-{seed:05d}-{instance:02d}"  # the provisional name
+            episode.meta.update(scene=scene_name, seed=seed, instance=instance)
+            yield episode
+
+    monkeypatch.setattr(simulation, "_run_batch", fake_round)
+    sim = simulation.SimConfig(instances=2)
+
+    episodes = list(simulation.simulate(sim, {"A": "ref-a", "B": "ref-b"}, 3, seed=5, name="sim"))
+    assert [episode.name for episode in episodes] == ["sim-A-0000", "sim-A-0001", "sim-A-0002", "sim-B-0000", "sim-B-0001", "sim-B-0002"]
+    assert all(episode.config["episode"]["name"] == episode.name for episode in episodes)
+    # A's second round has one surplus flight, B's first round one crashed flight: neither is an episode
+    assert [(episode.meta["seed"], episode.meta["instance"]) for episode in episodes] == [(5, 0), (5, 1), (6, 0), (7, 1), (8, 0), (8, 1)]
+    assert rounds == [("A", 5, (0, 3)), ("A", 6, (2, 3)), ("B", 7, (0, 3)), ("B", 8, (1, 3))]
+    assert [(env.reference, env.seed) for env in environments] == [("ref-a", 5), ("ref-b", 7)]
+    assert all(env.closed for env in environments)
+
+    generator = simulation.simulate(sim, {"A": "ref-a", "C": "ref-c"}, 1, seed=0)
+    assert next(generator).name == "sim-A-0000"
+    with pytest.raises(RuntimeError, match=r"C: 0 of 1 episodes after 4 flights \(4 crashed\)"):
+        next(generator)
+    assert environments[-1].reference == "ref-c" and environments[-1].closed
+    with pytest.raises(ValueError):
+        list(simulation.simulate(sim, {"A": "ref-a"}, 0))
+
 def test_adapt_always_delivers_rgb():
     episode = synthetic_episode(n_frames=3, width=320, height=240)  # a grayscale-only set
     config, frames = episode.adapt()
