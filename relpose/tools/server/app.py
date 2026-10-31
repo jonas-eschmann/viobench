@@ -1,19 +1,21 @@
 """FastAPI submission server.  Run:  uvicorn relpose.tools.server.app:app --host 0.0.0.0 --port 8000
 
     POST /submissions        multipart: file (the .wasm), label (optional)  -> 201 and the new submission
-    GET  /submissions        the team's submissions, newest first
+    GET  /submissions        the team's submissions, newest first, each with its overall summary once evaluated
     GET  /submissions/{id}   one of them, with its results once evaluated
     GET  /config             the rules: daily quota, upload size, evaluation timeout, sandbox limits (`server.config`)
+    GET  /, /app.js, /style.css   the web UI (ui/): a page on top of the four routes above
 
-Every request carries "Authorization: Bearer <token>" (tokens: `python -m relpose.tools.server.teams`) and sees only
-its own team's submissions. RELPOSE_SERVER_DIR: uploads, reports and sqlite (default ./server-data); the rules are
+Every API request carries "Authorization: Bearer <token>" (tokens: `python -m relpose.tools.server.teams`) and sees
+only its own team's submissions; the UI's files are public. RELPOSE_SERVER_DIR: uploads, reports and sqlite (default ./server-data); the rules are
 the checked-in relpose/tools/config.json.
 The evaluation itself is done by `relpose.tools.server.worker`, which polls the queue.
 """
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Response, UploadFile
 
 from ..abi import AbiError
 from ..abi.module import runtime_descriptor
@@ -22,6 +24,15 @@ from .store import Refused, Store
 
 app = FastAPI(title="relpose submissions", docs_url=None, redoc_url=None, openapi_url=None)  # the routes below, nothing else
 _store = None
+UI_FILES = {name: (Path(__file__).with_name("ui") / name).read_bytes() for name in ("index.html", "app.js", "style.css")}
+UI_TYPES = {".html": "text/html", ".js": "text/javascript", ".css": "text/css"}
+UI_HEADERS = {  # the page runs only its own script and talks only to this server
+    "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src data:; "
+                               "form-action 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-cache",
+}
 
 
 def get_store():
@@ -45,8 +56,8 @@ def public(row):
     for key in ("created", "started", "finished"):
         if row[key] is not None:
             row[key] = datetime.fromtimestamp(row[key], timezone.utc).isoformat(timespec="seconds")
-    if "results" in row:
-        row["results"] = json.loads(row["results"]) if row["results"] else None
+    if "results" in row:  # NaN and infinities (metrics of failed episodes) become null: JSON has neither
+        row["results"] = json.loads(row["results"], parse_constant=lambda constant: None) if row["results"] else None
     return row
 
 
@@ -78,7 +89,10 @@ async def submit(file: UploadFile = File(...), label: str = Form(""), authorizat
 
 @app.get("/submissions")
 def submissions(authorization: str | None = Header(default=None)):
-    return [public(row) for row in get_store().submissions(authenticate(authorization))]
+    rows = [public(row) for row in get_store().submissions(authenticate(authorization))]
+    for row in rows:  # the headline numbers only; GET /submissions/{id} has the rest
+        row["overall"] = ((row.pop("results") or {}).get("summary") or {}).get("overall")
+    return rows
 
 
 @app.get("/submissions/{submission_id}")
@@ -93,3 +107,22 @@ def submission(submission_id: str, authorization: str | None = Header(default=No
 def configuration(authorization: str | None = Header(default=None)):
     authenticate(authorization)
     return get_store().config.as_dict()
+
+
+def ui_file(name):
+    return Response(UI_FILES[name], media_type=UI_TYPES[Path(name).suffix], headers=UI_HEADERS)
+
+
+@app.get("/")
+def page():
+    return ui_file("index.html")
+
+
+@app.get("/app.js")
+def script():
+    return ui_file("app.js")
+
+
+@app.get("/style.css")
+def style():
+    return ui_file("style.css")

@@ -19,7 +19,7 @@ data = ["opencv-python-headless>=4.9", "pyyaml>=6"]
 sim = ["opencv-python-headless>=4.9", "pyyaml>=6", "hyperdrone==0.1.10"]
 train = ["torch", "onnx"]
 server = ["fastapi", "uvicorn", "python-multipart", "tzdata"]  # tzdata: the quota's Pacific-time days where the OS has no zoneinfo
-dev = ["pytest", "opencv-python-headless>=4.9", "pyyaml>=6", "torch", "onnx"]
+dev = ["pytest", "opencv-python-headless>=4.9", "pyyaml>=6", "torch", "onnx", "fastapi", "python-multipart", "tzdata", "httpx"]  # httpx: the server tests' client
 
 [project.scripts]
 relpose = "relpose.tools.cli:main"
@@ -33,6 +33,7 @@ namespaces = true
 [tool.setuptools.package-data]
 "relpose.tools.datasets.generate" = ["*.h.in"]
 "relpose.tools" = ["config.json"]
+"relpose.tools.server" = ["ui/*"]
 # the build recipe and examples that `relpose init` copies into new workspaces
 "relpose.solution" = [
     "toolchain/*", "runtime/native/*", "runtime/python/*", "runtime/python/guest/*", "runtime/python/cpython/*",

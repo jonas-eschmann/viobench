@@ -47,7 +47,8 @@ writes `report-solution/report.json` and, per episode, `estimate.tum` (readable 
 
 ## Submit
 
-Your team gets a token from the instructors; only that token sees your submissions.
+Your team gets a token from the instructors; only that token sees your submissions. Open `https://<server>/` in a
+browser and sign in with it to submit and follow your submissions, or use the API directly:
 
 ```bash
 curl -F file=@solution.wasm -F label="klt+imu v3" -H "Authorization: Bearer $TOKEN" https://<server>/submissions

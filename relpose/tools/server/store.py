@@ -123,9 +123,9 @@ class Store:
         return dict(row) if row else None
 
     def submissions(self, token):
-        """The team's submissions, newest first, without results."""
+        """The team's submissions with their results, newest first."""
         with self._connect() as connection:
-            return [dict(row) for row in connection.execute(f"SELECT {COLUMNS} FROM submissions WHERE token = ? ORDER BY created DESC", (token,))]
+            return [dict(row) for row in connection.execute(f"SELECT {COLUMNS}, results FROM submissions WHERE token = ? ORDER BY created DESC", (token,))]
 
     # --- the worker's side ----------------------------------------------------------------------------------
 

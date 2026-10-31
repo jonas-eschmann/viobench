@@ -10,12 +10,15 @@ RELPOSE_DATASETS=/data/test/first:/data/test/second python -m relpose.tools.serv
 uvicorn relpose.tools.server.app:app --host 0.0.0.0 --port 8000
 ```
 
-A team is its token: every request sends `Authorization: Bearer <token>` and sees only that team's submissions.
+A team is its token: every API request sends `Authorization: Bearer <token>` and sees only that team's submissions.
+Teams can also open the server's root in a browser: a page ([`ui/`](ui/), no dependencies) that signs in with the token
+and uses the API below.
 
 | endpoint | |
 |---|---|
+| `GET /` (`/app.js`, `/style.css`) | the web UI; public files, strict Content-Security-Policy |
 | `POST /submissions` | multipart `file` (and `label`) → 201 |
-| `GET /submissions` | the team's submissions, newest first: id, label, sha256, times (UTC), `status` (`queued`, `running`, `done`, `failed`), `error` |
+| `GET /submissions` | the team's submissions, newest first: id, label, sha256, times (UTC), `status` (`queued`, `running`, `done`, `failed`), `error`, `overall` (headline medians once done) |
 | `GET /submissions/<id>` | one of them, with `results` (metrics only) once done |
 | `GET /config` | the rules below |
 
@@ -32,4 +35,5 @@ the other statistics are diagnostics. Initialization fuel is reported separately
 
 Deployment: [`compose.yaml`](compose.yaml) (usage in its header) runs the app on 0.0.0.0:8000 and the worker
 unprivileged, without network and with a memory limit (wasmtime sandboxes the guest, not the host process); put TLS in
-front of the app; keep the `server-data` volume private (the sqlite holds the tokens) and back it up.
+front of the app; keep the `server-data` volume private (the sqlite holds the tokens) and back it up. Behind a path
+prefix, serve the page with a trailing slash (`/prefix/`): its requests are relative to it.

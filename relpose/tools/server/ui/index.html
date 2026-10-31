@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>relpose submissions</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="style.css">
+<script src="app.js" defer></script>
+</head>
+<body>
+<header>
+  <h1>relpose submissions</h1>
+  <button id="sign-out" type="button" hidden>Sign out</button>
+</header>
+
+<noscript>
+  <p>This page needs JavaScript. Without it, use the API directly:</p>
+  <pre>curl -F file=@solution.wasm -F label="v1" -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions
+curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
+</noscript>
+
+<p id="notice" role="status" hidden></p>
+<p id="connection" class="error" role="status" hidden></p>
+
+<section id="sign-in" hidden>
+  <form id="token-form">
+    <label for="token">Team token</label>
+    <input id="token" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" required>
+    <label class="inline"><input id="remember" type="checkbox"> Remember on this device</label>
+    <button type="submit">Sign in</button>
+  </form>
+</section>
+
+<main id="team" hidden>
+  <section>
+    <h2>Submit</h2>
+    <form id="upload-form">
+      <label for="file">Solution (.wasm)</label>
+      <input id="file" type="file" accept=".wasm" required>
+      <label for="label">Label</label>
+      <input id="label" maxlength="80" placeholder="optional, up to 80 characters">
+      <button id="upload-button" type="submit">Submit</button>
+      <progress id="upload-progress" max="1" value="0" hidden></progress>
+      <p id="upload-hint" class="hint" hidden></p>
+    </form>
+  </section>
+
+  <section>
+    <div class="heading">
+      <h2>Submissions</h2>
+      <button id="refresh" type="button">Refresh</button>
+      <span id="updated" class="hint"></span>
+    </div>
+    <div class="scroll">
+      <table id="submissions">
+        <thead><tr><th>Submitted</th><th>Label</th><th>Status</th><th>RPE (m)</th><th>Fuel/frame</th><th>Episodes</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p id="empty" class="hint" hidden>No submissions yet.</p>
+  </section>
+
+  <section id="details" hidden>
+    <h2 id="details-title"></h2>
+    <dl id="details-facts"></dl>
+    <div id="details-results"></div>
+    <details><summary>Raw JSON</summary><pre id="details-json"></pre></details>
+  </section>
+
+  <section>
+    <details><summary>Rules</summary><dl id="rules"></dl></details>
+  </section>
+</main>
+</body>
+</html>
