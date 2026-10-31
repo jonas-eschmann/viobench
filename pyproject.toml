@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "viobench"
-version = "0.1.0"
+version = "0.0.1"
 description = "Compute-aware relative state estimation challenge: run and score solution .wasm modules, episode datasets, submission server, and the recipes to build a solution"
 readme = "README.md"
 requires-python = ">=3.10"
