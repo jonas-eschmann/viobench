@@ -45,9 +45,10 @@ function(fetch name url sha256 top)
     file(RENAME ${directory}.unpack/${top} ${directory})
     file(REMOVE_RECURSE ${directory}.unpack)
     if(FETCH_PATCH)
-        # outside any repository: the ceiling keeps git from treating a surrounding checkout as one
+        # outside any repository: the ceiling keeps git from treating a surrounding checkout as one; autocrlf=input
+        # matches the LF patches against CRLF upstream files (e.g. ORB-SLAM3 Random.cpp) regardless of the user's git config
         # One diagnostic hunk omits trailing context containing upstream trailing spaces.
-        execute_process(COMMAND ${CMAKE_COMMAND} -E env GIT_CEILING_DIRECTORIES=${CMAKE_BINARY_DIR}/src git apply --unidiff-zero ${FETCH_PATCH}
+        execute_process(COMMAND ${CMAKE_COMMAND} -E env GIT_CEILING_DIRECTORIES=${CMAKE_BINARY_DIR}/src git -c core.autocrlf=input apply --unidiff-zero ${FETCH_PATCH}
                         WORKING_DIRECTORY ${directory} RESULT_VARIABLE result)
         if(result)
             message(FATAL_ERROR "${FETCH_PATCH} does not apply to ${directory}")
