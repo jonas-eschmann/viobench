@@ -5,7 +5,7 @@ solution     init                              new workspace: an example solutio
              build-runtime                     (re)build the workspace's Python runtime; bundle does when it is missing
 runner       check, evaluate, leaderboard      run a module on synthetic frames / on a dataset; aggregate reports
              debug, score                      run a Python solution in-process (debugger-friendly); score an estimate
-datasets     simulate, feed                    write episodes with HyperDrone (GPU); export raw inputs for native debugging
+datasets     simulate, pack, feed              write episodes with HyperDrone (GPU); re-pack episodes as archives; export raw inputs for native debugging
 
 The CLI is the one host component that also reaches into the guest side (for `bundle`, `init` and the builds); the
 runner library never does.
@@ -176,6 +176,7 @@ def command_leaderboard(arguments):
 # --- datasets --------------------------------------------------------------------------------------------------
 
 def command_simulate(arguments):
+    import tempfile
     from pathlib import Path
 
     from .datasets.generate.simulation import dataset_from_arguments
@@ -185,19 +186,52 @@ def command_simulate(arguments):
     output.mkdir(parents=True, exist_ok=True)
     written = 0
     try:
-        for episode in dataset_from_arguments(arguments):
-            directory = write_episode(episode, output / episode.name)
-            if not arguments.no_video:
-                from .runner.video import write_video
+        with tempfile.TemporaryDirectory(prefix=".relpose-simulate-", dir=output) as scratch:  # the video before it goes into the archive
+            for episode in dataset_from_arguments(arguments):
+                attachments = {}
+                if not arguments.no_video:
+                    from .runner.video import write_video
 
-                print(f"video: {write_video(episode, None, directory / 'trajectory.mp4')}")
-            written += 1
-            print(f"wrote {output / episode.name} ({episode.num_frames} frames, {episode.duration:.1f}s, fov {episode.config['camera']['horizontal_fov_degrees']:.1f} deg)")
+                    attachments["trajectory.mp4"] = write_video(episode, None, Path(scratch) / f"{episode.name}.mp4")
+                path = write_episode(episode, output / f"{episode.name}.zip", attachments=attachments)
+                for video in attachments.values():
+                    Path(video).unlink()
+                written += 1
+                print(f"wrote {path} ({episode.num_frames} frames, {episode.duration:.1f}s, fov {episode.config['camera']['horizontal_fov_degrees']:.1f} deg"
+                      f"{', with trajectory.mp4' if attachments else ''})")
     except (ValueError, RuntimeError) as error:  # unknown scene, or a scene whose flights keep crashing
         print(f"error: {error}", file=sys.stderr)
         print(f"{written} episodes in {output}")
         return 1
     print(f"{written} episodes in {output}")
+    return 0
+
+
+def command_pack(arguments):
+    """Writes episodes (archives or unzipped directories) as one archive each: converts sets made before the archive format."""
+    from pathlib import Path
+
+    from .datasets.storage import (
+        episode_file,
+        list_episodes,
+        read_episode,
+        write_episode,
+    )
+
+    output = Path(arguments.output)
+    count = 0
+    for root in arguments.episodes:
+        sources = list_episodes(root)
+        if not sources:
+            print(f"error: no episodes under {root}", file=sys.stderr)
+            return 1
+        for source in sources:
+            episode = read_episode(source)
+            video = episode_file(source, "trajectory.mp4")
+            path = write_episode(episode, output / f"{episode.name}.zip", attachments={"trajectory.mp4": video} if video else None)
+            print(f"packed {source} -> {path}")
+            count += 1
+    print(f"{count} episodes in {output}")
     return 0
 
 
@@ -252,9 +286,9 @@ def main(argv=None):
     check.add_argument("-v", "--verbose", action="store_true", help="pass the guest's stdout/stderr through instead of capturing them")
     check.set_defaults(function=command_check)
 
-    evaluate = commands.add_parser("evaluate", help="[runner] run a module over episode directories and write report.json")
+    evaluate = commands.add_parser("evaluate", help="[runner] run a module over episodes and write report.json")
     evaluate.add_argument("wasm")
-    evaluate.add_argument("datasets", nargs="+", help="episode directories or directories of episodes")
+    evaluate.add_argument("datasets", nargs="+", help="episodes (.zip or unzipped) or directories of them")
     evaluate.add_argument("-o", "--output", help="report directory; also write trajectory.mp4 per episode (default: ./report-<name>, without video)")
     evaluate.add_argument("--max-episodes", type=int)
     evaluate.set_defaults(function=command_evaluate)
@@ -264,7 +298,7 @@ def main(argv=None):
     debug.set_defaults(function=command_debug)
 
     score = commands.add_parser("score", help="[runner] metrics of an estimate (estimate.tum + twist.txt next to it) against an episode")
-    score.add_argument("episode", help="episode directory")
+    score.add_argument("episode", help="episode (.zip or unzipped directory)")
     score.add_argument("tum", help="estimate.tum (TUM: t x y z qx qy qz qw) written by a debug build or your own script; twist.txt (t vx vy vz wx wy wz) must sit next to it")
     score.set_defaults(function=command_score)
 
@@ -275,13 +309,18 @@ def main(argv=None):
     leaderboard.set_defaults(function=command_leaderboard)
 
     simulate = commands.add_parser("simulate", help="[datasets] write episodes generated with HyperDrone (needs a GPU and pip install relpose[sim])")
-    simulate.add_argument("-o", "--output", default="datasets", help="directory that receives one sub-directory per episode, including trajectory.mp4 by default (default: datasets)")
-    simulate.add_argument("--no-video", action="store_true", help="skip the camera and ground-truth trajectory MP4 in each episode directory")
+    simulate.add_argument("-o", "--output", default="datasets", help="directory that receives one .zip per episode, with trajectory.mp4 inside by default (default: datasets)")
+    simulate.add_argument("--no-video", action="store_true", help="skip the camera and ground-truth trajectory MP4 in each episode")
     add_simulation_arguments(simulate)
     simulate.set_defaults(function=command_simulate)
 
+    pack = commands.add_parser("pack", help="[datasets] write episodes (archives or unzipped directories) as one .zip each, e.g. to convert sets made before the archive format")
+    pack.add_argument("episodes", nargs="+", help="episodes or directories of episodes")
+    pack.add_argument("-o", "--output", required=True, help="directory that receives one .zip per episode")
+    pack.set_defaults(function=command_pack)
+
     feed = commands.add_parser("feed", help="[datasets] export one episode's inputs as raw files for a native debug build (relpose_debug_main.c)")
-    feed.add_argument("episode", help="episode directory")
+    feed.add_argument("episode", help="episode (.zip or unzipped directory)")
     feed.add_argument("-o", "--output", required=True, help="feed directory")
     feed.add_argument("--resolution", default="x".join(map(str, abi.DEFAULT_RESOLUTION)), choices=[f"{w}x{h}" for w, h in abi.SUPPORTED_RESOLUTIONS],
                       help="what your solution declares")

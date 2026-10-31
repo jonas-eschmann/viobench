@@ -28,7 +28,7 @@ class Solution:
 def test_evaluate_report(engine, runtime_path, solution_dir, tmp_path):
     episode = synthetic_episode(n_frames=12, width=320, height=240)
     dataset = tmp_path / "set"
-    write_episode(episode, dataset / episode.name)
+    write_episode(episode, dataset / f"{episode.name}.zip")
     gt = episode.ground_truth_state()
     import io
 
@@ -54,7 +54,7 @@ def test_evaluate_report(engine, runtime_path, solution_dir, tmp_path):
 @pytest.mark.parametrize("failure", ["raise RuntimeError('flaky')", "return [float('nan')] * 13"])
 def test_a_failed_step_ends_the_episode(failure, engine, runtime_path, solution_dir, tmp_path):
     episode = synthetic_episode(n_frames=6, width=320, height=240)
-    write_episode(episode, tmp_path / "set" / episode.name)
+    write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
     flaky = f"""
 class Solution:
     def __init__(self, config):
@@ -84,8 +84,8 @@ class Solution:
 def test_evaluate_delivers_rgb_from_gray_and_rgb_sets(engine, runtime_path, solution_dir, tmp_path):
     gray = synthetic_episode(n_frames=6, width=320, height=240)
     rgb = synthetic_episode(n_frames=6, width=320, height=240, channels=3)
-    write_episode(gray, tmp_path / "gray" / gray.name)
-    write_episode(rgb, tmp_path / "rgb" / rgb.name)
+    write_episode(gray, tmp_path / "gray" / f"{gray.name}.zip")
+    write_episode(rgb, tmp_path / "rgb" / f"{rgb.name}.zip")
     probe = """
 import numpy as np
 class Solution:
@@ -107,7 +107,7 @@ class Solution:
 def test_evaluate_resolution_opt_in(engine, runtime_path, solution_dir, tmp_path):
     episode = synthetic_episode(n_frames=4, width=640, height=480)
     dataset = tmp_path / "set"
-    write_episode(episode, dataset / episode.name)
+    write_episode(episode, dataset / f"{episode.name}.zip")
     probe = """
 class Solution:
 {declaration}
@@ -130,7 +130,7 @@ class Solution:
         assert estimate[0, 3] == pytest.approx(episode.config["camera"]["fx"] * size[0] / 640)
     # a set stored at 320x240 serves a 640x480 solution: the harness upscales
     small = synthetic_episode(n_frames=4, width=320, height=240)
-    write_episode(small, tmp_path / "small" / small.name)
+    write_episode(small, tmp_path / "small" / f"{small.name}.zip")
     report = evaluate(tmp_path / "vga.wasm", [tmp_path / "small"], output_dir=tmp_path / "upscaled", engine=engine, log=lambda *a: None)
     estimate = np.loadtxt(tmp_path / "upscaled" / "logs" / "small" / small.name / "estimate.tum")
     assert (estimate[0, 1], estimate[0, 2]) == (640, 480) and report["summary"]["overall"]["completed"] == 1
@@ -158,8 +158,8 @@ def test_streamed_frames_from_disk(tmp_path):
     from relpose.tools.datasets.storage import episodes, read_episode
 
     episode = synthetic_episode(n_frames=6, width=320, height=240)
-    write_episode(episode, tmp_path / "set" / episode.name)
-    lazy = read_episode(tmp_path / "set" / episode.name)
+    write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
+    lazy = read_episode(tmp_path / "set" / f"{episode.name}.zip")
     assert isinstance(lazy.frames, FrameSequence) and lazy.frames.shape == (6, 240, 320) and lazy.channels == 1
     np.testing.assert_array_equal(lazy.frames[3], episode.frames[3])
     np.testing.assert_array_equal(np.asarray(lazy.frames), episode.frames)

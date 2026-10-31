@@ -35,7 +35,7 @@ def test_dropped_frame_repeats_the_previous_one(tmp_path):
     dropped = dataclasses.replace(episode, frame_times=episode.frame_times[keep], frames=episode.frames[keep])
     with pytest.raises(AssertionError):
         dropped.check_consistency()
-    regular = regularize(read_episode(write_episode(dropped, tmp_path / "dropped")))  # streamed frames with PNG paths
+    regular = regularize(read_episode(write_episode(dropped, tmp_path / "dropped.zip")))  # streamed frames with stored PNGs
     regular.check_consistency()
     assert regular.num_frames == 8 and regular.config["episode"]["num_frames"] == 8
     np.testing.assert_allclose(regular.frame_times, episode.frame_times, atol=1e-9)
@@ -43,7 +43,7 @@ def test_dropped_frame_repeats_the_previous_one(tmp_path):
     np.testing.assert_array_equal(regular.frames[4], episode.frames[4])
     assert regular.meta["regularized"]["filled_frames"] == 1
     np.testing.assert_allclose(regular.imu, episode.delivered_imu(), rtol=1e-6, atol=1e-9)  # the IMU was complete (CSV keeps 9 digits)
-    written = read_episode(write_episode(regular, tmp_path / "regular"))
+    written = read_episode(write_episode(regular, tmp_path / "regular.zip"))
     np.testing.assert_array_equal(written.frames[3], episode.frames[2])
 
 

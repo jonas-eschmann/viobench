@@ -1,4 +1,5 @@
 """Replay videos: real encoding/decoding, lazy frames and CLI output behaviour."""
+import zipfile
 from pathlib import Path
 
 import cv2
@@ -88,16 +89,18 @@ def test_simulate_cli_writes_video_in_each_episode_by_default(tmp_path, monkeypa
     if no_video:
         args.append("--no-video")
     assert cli(args) == 0
-    assert sorted(path.name for path in output.iterdir()) == ["sim-0", "sim-1"]
+    assert sorted(path.name for path in output.iterdir()) == ["sim-0.zip", "sim-1.zip"]  # the video scratch directory is gone
     for episode in episodes:
-        directory = output / episode.name
-        assert (directory / "episode.json").is_file()
-        assert len(list((directory / "mav0/cam0/data").glob("*.png"))) == episode.num_frames
-        video = directory / "trajectory.mp4"
-        assert video.is_file() == (not no_video)
-        if not no_video:
-            fps, frames = read_video(video)
-            assert fps == pytest.approx(10.0) and len(frames) == episode.num_frames
+        with zipfile.ZipFile(output / f"{episode.name}.zip") as archive:
+            names = archive.namelist()
+            assert f"{episode.name}/episode.json" in names
+            assert sum(name.endswith(".png") for name in names) == episode.num_frames
+            assert (f"{episode.name}/trajectory.mp4" in names) == (not no_video)
+            if not no_video:
+                video = tmp_path / f"{episode.name}.mp4"
+                video.write_bytes(archive.read(f"{episode.name}/trajectory.mp4"))
+                fps, frames = read_video(video)
+                assert fps == pytest.approx(10.0) and len(frames) == episode.num_frames
 
 
 # A native identity solution exercises the full evaluator without building the Python WASM runtime.
@@ -122,7 +125,7 @@ IDENTITY = """
 @pytest.mark.parametrize("output", [False, True])
 def test_evaluate_cli_only_writes_video_with_explicit_output(tmp_path, monkeypatch, output):
     episode = synthetic_episode(n_frames=4, width=320, height=240)
-    write_episode(episode, tmp_path / "set" / episode.name)
+    write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
     wasm = tmp_path / "identity.wasm"
     wasm.write_bytes(wasmtime.wat2wasm(IDENTITY))
     monkeypatch.chdir(tmp_path)
@@ -143,7 +146,7 @@ def test_evaluate_cli_only_writes_video_with_explicit_output(tmp_path, monkeypat
 
 def test_evaluate_failure_still_produces_complete_video(tmp_path):
     episode = synthetic_episode(n_frames=4, width=320, height=240)
-    write_episode(episode, tmp_path / "set" / episode.name)
+    write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
     wasm = tmp_path / "broken.wasm"
     # No solution exports: evaluation fails before it can produce any poses.
     wasm.write_bytes(wasmtime.wat2wasm("(module)"))
@@ -155,7 +158,7 @@ def test_evaluate_failure_still_produces_complete_video(tmp_path):
 
 def test_debug_without_output_does_not_render_video(tmp_path, monkeypatch):
     episode = synthetic_episode(n_frames=4, width=320, height=240)
-    write_episode(episode, tmp_path / "set" / episode.name)
+    write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
     solution = Path(__file__).resolve().parents[1] / "relpose/solution/examples/python/minimal"
 
     def unexpected(*args, **kwargs):

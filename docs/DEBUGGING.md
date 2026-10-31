@@ -18,7 +18,7 @@ import numpy as np, matplotlib.pyplot as plt
 from relpose.tools.datasets import read_episode
 from relpose.tools.runner.direct import PythonSolution, trace
 
-episode = read_episode("data/val/<name>")
+episode = read_episode("data/val/<name>.zip")
 poses = np.array([s.pose for s in trace(PythonSolution("solution"), episode)])
 plt.plot(poses[:, 0], poses[:, 1], label="estimate")
 plt.plot(*episode.ground_truth_relative()[:, :2].T, label="truth"); plt.legend(); plt.show()
@@ -30,10 +30,10 @@ Configured with the host compiler, the `relpose_solution(...)` CMake call builds
 *feed* (one episode as raw arrays) through `init` and `step`:
 
 ```bash
-relpose feed data/val/<name> -o build/feed                     # --resolution 640x480 to match frame_width()
+relpose feed data/val/<name>.zip -o build/feed                     # --resolution 640x480 to match frame_width()
 cmake -S solution -B build-host && cmake --build build-host
 build-host/debug build/feed estimate.tum                       # stops at the first failing step
-relpose score data/val/<name> estimate.tum                     # reads twist.txt next to it
+relpose score data/val/<name>.zip estimate.tum                     # reads twist.txt next to it
 gdb --args build-host/debug build/feed                         # VS Code: "relpose: debug native solution (gdb)"
 ```
 

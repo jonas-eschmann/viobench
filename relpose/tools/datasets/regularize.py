@@ -48,8 +48,8 @@ def repeat_frames(frames, source):
     if np.array_equal(source, np.arange(len(frames))):
         return frames
     if isinstance(frames, FrameSequence):
-        paths = None if frames.paths is None else [frames.paths[i] for i in source]
-        return FrameSequence(lambda index: frames[int(source[index])], len(source), frames.frame_shape, frames.dtype, paths, frames.link_paths)
+        encoded = None if frames.encoded is None else (lambda index: frames.encoded(int(source[index])))
+        return FrameSequence(lambda index: frames[int(source[index])], len(source), frames.frame_shape, frames.dtype, encoded)
     return np.asarray(frames)[source]
 
 

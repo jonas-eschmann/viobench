@@ -144,7 +144,7 @@ def run(solution, dataset, output_dir=None, max_episodes=None, log=print):
 def add_arguments(parser):
     """The `relpose debug` options."""
     parser.add_argument("solution", help="solution directory (with solution.py)")
-    parser.add_argument("datasets", nargs="+", help="episode directories or directories of episodes")
+    parser.add_argument("datasets", nargs="+", help="episodes (.zip or unzipped) or directories of them")
     parser.add_argument("--max-episodes", type=int, help="stop after this many episodes")
     parser.add_argument("-o", "--output", help="write estimate.tum, twist.txt and trajectory.mp4 per episode under this directory")
 

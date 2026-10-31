@@ -29,7 +29,7 @@ from ...abi.config import make_config, pinhole_intrinsics
 from ...geometry import matrix_to_quaternion, quaternion_to_matrix
 from ..episode import Episode, FrameSequence
 from ..regularize import regularize
-from ..storage import read_png
+from ..storage import PNG_COMPRESSION, read_png
 
 TEMPLATE = Path(__file__).with_name("hyperdrone_world.h.in")
 CACHE_VARIABLE = "RELPOSE_CACHE"
@@ -196,7 +196,8 @@ class Spool:
 
 def spooled_frames(paths, frame_shape, spool):
     """FrameSequence over RGB PNGs in a Spool; the loader keeps the spool alive."""
-    return FrameSequence(lambda index, _spool=spool: read_png(paths[index], abi.CHANNELS), len(paths), frame_shape, paths=paths, link_paths=True)
+    return FrameSequence(lambda index, _spool=spool: read_png(paths[index], abi.CHANNELS), len(paths), frame_shape,
+                         encoded=lambda index, _spool=spool: Path(paths[index]).read_bytes())
 
 
 def _block(vector, layout, name):
@@ -293,7 +294,7 @@ def _run_batch(env, sim, seed, scene_name, camera, name, log, progress=(0, None)
         k, develop_frame, _ = cameras[instance]
         frame = develop_frame(np.stack([renders[instance] for renders in list(ring)[-k:]]), instance_rngs[instance])
         path = spool.path / f"{instance:02d}" / f"{index:05d}.png"
-        if not cv2.imwrite(str(path), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_PNG_COMPRESSION, 1]):
+        if not cv2.imwrite(str(path), cv2.cvtColor(frame, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_PNG_COMPRESSION, PNG_COMPRESSION]):
             raise OSError(f"could not write {path}")
         return path
 

@@ -1,12 +1,18 @@
 import gc
-import os
+import zipfile
 
 import numpy as np
 import pytest
 
 from relpose.tools.abi.config import make_config
 from relpose.tools.datasets.episode import Episode, FrameSequence, interpolate_poses
-from relpose.tools.datasets.storage import list_episodes, read_episode, write_episode
+from relpose.tools.datasets.storage import (
+    episode_file,
+    episodes,
+    list_episodes,
+    read_episode,
+    write_episode,
+)
 from relpose.tools.geometry import poses_to_matrices, quaternion_to_matrix
 
 
@@ -84,11 +90,17 @@ def test_interpolation_matches_samples():
         interpolate_poses(times, poses, [2.5])
 
 
+def _pngs(path):
+    """The PNG members of an episode archive, in archive order (frame order)."""
+    with zipfile.ZipFile(path) as archive:
+        return [archive.read(name) for name in archive.namelist() if name.endswith(".png")]
+
+
 def test_write_read_roundtrip(tmp_path):
     episode = synthetic_episode()
-    directory = write_episode(episode, tmp_path / "ep0", origin_ns=1_400_000_000_000_000_000)
-    assert list_episodes(tmp_path) == [directory]
-    loaded = read_episode(directory)
+    path = write_episode(episode, tmp_path / "ep0.zip", origin_ns=1_400_000_000_000_000_000)
+    assert list_episodes(tmp_path) == [path] and list_episodes(path) == [path]
+    loaded = read_episode(path)
     loaded.check_consistency()
     np.testing.assert_array_equal(loaded.frames, episode.frames)
     np.testing.assert_allclose(loaded.frame_times, episode.frame_times, atol=1e-9)
@@ -96,19 +108,41 @@ def test_write_read_roundtrip(tmp_path):
     np.testing.assert_allclose(loaded.ground_truth, episode.ground_truth, rtol=1e-6, atol=1e-9)
     np.testing.assert_allclose(loaded.T_body_camera, episode.T_body_camera)
     assert loaded.config == episode.config and loaded.meta["condition"] == "test" and loaded.meta["dataset"] == tmp_path.name
-    assert (directory / "mav0" / "cam0" / "sensor.yaml").is_file() and (directory / "mav0" / "imu0" / "sensor.yaml").is_file()
+    assert loaded.meta["origin_ns"] == 1_400_000_000_000_000_000 and loaded.meta["path"] == str(path)
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()
+        assert names[0] == "ep0/episode.json" and "ep0/mav0/cam0/sensor.yaml" in names and "ep0/mav0/imu0/sensor.yaml" in names
+        assert all(info.compress_type == zipfile.ZIP_STORED for info in archive.infolist())
+    # the same episode is the same archive, byte for byte: the sets are content-addressed
+    assert write_episode(episode, tmp_path / "again" / "ep0.zip", origin_ns=1_400_000_000_000_000_000).read_bytes() == path.read_bytes()
+    assert write_episode(loaded, tmp_path / "resaved" / "ep0.zip").read_bytes() == path.read_bytes()  # keeps the origin, copies the PNGs
+    with pytest.raises(ValueError):
+        write_episode(episode, tmp_path / "ep0")
+
+
+def test_unzipped_episode_reads_the_same(tmp_path):
+    episode = synthetic_episode(n_frames=4, width=16, height=12, channels=3)
+    path = write_episode(episode, tmp_path / "set" / "ep.zip", attachments={"trajectory.mp4": b"not really a video"})
+    assert episode_file(path, "trajectory.mp4") == b"not really a video" and episode_file(path, "notes.txt") is None
+    with zipfile.ZipFile(path) as archive:
+        archive.extractall(tmp_path / "unzipped")
+    directory = tmp_path / "unzipped" / "ep"
+    assert list_episodes(tmp_path / "unzipped") == [directory] and (directory / "mav0" / "cam0" / "data.csv").is_file()
+    unzipped = read_episode(directory)
+    np.testing.assert_array_equal(np.asarray(unzipped.frames), episode.frames)
+    assert unzipped.meta["dataset"] == "unzipped" and episode_file(directory, "trajectory.mp4") == b"not really a video"
+    assert [e.meta["dataset"] for e in episodes([tmp_path / "set", directory])] == ["set", "unzipped"]
+    repacked = write_episode(unzipped, tmp_path / "repacked" / "ep.zip", attachments={"trajectory.mp4": directory / "trajectory.mp4"})
+    assert repacked.read_bytes() == path.read_bytes()
 
 
 @pytest.mark.parametrize("channels", [1, 3])
 def test_write_episode_copies_existing_pngs(tmp_path, channels):
     episode = synthetic_episode(n_frames=4, width=16, height=12, channels=channels)
-    source = read_episode(write_episode(episode, tmp_path / "src"))
-    assert isinstance(source.frames, FrameSequence) and len(source.frames.paths) == 4
-    copy = write_episode(source, tmp_path / "dst")
-    copied = read_episode(copy)
-    for original, duplicate in zip(source.frames.paths, copied.frames.paths):
-        assert original.read_bytes() == duplicate.read_bytes()
-        assert not original.samefile(duplicate), "persistent datasets must have independent images"
+    source = read_episode(write_episode(episode, tmp_path / "src.zip"))
+    assert isinstance(source.frames, FrameSequence) and source.frames.encoded is not None
+    copy = write_episode(source, tmp_path / "dst.zip")
+    assert _pngs(copy) == _pngs(tmp_path / "src.zip")
     np.testing.assert_array_equal(np.asarray(read_episode(copy).frames), episode.frames)
     modified = read_episode(copy, frames="memory")
     modified.frames[:] = 0
@@ -120,62 +154,39 @@ def test_write_episode_copies_existing_pngs(tmp_path, channels):
 
 
 @pytest.mark.parametrize("origin_ns", [0, 1_400_000_000_000_000_000])
-def test_write_episode_back_to_same_directory(tmp_path, origin_ns):
+def test_write_episode_back_to_its_own_archive(tmp_path, origin_ns):
     episode = synthetic_episode(n_frames=4, width=16, height=12)
-    directory = write_episode(episode, tmp_path / "episode", origin_ns=origin_ns)
-    loaded = read_episode(directory)
-    original_pngs = [path.read_bytes() for path in loaded.frames.paths]
+    path = write_episode(episode, tmp_path / "episode.zip", origin_ns=origin_ns)
+    original_pngs = _pngs(path)
+    loaded = read_episode(path)  # streams its frames from the archive that is about to be replaced
     loaded.meta["condition"] = "corrected"
-    write_episode(loaded, directory / ".." / directory.name, origin_ns=origin_ns)
-    assert [path.read_bytes() for path in loaded.frames.paths] == original_pngs
-    saved = read_episode(directory)
-    assert saved.meta["condition"] == "corrected"
+    write_episode(loaded, path)
+    assert _pngs(path) == original_pngs
+    saved = read_episode(path)
+    assert saved.meta["condition"] == "corrected" and saved.meta["origin_ns"] == origin_ns
     np.testing.assert_array_equal(np.asarray(saved.frames), episode.frames)
+    np.testing.assert_array_equal(np.asarray(loaded.frames), episode.frames)  # the open reader still sees the archive it opened
 
 
-@pytest.mark.parametrize("frames", ["lazy", "memory"])
-def test_write_episode_detaches_existing_hardlinks(tmp_path, frames):
-    episode = synthetic_episode(n_frames=4, width=16, height=12)
-    source = read_episode(write_episode(episode, tmp_path / "src"))
-    destination = write_episode(source, tmp_path / "dst")
-    paths = read_episode(destination).frames.paths
-    for original, duplicate in zip(source.frames.paths, paths):
-        duplicate.unlink()
-        os.link(original, duplicate)  # an export made by an older writer, or a still-live simulator spool
-    rewritten = read_episode(tmp_path / "src", frames=frames)
-    if frames == "memory":
-        rewritten.frames[:] = 0
-    write_episode(rewritten, destination)
-    assert all(not original.samefile(duplicate) for original, duplicate in zip(source.frames.paths, paths))
-    np.testing.assert_array_equal(np.asarray(source.frames), episode.frames)
-    np.testing.assert_array_equal(np.asarray(read_episode(destination).frames), np.asarray(rewritten.frames))
-
-
-@pytest.mark.parametrize("cross_volume", [False, True])
-def test_write_episode_exports_spool_and_survives_cleanup(tmp_path, monkeypatch, cross_volume):
-    import errno
-
+def test_write_episode_exports_spool_and_survives_cleanup(tmp_path):
     from relpose.tools.datasets.generate.simulation import Spool, spooled_frames
+    from relpose.tools.datasets.storage import encode_png
 
     episode = synthetic_episode(n_frames=4, width=16, height=12, channels=3)  # the simulator spools RGB
     expected = episode.frames.copy()
     spool = Spool(tmp_path / "spool")
     spool_path = spool.path
-    stored = read_episode(write_episode(episode, spool.path / "episode"))
-    episode.frames = spooled_frames(stored.frames.paths, expected.shape[1:], spool)
+    paths = [spool_path / f"{index}.png" for index in range(len(expected))]
+    for png, frame in zip(paths, expected):
+        png.write_bytes(encode_png(frame))
+    spooled = [png.read_bytes() for png in paths]
+    episode.frames = spooled_frames(paths, expected.shape[1:], spool)
     mapped = episode.frames.map(np.copy)
-    assert mapped.paths is None and not mapped.link_paths
+    assert mapped.encoded is None
     del mapped, spool
-
-    if cross_volume:
-        def cannot_link(source, target):
-            raise OSError(errno.EXDEV, "cross-device link")
-
-        monkeypatch.setattr(os, "link", cannot_link)
-    destination = write_episode(episode, tmp_path / "dst")
-    paths = read_episode(destination).frames.paths
-    assert all(original.samefile(duplicate) == (not cross_volume) for original, duplicate in zip(stored.frames.paths, paths))
-    write_episode(episode, destination)  # exporting again replaces existing links safely
+    destination = write_episode(episode, tmp_path / "dst.zip")
+    assert _pngs(destination) == spooled  # copied byte for byte, not re-encoded
+    write_episode(episode, destination)  # exporting again replaces the archive
     np.testing.assert_array_equal(np.asarray(episode.frames), expected)
     del episode
     gc.collect()
@@ -184,32 +195,26 @@ def test_write_episode_exports_spool_and_survives_cleanup(tmp_path, monkeypatch,
 
 
 @pytest.mark.parametrize("frames", ["lazy", "memory"])
-def test_failed_image_write_preserves_destination(tmp_path, monkeypatch, frames):
-    from pathlib import Path
-
+def test_failed_frame_write_preserves_destination(tmp_path, monkeypatch, frames):
     from relpose.tools.datasets import storage
 
     episode = synthetic_episode(n_frames=4, width=16, height=12)
-    source = read_episode(write_episode(episode, tmp_path / "src"), frames=frames)
+    source = read_episode(write_episode(episode, tmp_path / "src.zip"), frames=frames)
     episode.frames[:] = 0
-    destination = write_episode(episode, tmp_path / "dst")
-    paths = read_episode(destination).frames.paths
-    original_pngs = [path.read_bytes() for path in paths]
+    destination = write_episode(episode, tmp_path / "dst.zip")
+    before = destination.read_bytes()
 
-    def fail_copy(source, target):
-        Path(target).write_bytes(b"partial PNG")
-        raise OSError("copy failed")
+    def fail(*args):
+        raise OSError("frame unavailable")
 
-    def fail_encode(target, *args):
-        Path(target).write_bytes(b"partial PNG")
-        return False
-
-    monkeypatch.setattr(storage.shutil, "copyfile", fail_copy)
-    monkeypatch.setattr("cv2.imwrite", fail_encode)  # storage imports cv2 inside write_episode
-    with pytest.raises(OSError):
+    if frames == "lazy":
+        source.frames.encoded = fail  # the stored PNG cannot be read
+    else:
+        monkeypatch.setattr(storage, "encode_png", fail)  # the frame cannot be encoded
+    with pytest.raises(OSError, match="frame unavailable"):
         write_episode(source, destination)
-    assert [path.read_bytes() for path in paths] == original_pngs
-    assert not list((destination / "mav0" / "cam0" / "data").glob(".relpose-write-*"))
+    assert destination.read_bytes() == before
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["dst.zip", "src.zip"]  # no partial archive left behind
 
 
 def test_simulation_spool_lives_as_long_as_its_frames(tmp_path):

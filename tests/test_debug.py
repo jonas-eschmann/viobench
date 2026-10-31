@@ -26,7 +26,7 @@ def test_direct_run_matches_the_sandbox(engine, runtime_path, tmp_path):
 
     episode = synthetic_episode(n_frames=30, width=320, height=240)  # 1.5 s: dead reckoning calibrates on the first 0.5 s (identity), then estimates
     dataset = tmp_path / "set"
-    write_episode(episode, dataset / episode.name)
+    write_episode(episode, dataset / f"{episode.name}.zip")
     solution = direct.PythonSolution(EXAMPLES / "python" / "dead_reckoning")
     assert solution.resolution == (320, 240)
     [(_, estimates, metrics)] = direct.run(solution, [dataset], output_dir=tmp_path / "direct", log=lambda *a: None)
@@ -80,7 +80,7 @@ def test_direct_frame_width_and_host_solution_bundle(solution_dir, tmp_path):
 
 def test_direct_cli(tmp_path, capsys):
     episode = synthetic_episode(n_frames=4, width=320, height=240)
-    write_episode(episode, tmp_path / "set" / episode.name)
+    write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
     assert cli(["debug", str(EXAMPLES / "python" / "minimal"), str(tmp_path / "set"), "-o", str(tmp_path / "out")]) == 0
     assert "ATE" in capsys.readouterr().out
     assert (tmp_path / "out" / "set" / episode.name / "estimate.tum").is_file()
@@ -93,7 +93,7 @@ def test_direct_cli(tmp_path, capsys):
 
 def test_feed_and_score(tmp_path, capsys):
     episode = synthetic_episode(n_frames=6, width=640, height=480, lead_in=1.0)
-    write_episode(episode, tmp_path / "set" / episode.name)
+    write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
     feed = write_feed(episode, tmp_path / "feed", resolution=(320, 240))
     assert (feed / "shape.txt").read_text().split() == ["6", "240", "320", "3", "60"]  # IMU: six windows of one frame interval
     frames = np.fromfile(feed / "frames.u8", dtype=np.uint8).reshape(6, 240, 320, 3)
@@ -108,14 +108,14 @@ def test_feed_and_score(tmp_path, capsys):
     tum = tmp_path / "perfect.tum"
     np.savetxt(tum, np.column_stack([episode.frame_times, gt]), fmt="%.12g")
     np.savetxt(tmp_path / "twist.txt", np.column_stack([episode.frame_times, episode.ground_truth_twist()]), fmt="%.12g")
-    metrics = score(tmp_path / "set" / episode.name, tum)
+    metrics = score(tmp_path / "set" / f"{episode.name}.zip", tum)
     assert metrics.ate_rmse < 1e-9 and metrics.velocity_rmse < 1e-6 and metrics.held == 0
     assert "ATE 0.000" in capsys.readouterr().out
     rows = np.column_stack([episode.frame_times, gt])[1:]  # first frame missing
     np.savetxt(tum, rows, fmt="%.12g")
     assert np.isnan(load_estimates(tum, episode.frame_times)[0, :7]).all()
-    assert score(tmp_path / "set" / episode.name, tum, log=lambda *a: None).held == 1
-    assert cli(["score", str(tmp_path / "set" / episode.name), str(tum)]) == 0
+    assert score(tmp_path / "set" / f"{episode.name}.zip", tum, log=lambda *a: None).held == 1
+    assert cli(["score", str(tmp_path / "set" / f"{episode.name}.zip"), str(tum)]) == 0
 
 
 @pytest.mark.skipif(shutil.which("cmake") is None or (shutil.which("cc") is None and shutil.which("gcc") is None and shutil.which("clang") is None),
@@ -130,7 +130,7 @@ def test_native_host_debug_build(tmp_path):
     compile_ = subprocess.run(["cmake", "--build", str(build)], capture_output=True, text=True)
     assert compile_.returncode == 0, compile_.stderr
     episode = synthetic_episode(n_frames=5, width=320, height=240)
-    write_episode(episode, tmp_path / "set" / episode.name)
+    write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
     feed = write_feed(episode, tmp_path / "feed")
     tum = tmp_path / "estimate.tum"
     run = subprocess.run([str(build / "debug"), str(feed), str(tum)], capture_output=True, text=True)
@@ -138,5 +138,5 @@ def test_native_host_debug_build(tmp_path):
     assert "5/5 frames ok" in run.stdout
     estimates = load_estimates(tum, episode.frame_times)
     np.testing.assert_allclose(estimates, np.tile([0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0], (5, 1)))
-    metrics = score(tmp_path / "set" / episode.name, tum, log=lambda *a: None)
+    metrics = score(tmp_path / "set" / f"{episode.name}.zip", tum, log=lambda *a: None)
     assert metrics.held == 0

@@ -17,7 +17,8 @@ The workspace holds your code in `solution/` (the minimal example to start from)
 (`runtime/python/README.md`, `runtime/native/README.md`). Everything built lands in `build/`. Other starting points
 (`dead_reckoning`, `klt_imu`, `tiny_cnn`) are in `relpose/solution/examples/` of the clone: copy one over `solution/`.
 
-Download the validation episodes from the course page into `data/val`. Generate training data on the lab GPUs:
+Download the validation episodes from the course page into `data/val`: one `.zip` per episode, read in place (`unzip`
+only if another tool needs the EuRoC directory layout). Generate training data on the lab GPUs:
 
 ```bash
 relpose simulate -o data/train --episodes 200 --seed 1                          # ~2 min per 8 one-minute episodes
