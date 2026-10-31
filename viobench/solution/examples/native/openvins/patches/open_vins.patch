@@ -1,0 +1,447 @@
+--- a/ov_core/src/track/Grider_FAST.h
++++ b/ov_core/src/track/Grider_FAST.h
+@@ -27,7 +27,6 @@
+ #include <iostream>
+ #include <vector>
+
+-#include <opencv2/highgui/highgui.hpp>
+ #include <opencv2/imgproc/imgproc.hpp>
+ #include <opencv2/opencv.hpp>
+
+--- a/ov_core/src/track/Grider_GRID.h
++++ b/ov_core/src/track/Grider_GRID.h
+@@ -27,7 +27,6 @@
+ #include <iostream>
+ #include <vector>
+
+-#include <opencv2/highgui/highgui.hpp>
+ #include <opencv2/imgproc/imgproc.hpp>
+ #include <opencv2/opencv.hpp>
+
+--- a/ov_core/src/track/TrackBase.h
++++ b/ov_core/src/track/TrackBase.h
+@@ -30,7 +30,6 @@
+
+ #include <boost/date_time/posix_time/posix_time.hpp>
+ #include <opencv2/core/core.hpp>
+-#include <opencv2/highgui/highgui.hpp>
+ #include <opencv2/opencv.hpp>
+
+ #include "utils/colors.h"
+--- a/ov_core/src/track/TrackKLT.cpp
++++ b/ov_core/src/track/TrackKLT.cpp
+@@ -24,6 +24,7 @@
+ #include "Grider_FAST.h"
+ #include "Grider_GRID.h"
+ #include "cam/CamBase.h"
++#include "cam/CamRadtan.h"
+ #include "feat/Feature.h"
+ #include "feat/FeatureDatabase.h"
+ #include "utils/opencv_lambda_body.h"
+@@ -91,6 +92,18 @@
+     PRINT_ERROR(RED "[ERROR]: invalid number of images passed %zu, we only support mono or stereo tracking", num_images);
+     std::exit(EXIT_FAILURE);
+   }
++  temporal_rotation_prior.clear();
++}
++
++void TrackKLT::store_temporal_anchor(size_t camera_id, double timestamp) {
++  if (temporal_anchor_interval <= 0 || !img_pyramid_last.count(camera_id)) return;
++  auto &anchor = temporal_anchors[camera_id];
++  anchor.timestamp = timestamp;
++  anchor.rotation.setIdentity();
++  anchor.rotation_valid = true;
++  anchor.pyramid = img_pyramid_last.at(camera_id);
++  anchor.points = pts_last.at(camera_id);
++  anchor.ids = ids_last.at(camera_id);
+ }
+
+ void TrackKLT::feed_monocular(const CameraData &message, size_t msg_id) {
+@@ -104,6 +117,18 @@
+   std::vector<cv::Mat> imgpyr = img_pyramid_curr.at(cam_id);
+   cv::Mat mask = message.masks.at(msg_id);
+   rT2 = boost::posix_time::microsec_clock::local_time();
++
++  bool anchor_due = false;
++  if (temporal_anchor_interval > 0) {
++    auto &anchor = temporal_anchors.at(cam_id);
++    const auto prior = temporal_rotation_prior.find(cam_id);
++    if (prior != temporal_rotation_prior.end() && prior->second.allFinite())
++      anchor.rotation = prior->second * anchor.rotation;
++    else
++      anchor.rotation_valid = false;
++    anchor_due = message.timestamp - anchor.timestamp >= temporal_anchor_interval - 1e-6;
++  }
++
+
+   // If we didn't have any successful tracks last time, just extract this time
+   // This also handles, the tracking initalization on the first call to this extractor
+@@ -119,6 +144,7 @@
+     img_mask_last[cam_id] = mask;
+     pts_last[cam_id] = good_left;
+     ids_last[cam_id] = good_ids_left;
++    if (anchor_due) store_temporal_anchor(cam_id, message.timestamp);
+     return;
+   }
+
+@@ -148,7 +174,36 @@
+     pts_last[cam_id].clear();
+     ids_last[cam_id].clear();
+     PRINT_ERROR(RED "[KLT-EXTRACTOR]: Failed to get enough points to do RANSAC, resetting.....\n" RESET);
++    if (anchor_due) store_temporal_anchor(cam_id, message.timestamp);
+     return;
++  }
++
++  // Re-observe a keyframe directly from the previous keyframe. Chained LK
++  // supplies the initial guess and remains the fallback for unavailable matches.
++  if (anchor_due) {
++    const auto &anchor = temporal_anchors.at(cam_id);
++    if (anchor.rotation_valid && !anchor.pyramid.empty()) {
++      std::map<size_t, cv::KeyPoint> reference;
++      for (size_t i = 0; i < anchor.ids.size(); ++i) reference.emplace(anchor.ids[i], anchor.points[i]);
++      std::vector<cv::KeyPoint> anchor_points, direct_points;
++      std::vector<size_t> current_indices;
++      for (size_t i = 0; i < ids_left_old.size(); ++i) {
++        const auto old = reference.find(ids_left_old[i]);
++        if (!mask_ll[i] || old == reference.end()) continue;
++        anchor_points.push_back(old->second);
++        direct_points.push_back(pts_left_new[i]);
++        current_indices.push_back(i);
++      }
++      if (current_indices.size() >= 10) {
++        const Eigen::Matrix3d adjacent_rotation = temporal_rotation_prior.at(cam_id);
++        temporal_rotation_prior[cam_id] = anchor.rotation;
++        std::vector<uchar> direct_mask;
++        perform_matching(anchor.pyramid, imgpyr, anchor_points, direct_points, cam_id, cam_id, direct_mask, true);
++        temporal_rotation_prior[cam_id] = adjacent_rotation;
++        for (size_t i = 0; i < current_indices.size() && i < direct_mask.size(); ++i)
++          if (direct_mask[i]) pts_left_new[current_indices[i]] = direct_points[i];
++      }
++    }
+   }
+
+   // Get our "good tracks"
+@@ -187,6 +242,7 @@
+     pts_last[cam_id] = good_left;
+     ids_last[cam_id] = good_ids_left;
+   }
++  if (anchor_due) store_temporal_anchor(cam_id, message.timestamp);
+   rT5 = boost::posix_time::microsec_clock::local_time();
+
+   // Timing information
+@@ -827,7 +883,7 @@
+ }
+
+ void TrackKLT::perform_matching(const std::vector<cv::Mat> &img0pyr, const std::vector<cv::Mat> &img1pyr, std::vector<cv::KeyPoint> &kpts0,
+-                                std::vector<cv::KeyPoint> &kpts1, size_t id0, size_t id1, std::vector<uchar> &mask_out) {
++                                std::vector<cv::KeyPoint> &kpts1, size_t id0, size_t id1, std::vector<uchar> &mask_out, bool use_initial_guess) {
+
+   // We must have equal vectors
+   assert(kpts0.size() == kpts1.size());
+@@ -851,31 +907,99 @@
+     return;
+   }
+
++  // Bring the new image into the old camera orientation before tracking. At
++  // wide fields of view even modest rotation deforms an LK patch substantially;
++  // supplying only a point-location prediction does not remove that deformation.
++  const std::vector<cv::Mat> *tracking_pyramid = &img1pyr;
++  std::vector<cv::Mat> rotated_pyramid;
++  cv::Matx33d H_new_from_old = cv::Matx33d::eye();
++  bool rotation_compensated = false;
++  auto prior = temporal_rotation_prior.find(id0);
++  if (!use_stereo && id0 == id1 && prior != temporal_rotation_prior.end() && prior->second.allFinite() &&
++      (prior->second - Eigen::Matrix3d::Identity()).norm() > 1e-10 &&
++      std::dynamic_pointer_cast<CamRadtan>(camera_calib.at(id0)) != nullptr &&
++      camera_calib.at(id0)->get_value().bottomRows(4).squaredNorm() == 0.0) {
++    cv::Matx33d rotation;
++    for (int row = 0; row < 3; ++row)
++      for (int col = 0; col < 3; ++col) rotation(row, col) = prior->second(row, col);
++    const cv::Matx33d K0 = camera_calib.at(id0)->get_K(), K1 = camera_calib.at(id1)->get_K();
++    const cv::Matx33d H_old_from_new = K0 * rotation.t() * K1.inv();
++    H_new_from_old = K1 * rotation * K0.inv();
++    cv::Mat rotated;
++    cv::warpPerspective(img1pyr.at(0), rotated, H_old_from_new, img0pyr.at(0).size(), cv::INTER_LINEAR,
++                        cv::BORDER_CONSTANT, cv::Scalar(0));
++    cv::buildOpticalFlowPyramid(rotated, rotated_pyramid, win_size, pyr_levels);
++    tracking_pyramid = &rotated_pyramid;
++    // The rotation prior is now removed; translation remains for LK to estimate.
++    if (use_initial_guess) {
++      for (size_t i = 0; i < pts1.size(); ++i) {
++        const cv::Vec3d predicted = H_old_from_new * cv::Vec3d(pts1[i].x, pts1[i].y, 1.0);
++        if (std::isfinite(predicted[0]) && std::isfinite(predicted[1]) && std::isfinite(predicted[2]) && predicted[2] > 1e-8)
++          pts1[i] = cv::Point2f(predicted[0] / predicted[2], predicted[1] / predicted[2]);
++        else
++          pts1[i] = pts0[i];
++      }
++    } else {
++      pts1 = pts0;
++    }
++    rotation_compensated = true;
++  }
++
+   // Now do KLT tracking to get the valid new points
+   std::vector<uchar> mask_klt;
+   std::vector<float> error;
+   cv::TermCriteria term_crit = cv::TermCriteria(cv::TermCriteria::COUNT | cv::TermCriteria::EPS, 30, 0.01);
+-  cv::calcOpticalFlowPyrLK(img0pyr, img1pyr, pts0, pts1, mask_klt, error, win_size, pyr_levels, term_crit, cv::OPTFLOW_USE_INITIAL_FLOW);
+-
+-  // Normalize these points, so we can then do ransac
+-  // We don't want to do ransac on distorted image uvs since the mapping is nonlinear
++  cv::calcOpticalFlowPyrLK(img0pyr, *tracking_pyramid, pts0, pts1, mask_klt, error, win_size, pyr_levels, term_crit, cv::OPTFLOW_USE_INITIAL_FLOW);
++
++  // Reject inconsistent tracks before estimating the epipolar geometry. Failed
++  // forward tracks must not influence RANSAC, and a small reprojection error alone
++  // does not distinguish mismatches on repeated textures.
++  std::vector<cv::Point2f> pts0_back = pts0;
++  std::vector<uchar> mask_back;
++  std::vector<float> error_back;
++  cv::calcOpticalFlowPyrLK(*tracking_pyramid, img0pyr, pts1, pts0_back, mask_back, error_back, win_size, pyr_levels, term_crit,
++                          cv::OPTFLOW_USE_INITIAL_FLOW);
++
++  // The round-trip points already live in the original old image. Restore the
++  // tracked points to the actual new image before epipolar gating and storage.
++  if (rotation_compensated) {
++    for (size_t i = 0; i < pts1.size(); ++i) {
++      const cv::Vec3d mapped = H_new_from_old * cv::Vec3d(pts1[i].x, pts1[i].y, 1.0);
++      if (!std::isfinite(mapped[0]) || !std::isfinite(mapped[1]) || !std::isfinite(mapped[2]) || mapped[2] <= 1e-8) {
++        mask_klt[i] = 0;
++        pts1[i] = cv::Point2f(-1, -1);
++        continue;
++      }
++      pts1[i] = cv::Point2f(mapped[0] / mapped[2], mapped[1] / mapped[2]);
++      if (pts1[i].x < 0 || pts1[i].x >= img1pyr.at(0).cols || pts1[i].y < 0 || pts1[i].y >= img1pyr.at(0).rows)
++        mask_klt[i] = 0;
++    }
++  }
++
++  // RANSAC works in normalized coordinates; keep the original index so its mask
++  // can be mapped back to the complete set of tracks expected by the caller.
+   std::vector<cv::Point2f> pts0_n, pts1_n;
++  std::vector<size_t> original_indices;
+   for (size_t i = 0; i < pts0.size(); i++) {
++    const cv::Point2f roundtrip = pts0_back.at(i) - pts0.at(i);
++    if (!mask_klt.at(i) || !mask_back.at(i) || roundtrip.dot(roundtrip) > 0.25f ||
++        !std::isfinite(roundtrip.x) || !std::isfinite(roundtrip.y))
++      continue;
+     pts0_n.push_back(camera_calib.at(id0)->undistort_cv(pts0.at(i)));
+     pts1_n.push_back(camera_calib.at(id1)->undistort_cv(pts1.at(i)));
+-  }
+-
+-  // Do RANSAC outlier rejection (note since we normalized the max pixel error is now in the normalized cords)
+-  std::vector<uchar> mask_rsc;
+-  double max_focallength_img0 = std::max(camera_calib.at(id0)->get_K()(0, 0), camera_calib.at(id0)->get_K()(1, 1));
+-  double max_focallength_img1 = std::max(camera_calib.at(id1)->get_K()(0, 0), camera_calib.at(id1)->get_K()(1, 1));
+-  double max_focallength = std::max(max_focallength_img0, max_focallength_img1);
+-  cv::findFundamentalMat(pts0_n, pts1_n, cv::FM_RANSAC, 2.0 / max_focallength, 0.999, mask_rsc);
+-
+-  // Loop through and record only ones that are valid
+-  for (size_t i = 0; i < mask_klt.size(); i++) {
+-    auto mask = (uchar)((i < mask_klt.size() && mask_klt[i] && i < mask_rsc.size() && mask_rsc[i]) ? 1 : 0);
+-    mask_out.push_back(mask);
++    original_indices.push_back(i);
++  }
++
++  mask_out.assign(pts0.size(), (uchar)0);
++  if (original_indices.size() >= 10) {
++    std::vector<uchar> mask_rsc;
++    double max_focallength_img0 = std::max(camera_calib.at(id0)->get_K()(0, 0), camera_calib.at(id0)->get_K()(1, 1));
++    double max_focallength_img1 = std::max(camera_calib.at(id1)->get_K()(0, 0), camera_calib.at(id1)->get_K()(1, 1));
++    double max_focallength = std::max(max_focallength_img0, max_focallength_img1);
++    cv::findFundamentalMat(pts0_n, pts1_n, cv::FM_RANSAC, 2.0 / max_focallength, 0.999, mask_rsc);
++    for (size_t i = 0; i < original_indices.size() && i < mask_rsc.size(); i++) {
++      mask_out[original_indices[i]] = mask_rsc[i] ? (uchar)1 : (uchar)0;
++    }
+   }
+
+   // Copy back the updated positions
+--- a/ov_core/src/track/TrackKLT.h
++++ b/ov_core/src/track/TrackKLT.h
+@@ -61,6 +61,19 @@
+    * @param message Contains our timestamp, images, and camera ids
+    */
+   void feed_new_camera(const CameraData &message) override;
++
++  // Rotation prior for the next image batch, mapping old-camera bearings into
++  // new-camera axes. Call before feed_new_camera; each batch consumes the prior.
++  // Used only for monocular temporal matching of undistorted pinhole images.
++  void set_temporal_rotation(size_t camera_id, const Eigen::Matrix3d &R_new_from_old) {
++    temporal_rotation_prior[camera_id] = R_new_from_old;
++  }
++
++  // Activate after a tracked handoff frame; keyframes thereafter stay on its cadence.
++  void enable_temporal_anchor(double timestamp, double interval) {
++    temporal_anchor_interval = interval;
++    for (const auto &camera : camera_calib) store_temporal_anchor(camera.first, timestamp);
++  }
+
+ protected:
+   /**
+@@ -129,7 +142,7 @@
+    * If the second vector is non-empty, it will be used as an initial guess of where the keypoints are in the second image.
+    */
+   void perform_matching(const std::vector<cv::Mat> &img0pyr, const std::vector<cv::Mat> &img1pyr, std::vector<cv::KeyPoint> &pts0,
+-                        std::vector<cv::KeyPoint> &pts1, size_t id0, size_t id1, std::vector<uchar> &mask_out);
++                        std::vector<cv::KeyPoint> &pts1, size_t id0, size_t id1, std::vector<uchar> &mask_out, bool use_initial_guess = false);
+
+   // Parameters for our FAST grid detector
+   int threshold;
+@@ -143,6 +156,21 @@
+   int pyr_levels = 5;
+   cv::Size win_size = cv::Size(15, 15);
+
++  std::map<size_t, Eigen::Matrix3d> temporal_rotation_prior;
++
++  struct TemporalAnchor {
++    double timestamp = -1;
++    Eigen::Matrix3d rotation = Eigen::Matrix3d::Identity();
++    bool rotation_valid = true;
++    std::vector<cv::Mat> pyramid;
++    std::vector<cv::KeyPoint> points;
++    std::vector<size_t> ids;
++  };
++  double temporal_anchor_interval = 0;
++  std::map<size_t, TemporalAnchor> temporal_anchors;
++  void store_temporal_anchor(size_t camera_id, double timestamp);
++
++
+   // Last set of image pyramids
+   std::map<size_t, std::vector<cv::Mat>> img_pyramid_last;
+   std::map<size_t, cv::Mat> img_curr;
+--- a/ov_init/src/dynamic/DynamicInitializer.cpp
++++ b/ov_init/src/dynamic/DynamicInitializer.cpp
+@@ -97,7 +97,8 @@
+   // ======================================================
+
+   // Settings
+-  const int min_num_meas_to_optimize = (int)params.init_window_time;
++  // viobench: triangulation needs at least two observations, including for subsecond initialization windows.
++  const int min_num_meas_to_optimize = std::max(2, (int)params.init_window_time);
+   const int min_valid_features = 8;
+
+   // Validation information for features we can use
+@@ -534,7 +535,7 @@
+       Eigen::Vector4d q_ItoC = params.camera_extrinsics.at(cam_id).block(0, 0, 4, 1);
+       Eigen::Vector3d p_IinC = params.camera_extrinsics.at(cam_id).block(4, 0, 3, 1);
+       Eigen::Vector3d p_FinC0 = quat_2_Rot(q_ItoC) * p_FinI0 + p_IinC;
+-      if (p_FinC0(2) < 0) {
++      if (!p_FinC0.allFinite() || p_FinC0(2) <= 0.0) {
+         is_behind = true;
+       }
+     }
+@@ -633,6 +634,7 @@
+   // options.linear_solver_ordering = ordering;
+   options.function_tolerance = 1e-5;
+   options.gradient_tolerance = 1e-4 * options.function_tolerance;
++  options.logging_type = ceres::SILENT; // viobench: the per-iteration log formats wall-clock times, so its fuel would vary
+
+   // Loop through each CPI integration and add its measurement to the problem
+   double timestamp_k = -1;
+--- a/ov_init/src/init/InertialInitializerOptions.h
++++ b/ov_init/src/init/InertialInitializerOptions.h
+@@ -72,6 +72,9 @@
+   /// Number of features we should try to track
+   int init_max_features = 50;
+
++  /// Initial accelerometer bias standard deviation after static initialization (m/s^2)
++  double init_static_sigma_ba = 0.02;
++
+   /// If we should perform dynamic initialization
+   bool init_dyn_use = false;
+
+@@ -128,6 +131,7 @@
+       parser->parse_config("init_imu_thresh", init_imu_thresh);
+       parser->parse_config("init_max_disparity", init_max_disparity);
+       parser->parse_config("init_max_features", init_max_features);
++      parser->parse_config("init_static_sigma_ba", init_static_sigma_ba, false);
+       parser->parse_config("init_dyn_use", init_dyn_use);
+       parser->parse_config("init_dyn_mle_opt_calib", init_dyn_mle_opt_calib);
+       parser->parse_config("init_dyn_mle_max_iter", init_dyn_mle_max_iter);
+@@ -151,6 +155,7 @@
+     PRINT_DEBUG("  - init_imu_thresh: %.2f\n", init_imu_thresh);
+     PRINT_DEBUG("  - init_max_disparity: %.2f\n", init_max_disparity);
+     PRINT_DEBUG("  - init_max_features: %.2f\n", init_max_features);
++    PRINT_DEBUG("  - init_static_sigma_ba: %.3f\n", init_static_sigma_ba);
+     if (init_max_features < 15) {
+       PRINT_ERROR(RED "number of requested feature tracks to init not enough!!\n" RESET);
+       PRINT_ERROR(RED "  init_max_features = %d\n" RESET, init_max_features);
+--- a/ov_init/src/static/StaticInitializer.cpp
++++ b/ov_init/src/static/StaticInitializer.cpp
+@@ -147,6 +147,8 @@
+   covariance.block(0, 0, 3, 3) = std::pow(0.02, 2) * Eigen::Matrix3d::Identity(); // q
+   covariance.block(3, 3, 3, 3) = std::pow(0.05, 2) * Eigen::Matrix3d::Identity(); // p
+   covariance.block(6, 6, 3, 3) = std::pow(0.01, 2) * Eigen::Matrix3d::Identity(); // v (static)
++  // Static gravity measurements cannot distinguish tilt from accelerometer bias. Keep the sensor prior uncertainty.
++  covariance.block(12, 12, 3, 3) = std::pow(params.init_static_sigma_ba, 2) * Eigen::Matrix3d::Identity(); // ba
+
+   // A VIO system has 4dof unobservable directions which can be arbitrarily picked.
+   // This means that on startup, we can fix the yaw and position to be 100 percent known.
+--- a/ov_msckf/src/core/VioManagerHelper.cpp
++++ b/ov_msckf/src/core/VioManagerHelper.cpp
+@@ -92,8 +92,9 @@
+   }
+
+   // Run the initialization in a second thread so it can go as slow as it desires
++  // viobench: a wasm32-wasip1 module has no threads, so the initialization runs in the calling thread
+   thread_init_running = true;
+-  std::thread thread([&] {
++  auto initialize = [&] {
+     // Returns from our initializer
+     double timestamp;
+     Eigen::MatrixXd covariance;
+@@ -175,16 +176,9 @@
+
+     // Finally, mark that the thread has finished running
+     thread_init_running = false;
+-  });
+-
+-  // If we are single threaded, then run single threaded
+-  // Otherwise detach this thread so it runs in the background!
+-  if (!params.use_multi_threading_subs) {
+-    thread.join();
+-  } else {
+-    thread.detach();
+-  }
+-  return false;
++  };
++  initialize();
++  return thread_init_success;
+ }
+
+ void VioManager::retriangulate_active_tracks(const ov_core::CameraData &message) {
+--- a/ov_msckf/src/core/VioManagerOptions.h
++++ b/ov_msckf/src/core/VioManagerOptions.h
+@@ -290,7 +290,11 @@
+             PRINT_ERROR(RED "\t- mask%d - %s\n" RESET, i, total_mask_path.c_str());
+             std::exit(EXIT_FAILURE);
+           }
++#ifdef HAVE_OPENCV_IMGCODECS
+           cv::Mat mask = cv::imread(total_mask_path, cv::IMREAD_GRAYSCALE);
++#else
++          cv::Mat mask; // viobench: OpenCV without imgcodecs (the wasm build) cannot read mask images
++#endif
+           masks.insert({i, mask});
+           if (mask.cols != camera_intrinsics.at(i)->w() || mask.rows != camera_intrinsics.at(i)->h()) {
+             PRINT_ERROR(RED "VioManager(): mask size does not match camera!\n" RESET);
+--- a/ov_msckf/src/update/UpdaterMSCKF.cpp
++++ b/ov_msckf/src/update/UpdaterMSCKF.cpp
+@@ -128,7 +128,7 @@
+
+     // Gauss-newton refine the feature
+     bool success_refine = true;
+-    if (initializer_feat->config().refine_features) {
++    if (success_tri && initializer_feat->config().refine_features) {
+       success_refine = initializer_feat->single_gaussnewton(*it1, clones_cam);
+     }
+
+--- a/ov_msckf/src/update/UpdaterSLAM.cpp
++++ b/ov_msckf/src/update/UpdaterSLAM.cpp
+@@ -131,7 +131,7 @@
+
+     // Gauss-newton refine the feature
+     bool success_refine = true;
+-    if (initializer_feat->config().refine_features) {
++    if (success_tri && initializer_feat->config().refine_features) {
+       success_refine = initializer_feat->single_gaussnewton(*it1, clones_cam);
+     }
+

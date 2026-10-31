@@ -2,7 +2,7 @@
 
 A submission is one `wasm32-wasip1` reactor module. Each episode gets a fresh instance: `init` once with a JSON config,
 then `step` once per frame, which writes the camera's state to `out`. The Python runtime implements the ABI for you
-(`docs/RUNTIME.md`); native solutions implement it directly (`relpose/solution/examples/native/cpp_minimal`).
+(`docs/RUNTIME.md`); native solutions implement it directly (`viobench/solution/examples/native/cpp_minimal`).
 
 ## Exports
 

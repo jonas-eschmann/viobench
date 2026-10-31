@@ -5,11 +5,11 @@ import numpy as np
 import pytest
 import wasmtime
 
-from relpose import Limits, abi
-from relpose.tools.cli import main
-from relpose.tools.runner.leaderboard import markdown_table, rows
-from relpose.tools.runner.run import evaluate
-from relpose.tools.server.worker import public_results
+from viobench import Limits, abi
+from viobench.tools.cli import main
+from viobench.tools.runner.leaderboard import markdown_table, rows
+from viobench.tools.runner.run import evaluate
+from viobench.tools.server.worker import public_results
 from tests.test_datasets import synthetic_episode
 
 
@@ -156,9 +156,9 @@ def test_failed_frame_contributes_to_peak_fuel(failure, limit, reason, failed_fr
 @pytest.mark.parametrize("overall", [{"fuel_per_frame_median": 10}, {"fuel_per_frame_max": 20}])
 def test_old_report_requires_reevaluation(overall, tmp_path, capsys):
     report = {"solution": "old.wasm", "summary": {"overall": overall, "datasets": {"set": {"fuel_per_frame_median": 10}}}}
-    with pytest.raises(ValueError, match="rerun `relpose evaluate`"):
+    with pytest.raises(ValueError, match="rerun `viobench evaluate`"):
         rows([("old", report)])
     path = tmp_path / "report.json"
     path.write_text(json.dumps(report))
     assert main(["leaderboard", str(path)]) == 1
-    assert "rerun `relpose evaluate`" in capsys.readouterr().err
+    assert "rerun `viobench evaluate`" in capsys.readouterr().err

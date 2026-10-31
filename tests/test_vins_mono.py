@@ -1,4 +1,4 @@
-"""VINS-Mono ABI and metric tracking regressions; build first or set RELPOSE_VINS_MONO."""
+"""VINS-Mono ABI and metric tracking regressions; build first or set VIOBENCH_VINS_MONO."""
 import os
 from pathlib import Path
 import re
@@ -6,21 +6,21 @@ import re
 import numpy as np
 import pytest
 
-from relpose import Sandbox
-from relpose.solution import workspace
-from relpose.tools.abi.config import default_guest_config
-from relpose.tools.runner.metrics import IDENTITY_STATE, evaluate_trajectory
-from relpose.tools.runner.sandbox import SandboxError
+from viobench import Sandbox
+from viobench.solution import workspace
+from viobench.tools.abi.config import default_guest_config
+from viobench.tools.runner.metrics import IDENTITY_STATE, evaluate_trajectory
+from viobench.tools.runner.sandbox import SandboxError
 
 from vio_scene import hovering_room_inputs, moving_room_inputs
 
 
 @pytest.fixture(scope="module")
 def vins_mono_path():
-    path = Path(os.environ.get("RELPOSE_VINS_MONO") or
+    path = Path(os.environ.get("VIOBENCH_VINS_MONO") or
                 workspace.PACKAGE / "examples/native/vins_mono/build/solution.wasm")
     if not path.is_file():
-        pytest.skip(f"VINS-Mono not built ({path}); build examples/native/vins_mono or set RELPOSE_VINS_MONO")
+        pytest.skip(f"VINS-Mono not built ({path}); build examples/native/vins_mono or set VIOBENCH_VINS_MONO")
     return path
 
 

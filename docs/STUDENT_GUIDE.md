@@ -7,23 +7,23 @@ and Python 3.10–3.14 with venv (Ubuntu: `sudo apt install build-essential cmak
 macOS: `xcode-select --install`, `brew install cmake`, Python from Homebrew or python.org).
 
 ```bash
-git clone <repo> relpose
-python -m venv .venv && source .venv/bin/activate && pip install -e "./relpose[data]"   # lab machines: "./relpose[data,sim,train]"
-relpose init python my_workspace && cd my_workspace                                   # C/C++: relpose init native
+git clone <repo> viobench
+python -m venv .venv && source .venv/bin/activate && pip install -e "./viobench[data]"   # lab machines: "./viobench[data,sim,train]"
+viobench init python my_workspace && cd my_workspace                                   # C/C++: viobench init native
 ```
 
 The workspace holds your code in `solution/` (the minimal example to start from) and your copy of the build recipe in
 `toolchain/` and `runtime/`: change it to add a package to the Python runtime or a library for native code
 (`runtime/python/README.md`, `runtime/native/README.md`). Everything built lands in `build/`. Other starting points
-(`dead_reckoning`, `klt_imu`, `tiny_cnn`) are in `relpose/solution/examples/` of the clone: copy one over `solution/`.
+(`dead_reckoning`, `klt_imu`, `tiny_cnn`) are in `viobench/solution/examples/` of the clone: copy one over `solution/`.
 
 Download the validation episodes from the course page into `data/val`: one `.zip` per episode, read in place (`unzip`
 only if another tool needs the EuRoC directory layout). Generate training data on the lab GPUs:
 
 ```bash
-relpose simulate -o data/train --episodes 200 --seed 1                          # ~2 min per 8 one-minute episodes
-relpose simulate -o data/train-scenes --scene-names ProcTHOR-Train-7 ProcTHOR-Train-23 --episodes 50   # 50 episodes in each scene
-relpose simulate -o data/train-short --episodes 64 --seed 900 --duration 15
+viobench simulate -o data/train --episodes 200 --seed 1                          # ~2 min per 8 one-minute episodes
+viobench simulate -o data/train-scenes --scene-names ProcTHOR-Train-7 ProcTHOR-Train-23 --episodes 50   # 50 episodes in each scene
+viobench simulate -o data/train-short --episodes 64 --seed 900 --duration 15
 ```
 
 `simulate` also writes `trajectory.mp4` inside each episode directory by default: camera playback with ground-truth
@@ -36,11 +36,11 @@ keeps the FOV fixed at the base value.
 ## Workflow
 
 ```bash
-relpose bundle solution -o solution.wasm        # after every edit; Python: the first time also builds the runtime (10–15 min)
-relpose check solution.wasm                     # a few synthetic frames: errors, fuel per step
-relpose evaluate solution.wasm data/val         # metrics and fuel; for unseen data, simulate into another directory first
-relpose evaluate solution.wasm data/val -o report-solution   # also save trajectory videos
-relpose debug solution data/val                 # in-process, with breakpoint() (docs/DEBUGGING.md)
+viobench bundle solution -o solution.wasm        # after every edit; Python: the first time also builds the runtime (10–15 min)
+viobench check solution.wasm                     # a few synthetic frames: errors, fuel per step
+viobench evaluate solution.wasm data/val         # metrics and fuel; for unseen data, simulate into another directory first
+viobench evaluate solution.wasm data/val -o report-solution   # also save trajectory videos
+viobench debug solution data/val                 # in-process, with breakpoint() (docs/DEBUGGING.md)
 ```
 
 `bundle` embeds Python code into the runtime and compiles native code (a `CMakeLists.txt`) with wasi-sdk. `evaluate`
@@ -58,7 +58,7 @@ curl -H "Authorization: Bearer $TOKEN" https://<server>/submissions/<id>     # o
 curl -H "Authorization: Bearer $TOKEN" https://<server>/config               # the rules: quota, limits, timeouts
 ```
 
-The server evaluates on unpublished episodes and returns metrics only, no logs; `relpose evaluate` applies the same
+The server evaluates on unpublished episodes and returns metrics only, no logs; `viobench evaluate` applies the same
 limits, so reproduce failures locally. Quota (see `/config`): one submission at a time, one per day (from midnight
 Pacific time) plus one retry after a failed one.
 
@@ -67,14 +67,14 @@ Pacific time) plus one retry after a failed one.
 - Python loops over pixels are expensive; OpenCV calls are cheap.
 - Keep the per-frame cost flat: episodes have no announced length.
 - Gray input: `cv2.cvtColor(frame, cv2.COLOR_RGB2GRAY)`.
-- Learned models: `relpose/solution/examples/python/tiny_cnn`. C, C++, Rust: `relpose init native`, `runtime/native/README.md`.
+- Learned models: `viobench/solution/examples/python/tiny_cnn`. C, C++, Rust: `viobench init native`, `runtime/native/README.md`.
 
 ## Common problems
 
 | symptom | fix |
 |---|---|
-| `CMakeCache.txt directory … is different` | the workspace moved: `relpose build-runtime --force`, delete `solution/build` |
-| `… is not inside a workspace` | run the command on `solution/` of a workspace (`relpose init`) |
+| `CMakeCache.txt directory … is different` | the workspace moved: `viobench build-runtime --force`, delete `solution/build` |
+| `… is not inside a workspace` | run the command on `solution/` of a workspace (`viobench init`) |
 | `ModuleNotFoundError: scipy` | the runtime has numpy and OpenCV only (`docs/RUNTIME.md`) |
 | `trap OUT_OF_FUEL` | less work per step: resolution, feature count, iterations |
 | `MemoryError` | do not keep every frame |

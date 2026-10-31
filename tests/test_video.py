@@ -7,10 +7,10 @@ import numpy as np
 import pytest
 import wasmtime
 
-from relpose.tools.cli import main as cli
-from relpose.tools.datasets.episode import FrameSequence
-from relpose.tools.datasets.storage import write_episode
-from relpose.tools.runner.video import write_video
+from viobench.tools.cli import main as cli
+from viobench.tools.datasets.episode import FrameSequence
+from viobench.tools.datasets.storage import write_episode
+from viobench.tools.runner.video import write_video
 from tests.test_datasets import synthetic_episode
 
 
@@ -78,12 +78,12 @@ def test_simulate_cli_writes_video_in_each_episode_by_default(tmp_path, monkeypa
     for index, episode in enumerate(episodes):
         episode.name = f"sim-{index}"
         episode.config["camera"]["horizontal_fov_degrees"] = 60.0
-    monkeypatch.setattr("relpose.tools.datasets.generate.simulation.dataset_from_arguments", lambda args: iter(episodes))
+    monkeypatch.setattr("viobench.tools.datasets.generate.simulation.dataset_from_arguments", lambda args: iter(episodes))
     if no_video:
         def unexpected(*args, **kwargs):
             pytest.fail("video rendered with --no-video")
 
-        monkeypatch.setattr("relpose.tools.runner.video.write_video", unexpected)
+        monkeypatch.setattr("viobench.tools.runner.video.write_video", unexpected)
     output = tmp_path / "dataset"
     args = ["simulate", "-o", str(output), "--episodes", "2"]
     if no_video:
@@ -159,10 +159,10 @@ def test_evaluate_failure_still_produces_complete_video(tmp_path):
 def test_debug_without_output_does_not_render_video(tmp_path, monkeypatch):
     episode = synthetic_episode(n_frames=4, width=320, height=240)
     write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
-    solution = Path(__file__).resolve().parents[1] / "relpose/solution/examples/python/minimal"
+    solution = Path(__file__).resolve().parents[1] / "viobench/solution/examples/python/minimal"
 
     def unexpected(*args, **kwargs):
         pytest.fail("video rendered without -o")
 
-    monkeypatch.setattr("relpose.tools.runner.video.write_video", unexpected)
+    monkeypatch.setattr("viobench.tools.runner.video.write_video", unexpected)
     assert cli(["debug", str(solution), str(tmp_path / "set")]) == 0

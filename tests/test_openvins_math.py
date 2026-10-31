@@ -5,7 +5,7 @@ import subprocess
 
 import pytest
 
-from relpose.solution import workspace
+from viobench.solution import workspace
 
 
 def test_consensus_output_contract(tmp_path):

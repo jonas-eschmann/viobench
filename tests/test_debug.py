@@ -1,5 +1,5 @@
-"""The out-of-sandbox debugging facilities: `relpose debug` (Python, in-process), `relpose feed` + the native host
-`debug` executable, `relpose score`."""
+"""The out-of-sandbox debugging facilities: `viobench debug` (Python, in-process), `viobench feed` + the native host
+`debug` executable, `viobench score`."""
 import json
 import shutil
 import subprocess
@@ -8,21 +8,21 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from relpose.tools.cli import main as cli
-from relpose.tools.datasets.feed import write_feed
-from relpose.tools.datasets.storage import write_episode
-from relpose.tools.runner import direct
-from relpose.tools.runner.score import load_estimates, score
+from viobench.tools.cli import main as cli
+from viobench.tools.datasets.feed import write_feed
+from viobench.tools.datasets.storage import write_episode
+from viobench.tools.runner import direct
+from viobench.tools.runner.score import load_estimates, score
 from tests.test_datasets import synthetic_episode
 
 REPO = Path(__file__).resolve().parent.parent
-EXAMPLES = REPO / "relpose" / "solution" / "examples"
+EXAMPLES = REPO / "viobench" / "solution" / "examples"
 
 
 def test_direct_run_matches_the_sandbox(engine, runtime_path, tmp_path):
     """dead_reckoning on the host and inside the runtime give the same poses (same code, same inputs, host numpy)."""
-    from relpose.solution.runtime.python.bundler.bundle import bundle
-    from relpose.tools.runner.run import evaluate
+    from viobench.solution.runtime.python.bundler.bundle import bundle
+    from viobench.tools.runner.run import evaluate
 
     episode = synthetic_episode(n_frames=30, width=320, height=240)  # 1.5 s: dead reckoning calibrates on the first 0.5 s (identity), then estimates
     dataset = tmp_path / "set"

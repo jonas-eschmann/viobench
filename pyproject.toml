@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "relpose"
+name = "viobench"
 version = "0.1.0"
-description = "Compute-aware relative pose-estimation challenge: run and score solution .wasm modules, episode datasets, submission server, and the recipes to build a solution"
+description = "Compute-aware relative state estimation challenge: run and score solution .wasm modules, episode datasets, submission server, and the recipes to build a solution"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
@@ -22,20 +22,20 @@ server = ["fastapi", "uvicorn", "python-multipart", "tzdata"]  # tzdata: the quo
 dev = ["pytest", "opencv-python-headless>=4.9", "pyyaml>=6", "torch", "onnx", "fastapi", "python-multipart", "tzdata", "httpx"]  # httpx: the server tests' client
 
 [project.scripts]
-relpose = "relpose.tools.cli:main"
+viobench = "viobench.tools.cli:main"
 
-# relpose.tools is the host side; relpose.solution is the guest side and consists of files, not modules, except
+# viobench.tools is the host side; viobench.solution is the guest side and consists of files, not modules, except
 # workspace.py and the Python runtime's bundler, reached through implicit namespace packages (no __init__.py in solution/).
 [tool.setuptools.packages.find]
-include = ["relpose", "relpose.tools*", "relpose.solution", "relpose.solution.runtime", "relpose.solution.runtime.python", "relpose.solution.runtime.python.bundler"]
+include = ["viobench", "viobench.tools*", "viobench.solution", "viobench.solution.runtime", "viobench.solution.runtime.python", "viobench.solution.runtime.python.bundler"]
 namespaces = true
 
 [tool.setuptools.package-data]
-"relpose.tools.datasets.generate" = ["*.h.in"]
-"relpose.tools" = ["config.json"]
-"relpose.tools.server" = ["ui/*"]
-# the build recipe and examples that `relpose init` copies into new workspaces
-"relpose.solution" = [
+"viobench.tools.datasets.generate" = ["*.h.in"]
+"viobench.tools" = ["config.json"]
+"viobench.tools.server" = ["ui/*"]
+# the build recipe and examples that `viobench init` copies into new workspaces
+"viobench.solution" = [
     "toolchain/*", "runtime/native/*", "runtime/python/*", "runtime/python/guest/*", "runtime/python/cpython/*",
     "runtime/python/cpython/patches/*", "runtime/python/cpython/scripts/*", "examples/python/minimal/*", "examples/native/cpp_minimal/*",
 ]

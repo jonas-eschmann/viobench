@@ -15,7 +15,7 @@ Per step: a frame, its timestamp and the IMU samples since the previous frame; t
 
 ## Scoring
 
-Per episode (`relpose.tools.runner.metrics`):
+Per episode (`viobench.tools.runner.metrics`):
 
 - **RPE** (the headline): for all frame pairs `(i, j)` one second apart,
   `E = (T_gt,i⁻¹ T_gt,j)⁻¹ (T_est,i⁻¹ T_est,j)`; the RMSE of `|trans(E)|` in metres, and of the angle of `E`.
@@ -35,7 +35,7 @@ total step fuel and the number of attempted frames. Dataset and overall statisti
 mean is weighted by frame count and percentiles describe the full frame distribution. Frames held after a failure
 add no samples. With no attempted frames, the count and fuel statistics are zero. Wall time is reported for reference.
 
-## Limits (`relpose.tools.runner.sandbox.Limits`)
+## Limits (`viobench.tools.runner.sandbox.Limits`)
 
 | | |
 |---|---|
@@ -46,9 +46,9 @@ add no samples. With no attempted frames, the count and fuel statistics are zero
 | wall clock per step | 60 s |
 | submission size | 128 MiB (the Python runtime is 48 MiB) |
 
-Set in `relpose/tools/config.json`; `relpose check` and `evaluate` apply the same limits as the server.
+Set in `viobench/tools/config.json`; `viobench check` and `evaluate` apply the same limits as the server.
 
 ## Data
 
-Train on `relpose simulate` output, validate on the episodes from the course page. The evaluation episodes are not
-published. `relpose.tools.datasets.read_episode` loads an episode.
+Train on `viobench simulate` output, validate on the episodes from the course page. The evaluation episodes are not
+published. `viobench.tools.datasets.read_episode` loads an episode.

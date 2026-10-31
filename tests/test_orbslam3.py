@@ -1,4 +1,4 @@
-"""ORB-SLAM3 ABI and metric tracking regressions; build first or set RELPOSE_ORBSLAM3."""
+"""ORB-SLAM3 ABI and metric tracking regressions; build first or set VIOBENCH_ORBSLAM3."""
 import os
 from pathlib import Path
 import re
@@ -6,20 +6,20 @@ import re
 import numpy as np
 import pytest
 
-from relpose import Sandbox
-from relpose.solution import workspace
-from relpose.tools.abi.config import default_guest_config
-from relpose.tools.geometry import matrix_to_quaternion
-from relpose.tools.runner.metrics import IDENTITY_STATE, evaluate_trajectory
-from relpose.tools.runner.sandbox import SandboxError
+from viobench import Sandbox
+from viobench.solution import workspace
+from viobench.tools.abi.config import default_guest_config
+from viobench.tools.geometry import matrix_to_quaternion
+from viobench.tools.runner.metrics import IDENTITY_STATE, evaluate_trajectory
+from viobench.tools.runner.sandbox import SandboxError
 
 
 @pytest.fixture(scope="module")
 def orbslam3_path():
-    path = Path(os.environ.get("RELPOSE_ORBSLAM3") or
+    path = Path(os.environ.get("VIOBENCH_ORBSLAM3") or
                 workspace.PACKAGE / "examples/native/orbslam3/build/solution.wasm")
     if not path.is_file():
-        pytest.skip(f"ORB-SLAM3 not built ({path}); build examples/native/orbslam3 or set RELPOSE_ORBSLAM3")
+        pytest.skip(f"ORB-SLAM3 not built ({path}); build examples/native/orbslam3 or set VIOBENCH_ORBSLAM3")
     return path
 
 

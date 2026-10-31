@@ -9,8 +9,8 @@ pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from relpose.tools.server import app as server  # noqa: E402
-from relpose.tools.server.store import Store  # noqa: E402
+from viobench.tools.server import app as server  # noqa: E402
+from viobench.tools.server.store import Store  # noqa: E402
 
 MODULE = b"\0asm\x01\0\0\0" + bytes([1, 4, 1, 0x60, 0, 0])  # one empty function type: a module, not a Python bundle
 NAN = float("nan")

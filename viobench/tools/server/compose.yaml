@@ -1,0 +1,39 @@
+# The submission server: the REST API (app) and the evaluation worker, sharing the server-data volume. From the
+# viobench repository root, with DATASETS_DIR (host directory with the evaluation sets) and VIOBENCH_DATASETS (the worker's
+# colon-separated set directories under /datasets) in the environment or in viobench/tools/server/.env:
+#
+#   docker compose -f viobench/tools/server/compose.yaml up -d --build
+#   docker compose -f viobench/tools/server/compose.yaml exec app python -m viobench.tools.server.teams add "team a"
+#
+# The app is published on 0.0.0.0:8000, plain HTTP (Docker bypasses ufw): for public use, bind it to 127.0.0.1 and put a
+# TLS reverse proxy in front of it, with a request body limit of ~130 MB.
+name: viobench-server
+
+x-server: &server
+  build:
+    context: ../../..
+    dockerfile: viobench/tools/server/Dockerfile
+  restart: unless-stopped
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+
+services:
+  app:
+    <<: *server
+    command: uvicorn viobench.tools.server.app:app --host 0.0.0.0 --port 8000
+    ports: ["0.0.0.0:8000:8000"]
+    volumes: [server-data:/srv/server-data]
+
+  worker:
+    <<: *server
+    command: python -m viobench.tools.server.worker  # exactly one: on start it requeues what a previous one left running
+    network_mode: none  # wasmtime sandboxes the guest, not the evaluation process
+    mem_limit: ${WORKER_MEMORY:-8g}
+    environment:
+      VIOBENCH_DATASETS: ${VIOBENCH_DATASETS:?colon-separated set directories under /datasets}
+    volumes:
+      - server-data:/srv/server-data
+      - ${DATASETS_DIR:?host directory with the evaluation sets}:/datasets:ro
+
+volumes:
+  server-data:

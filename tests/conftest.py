@@ -3,22 +3,22 @@ from pathlib import Path
 
 import pytest
 
-from relpose.solution import workspace
+from viobench.solution import workspace
 
-RUNTIME = Path(os.environ.get("RELPOSE_RUNTIME") or workspace.runtime_path(workspace.PACKAGE))
+RUNTIME = Path(os.environ.get("VIOBENCH_RUNTIME") or workspace.runtime_path(workspace.PACKAGE))
 
 
 @pytest.fixture(scope="session")
 def runtime_path():
     if not RUNTIME.is_file():
-        pytest.skip(f"runtime.wasm not built ({RUNTIME}); run relpose build-runtime")
+        pytest.skip(f"runtime.wasm not built ({RUNTIME}); run viobench build-runtime")
     return RUNTIME
 
 
 @pytest.fixture(scope="session")
 def engine():
     """One wasmtime engine (with its compile cache) for the whole session."""
-    from relpose import Engine
+    from viobench import Engine
 
     return Engine()
 

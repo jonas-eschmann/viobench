@@ -4,10 +4,10 @@ import json
 import numpy as np
 import pytest
 
-from relpose.solution.runtime.python.bundler.bundle import bundle
-from relpose.tools.datasets.storage import read_episode, write_episode
-from relpose.tools.runner.metrics import evaluate_trajectory
-from relpose.tools.runner.run import evaluate
+from viobench.solution.runtime.python.bundler.bundle import bundle
+from viobench.tools.datasets.storage import read_episode, write_episode
+from viobench.tools.runner.metrics import evaluate_trajectory
+from viobench.tools.runner.run import evaluate
 from tests.test_datasets import synthetic_episode
 
 PERFECT = """
@@ -154,8 +154,8 @@ def test_evaluate_accepts_an_in_memory_dataset(engine, runtime_path, solution_di
 
 
 def test_streamed_frames_from_disk(tmp_path):
-    from relpose.tools.datasets.episode import FrameSequence
-    from relpose.tools.datasets.storage import episodes, read_episode
+    from viobench.tools.datasets.episode import FrameSequence
+    from viobench.tools.datasets.storage import episodes, read_episode
 
     episode = synthetic_episode(n_frames=6, width=320, height=240)
     write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")

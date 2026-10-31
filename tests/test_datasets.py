@@ -4,16 +4,16 @@ import zipfile
 import numpy as np
 import pytest
 
-from relpose.tools.abi.config import make_config
-from relpose.tools.datasets.episode import Episode, FrameSequence, interpolate_poses
-from relpose.tools.datasets.storage import (
+from viobench.tools.abi.config import make_config
+from viobench.tools.datasets.episode import Episode, FrameSequence, interpolate_poses
+from viobench.tools.datasets.storage import (
     episode_file,
     episodes,
     list_episodes,
     read_episode,
     write_episode,
 )
-from relpose.tools.geometry import poses_to_matrices, quaternion_to_matrix
+from viobench.tools.geometry import poses_to_matrices, quaternion_to_matrix
 
 
 def synthetic_episode(n_frames=8, rate=20.0, imu_rate=200.0, width=32, height=24, channels=1, lead_in=0.0):
@@ -169,8 +169,8 @@ def test_write_episode_back_to_its_own_archive(tmp_path, origin_ns):
 
 
 def test_write_episode_exports_spool_and_survives_cleanup(tmp_path):
-    from relpose.tools.datasets.generate.simulation import Spool, spooled_frames
-    from relpose.tools.datasets.storage import encode_png
+    from viobench.tools.datasets.generate.simulation import Spool, spooled_frames
+    from viobench.tools.datasets.storage import encode_png
 
     episode = synthetic_episode(n_frames=4, width=16, height=12, channels=3)  # the simulator spools RGB
     expected = episode.frames.copy()
@@ -196,7 +196,7 @@ def test_write_episode_exports_spool_and_survives_cleanup(tmp_path):
 
 @pytest.mark.parametrize("frames", ["lazy", "memory"])
 def test_failed_frame_write_preserves_destination(tmp_path, monkeypatch, frames):
-    from relpose.tools.datasets import storage
+    from viobench.tools.datasets import storage
 
     episode = synthetic_episode(n_frames=4, width=16, height=12)
     source = read_episode(write_episode(episode, tmp_path / "src.zip"), frames=frames)
@@ -218,7 +218,7 @@ def test_failed_frame_write_preserves_destination(tmp_path, monkeypatch, frames)
 
 
 def test_simulation_spool_lives_as_long_as_its_frames(tmp_path):
-    from relpose.tools.datasets.generate.simulation import Spool, spooled_frames
+    from viobench.tools.datasets.generate.simulation import Spool, spooled_frames
 
     spool = Spool(tmp_path / "spool")
     path = spool.path
@@ -233,9 +233,9 @@ def test_simulation_spool_lives_as_long_as_its_frames(tmp_path):
 
 
 def test_sim_config_scales_with_duration(tmp_path, monkeypatch):
-    from relpose.tools.datasets.generate.simulation import SimConfig
+    from viobench.tools.datasets.generate.simulation import SimConfig
 
-    monkeypatch.setenv("RELPOSE_CACHE", str(tmp_path))
+    monkeypatch.setenv("VIOBENCH_CACHE", str(tmp_path))
     minute = SimConfig()
     assert minute.duration_seconds == 60.0 and minute.step_count(200.0) == 12000 and minute.num_waypoints == 48
     assert SimConfig(duration_seconds=10).num_waypoints == 8 and SimConfig(duration_seconds=10, waypoints=5).num_waypoints == 5
@@ -252,9 +252,9 @@ def test_simulate_runs_scene_by_scene_and_names_episodes_by_order(tmp_path, monk
     import sys
     import types
 
-    from relpose.tools.datasets.generate import simulation
+    from viobench.tools.datasets.generate import simulation
 
-    monkeypatch.setenv("RELPOSE_CACHE", str(tmp_path))
+    monkeypatch.setenv("VIOBENCH_CACHE", str(tmp_path))
     environments = []
 
     class FakeHyperDrone:

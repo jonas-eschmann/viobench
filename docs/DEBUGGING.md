@@ -6,17 +6,17 @@ feed: no fuel and no limits, and your host's libraries. `check` and `evaluate` r
 ## Python
 
 ```bash
-relpose debug solution data/val --max-episodes 1
-relpose debug solution data/val -o out             # writes estimate.tum, twist.txt and trajectory.mp4 under out/<dataset>/<episode>/
+viobench debug solution data/val --max-episodes 1
+viobench debug solution data/val -o out             # writes estimate.tum, twist.txt and trajectory.mp4 under out/<dataset>/<episode>/
 ```
 
-`breakpoint()` works anywhere in your code; in VS Code, use the launch configuration *relpose: debug Python solution*.
+`breakpoint()` works anywhere in your code; in VS Code, use the launch configuration *viobench: debug Python solution*.
 For plots, `trace` yields one record per frame (`t`, `frame`, `imu`, `pose`, `twist`, host seconds):
 
 ```python
 import numpy as np, matplotlib.pyplot as plt
-from relpose.tools.datasets import read_episode
-from relpose.tools.runner.direct import PythonSolution, trace
+from viobench.tools.datasets import read_episode
+from viobench.tools.runner.direct import PythonSolution, trace
 
 episode = read_episode("data/val/<name>.zip")
 poses = np.array([s.pose for s in trace(PythonSolution("solution"), episode)])
@@ -26,18 +26,18 @@ plt.plot(*episode.ground_truth_relative()[:, :2].T, label="truth"); plt.legend()
 
 ## Native
 
-Configured with the host compiler, the `relpose_solution(...)` CMake call builds `build-host/debug`. It replays a
+Configured with the host compiler, the `viobench_solution(...)` CMake call builds `build-host/debug`. It replays a
 *feed* (one episode as raw arrays) through `init` and `step`:
 
 ```bash
-relpose feed data/val/<name>.zip -o build/feed                     # --resolution 640x480 to match frame_width()
+viobench feed data/val/<name>.zip -o build/feed                     # --resolution 640x480 to match frame_width()
 cmake -S solution -B build-host && cmake --build build-host
 build-host/debug build/feed estimate.tum                       # stops at the first failing step
-relpose score data/val/<name>.zip estimate.tum                     # reads twist.txt next to it
-gdb --args build-host/debug build/feed                         # VS Code: "relpose: debug native solution (gdb)"
+viobench score data/val/<name>.zip estimate.tum                     # reads twist.txt next to it
+gdb --args build-host/debug build/feed                         # VS Code: "viobench: debug native solution (gdb)"
 ```
 
-Any episode directory works, including a freshly simulated one (`relpose simulate -o build/sim --episodes 1 --no-video`).
+Any episode directory works, including a freshly simulated one (`viobench simulate -o build/sim --episodes 1 --no-video`).
 
 ## Host vs. sandbox
 
@@ -48,4 +48,4 @@ Any episode directory works, including a freshly simulated one (`relpose simulat
 | failures | end the episode | raise in your process |
 | inputs | identical | identical |
 
-When something works on the host but not in `check`, `relpose check -v` shows the guest's stderr.
+When something works on the host but not in `check`, `viobench check -v` shows the guest's stderr.

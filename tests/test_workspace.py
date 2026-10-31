@@ -1,20 +1,20 @@
-"""Workspaces (`relpose init`): a solution next to its own copy of the build recipe, which the commands find from inside."""
+"""Workspaces (`viobench init`): a solution next to its own copy of the build recipe, which the commands find from inside."""
 import shutil
 import subprocess
 
 import pytest
 
-from relpose.solution import workspace
-from relpose.solution.runtime.python.bundler import BundleError
-from relpose.solution.runtime.python.bundler.bundle import bundle
-from relpose.tools.cli import main as cli
+from viobench.solution import workspace
+from viobench.solution.runtime.python.bundler import BundleError
+from viobench.solution.runtime.python.bundler.bundle import bundle
+from viobench.tools.cli import main as cli
 
 
 def test_init_copies_the_recipe_and_the_minimal_example(tmp_path):
     root = tmp_path / "ws"
     assert cli(["init", "python", str(root)]) == 0
     assert (root / "solution" / "solution.py").read_text() == (workspace.PACKAGE / "examples/python/minimal/solution.py").read_text()
-    for name in ("toolchain/download_dependencies.sh", "runtime/python/build.sh", "runtime/python/cpython/patches/numpy.patch", "runtime/native/relpose_abi.h"):
+    for name in ("toolchain/download_dependencies.sh", "runtime/python/build.sh", "runtime/python/cpython/patches/numpy.patch", "runtime/native/viobench_abi.h"):
         assert (root / name).is_file(), name
     assert not (root / "runtime" / "python" / "bundler").exists()
     assert workspace.find(root / "solution") == root.resolve()
@@ -25,13 +25,13 @@ def test_init_copies_the_recipe_and_the_minimal_example(tmp_path):
 
 def test_outside_a_workspace_only_a_checkout_falls_back_to_its_own(tmp_path, monkeypatch):
     assert workspace.find(tmp_path) == workspace.PACKAGE
-    monkeypatch.setattr(workspace, "PACKAGE", tmp_path / "site-packages" / "relpose" / "solution")
-    with pytest.raises(workspace.WorkspaceError, match="relpose init"):
+    monkeypatch.setattr(workspace, "PACKAGE", tmp_path / "site-packages" / "viobench" / "solution")
+    with pytest.raises(workspace.WorkspaceError, match="viobench init"):
         workspace.find(tmp_path)
 
 
 def test_bundle_uses_the_runtime_of_its_workspace(runtime_path, tmp_path, monkeypatch):
-    monkeypatch.delenv("RELPOSE_RUNTIME", raising=False)
+    monkeypatch.delenv("VIOBENCH_RUNTIME", raising=False)
     root = tmp_path / "ws"
     workspace.init("python", root)
     target = workspace.runtime_path(root)

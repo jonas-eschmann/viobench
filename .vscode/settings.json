@@ -1,4 +1,4 @@
 {
-    "cmake.sourceDirectory": "${workspaceFolder}/relpose/solution/examples/native/cpp_minimal",
-    "cmake.buildDirectory": "${workspaceFolder}/relpose/solution/examples/native/cpp_minimal/build-host"
+    "cmake.sourceDirectory": "${workspaceFolder}/viobench/solution/examples/native/cpp_minimal",
+    "cmake.buildDirectory": "${workspaceFolder}/viobench/solution/examples/native/cpp_minimal/build-host"
 }

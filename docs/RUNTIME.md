@@ -1,7 +1,7 @@
 # Python runtime (`runtime.wasm`)
 
-CPython with numpy and OpenCV as a `wasm32-wasip1` reactor implementing `docs/ABI.md`. `relpose bundle <dir> -o x.wasm`
-embeds your directory into it as a zip; `relpose unbundle` extracts it again.
+CPython with numpy and OpenCV as a `wasm32-wasip1` reactor implementing `docs/ABI.md`. `viobench bundle <dir> -o x.wasm`
+embeds your directory into it as a zip; `viobench unbundle` extracts it again.
 
 ## Contents
 
@@ -40,6 +40,6 @@ image (p95 up to 500 M).
 
 ## Building
 
-The first `relpose bundle` in a workspace builds its runtime (10–15 min) into `build/runtime/dist/runtime.wasm`, next to
-`python.wasm` (a REPL); `relpose build-runtime` rebuilds it after you change `runtime/`. Only the ABI is fixed: change the
+The first `viobench bundle` in a workspace builds its runtime (10–15 min) into `build/runtime/dist/runtime.wasm`, next to
+`python.wasm` (a REPL); `viobench build-runtime` rebuilds it after you change `runtime/`. Only the ABI is fixed: change the
 workspace's runtime freely (`runtime/python/README.md`).

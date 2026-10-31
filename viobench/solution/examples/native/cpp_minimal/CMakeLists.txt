@@ -1,0 +1,12 @@
+cmake_minimum_required(VERSION 3.20)
+project(solution C CXX)
+# wasm (the submission): viobench bundle <this directory> -o solution.wasm
+# host debug build:      cmake -S . -B build-host && cmake --build build-host && build-host/debug <feed dir>   (docs/DEBUGGING.md)
+set(CMAKE_CXX_STANDARD 17)
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+set(VIOBENCH_NATIVE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../runtime/native" CACHE PATH "directory with viobench_abi.h and viobench_reactor.cmake")
+include(${VIOBENCH_NATIVE_DIR}/viobench_reactor.cmake)
+viobench_solution(solution solution.cpp)
+target_compile_options(solution PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions>)

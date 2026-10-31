@@ -1,8 +1,8 @@
 import numpy as np
 import pytest
 
-from relpose.tools.geometry import invert, matrices_to_poses, matrix_to_quaternion, poses_to_matrices, quaternion_to_matrix, rotation_vectors
-from relpose.tools.runner.metrics import evaluate_trajectory, hold_last_state, umeyama_sim3
+from viobench.tools.geometry import invert, matrices_to_poses, matrix_to_quaternion, poses_to_matrices, quaternion_to_matrix, rotation_vectors
+from viobench.tools.runner.metrics import evaluate_trajectory, hold_last_state, umeyama_sim3
 
 
 def random_poses(rng, n):

@@ -3,13 +3,13 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "relpose: debug Python solution",
+            "name": "viobench: debug Python solution",
             "type": "debugpy",
             "request": "launch",
-            "module": "relpose",
+            "module": "viobench",
             "args": [
                 "debug",
-                "${workspaceFolder}/relpose/solution/examples/python/dead_reckoning",
+                "${workspaceFolder}/viobench/solution/examples/python/dead_reckoning",
                 "${workspaceFolder}/data/val",
                 "--max-episodes", "1"
             ],
@@ -18,14 +18,14 @@
             "justMyCode": false
         },
         {
-            "name": "relpose: debug native solution (gdb)",
+            "name": "viobench: debug native solution (gdb)",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/relpose/solution/examples/native/cpp_minimal/build-host/debug",
+            "program": "${workspaceFolder}/viobench/solution/examples/native/cpp_minimal/build-host/debug",
             "args": ["${workspaceFolder}/build/feed", "${workspaceFolder}/build/feed/estimate.tum"],
             "cwd": "${workspaceFolder}",
             "MIMode": "gdb",
-            "preLaunchTask": "relpose: build native debug"
+            "preLaunchTask": "viobench: build native debug"
         }
     ]
 }

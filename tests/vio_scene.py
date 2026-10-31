@@ -1,7 +1,7 @@
 """Analytic trajectory and textured-room renderer shared by VIO regression tests."""
 import numpy as np
 
-from relpose.tools.geometry import matrix_to_quaternion
+from viobench.tools.geometry import matrix_to_quaternion
 
 
 def room_motion(t):

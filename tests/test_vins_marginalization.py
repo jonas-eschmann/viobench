@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from relpose.solution import workspace
+from viobench.solution import workspace
 
 
 def test_square_root_marginalization(tmp_path):
@@ -14,9 +14,9 @@ def test_square_root_marginalization(tmp_path):
     if compiler is None:
         pytest.skip("needs a host C++ compiler")
     example = workspace.PACKAGE / "examples/native/vins_mono"
-    eigen = Path(os.environ.get("RELPOSE_EIGEN") or example / "build/src/eigen")
+    eigen = Path(os.environ.get("VIOBENCH_EIGEN") or example / "build/src/eigen")
     if not (eigen / "Eigen/Dense").is_file():
-        pytest.skip("build VINS-Mono first or set RELPOSE_EIGEN to Eigen headers")
+        pytest.skip("build VINS-Mono first or set VIOBENCH_EIGEN to Eigen headers")
     source = Path(__file__).parent / "native/vins_marginalization.cpp"
     executable = tmp_path / "vins_marginalization"
     build = subprocess.run([compiler, "-std=c++17", "-O2", "-I", str(eigen), "-I", str(example / "compat"),

@@ -1,13 +1,13 @@
-"""End-to-end tests of runtime.wasm driven through relpose.Solution: protocol, errors, traps, bundling."""
+"""End-to-end tests of runtime.wasm driven through viobench.Solution: protocol, errors, traps, bundling."""
 import io
 
 import numpy as np
 import pytest
 from wasmtime import TrapCode
 
-from relpose import Limits, Sandbox, SandboxError, SandboxTrap, abi
-from relpose.solution.runtime.python.bundler.bundle import bundle
-from relpose.tools.abi.config import default_guest_config
+from viobench import Limits, Sandbox, SandboxError, SandboxTrap, abi
+from viobench.solution.runtime.python.bundler.bundle import bundle
+from viobench.tools.abi.config import default_guest_config
 
 CONFIG = default_guest_config()  # 320x240, the default declaration
 GRAY = (np.arange(240 * 320, dtype=np.uint32).reshape(240, 320) % 251).astype(np.uint8)
@@ -272,7 +272,7 @@ class Solution:
 
 
 def test_bare_runtime_without_code_is_refused(engine, runtime_path, tmp_path):
-    from relpose.tools.abi.module import runtime_descriptor
+    from viobench.tools.abi.module import runtime_descriptor
 
     assert runtime_descriptor(runtime_path.read_bytes()).length == 0
     with pytest.raises(SandboxError, match="bundle"):
@@ -304,9 +304,9 @@ class Solution:
 
 
 def test_unbundle_roundtrip(runtime_path, solution_dir, tmp_path):
-    from relpose.solution.runtime.python.bundler.bundle import unbundle
-    from relpose.solution.runtime.python.bundler.embed import strip_bundle
-    from relpose.tools.abi.module import embedded_bundle, runtime_descriptor
+    from viobench.solution.runtime.python.bundler.bundle import unbundle
+    from viobench.solution.runtime.python.bundler.embed import strip_bundle
+    from viobench.tools.abi.module import embedded_bundle, runtime_descriptor
 
     directory = solution_dir(IDENTITY, {"data/w.npy": b"\x93NUMPY" + bytes(100), "pkg/__init__.py": "X = 1\n"})
     wasm = tmp_path / "s.wasm"
@@ -327,17 +327,17 @@ def test_abi_constants_match_the_guest_shim_and_the_native_header():
     from pathlib import Path
 
     repo = Path(__file__).resolve().parents[1]
-    shim = (repo / "relpose" / "solution" / "runtime" / "python" / "guest" / "relpose_guest.py").read_text()
-    header = (repo / "relpose" / "solution" / "runtime" / "native" / "relpose_abi.h").read_text()
+    shim = (repo / "viobench" / "solution" / "runtime" / "python" / "guest" / "viobench_guest.py").read_text()
+    header = (repo / "viobench" / "solution" / "runtime" / "native" / "viobench_abi.h").read_text()
     for name in ("STATUS_OK", "STATUS_ERROR"):
         assert f"{name} = {getattr(abi, name)}" in shim
-        assert f"#define RELPOSE_{name} {getattr(abi, name)}" in header
-    assert f"#define RELPOSE_ABI_VERSION {abi.ABI_VERSION}" in header
+        assert f"#define VIOBENCH_{name} {getattr(abi, name)}" in header
+    assert f"#define VIOBENCH_ABI_VERSION {abi.ABI_VERSION}" in header
     for name in ("POSE_VALUES", "TWIST_VALUES", "STATE_VALUES"):
-        assert f"#define RELPOSE_{name} {getattr(abi, name)}" in header
+        assert f"#define VIOBENCH_{name} {getattr(abi, name)}" in header
     assert f"STATE_VALUES = {abi.STATE_VALUES}" in shim
     assert f'FRAME_WIDTH = "{abi.FRAME_WIDTH}"' in shim and f"DEFAULT_FRAME_WIDTH = {abi.DEFAULT_RESOLUTION[0]}" in shim
-    assert f"RELPOSE_EXPORT({abi.FRAME_WIDTH})" in header
+    assert f"VIOBENCH_EXPORT({abi.FRAME_WIDTH})" in header
 
 
 def test_frame_width_opt_in(engine, runtime_path, solution_dir, tmp_path):

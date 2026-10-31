@@ -1,21 +1,21 @@
-"""OpenVINS startup and tracking regressions; build first or set RELPOSE_OPENVINS to its .wasm."""
+"""OpenVINS startup and tracking regressions; build first or set VIOBENCH_OPENVINS to its .wasm."""
 import os
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from relpose import Sandbox
-from relpose.solution import workspace
-from relpose.tools.abi.config import default_guest_config
+from viobench import Sandbox
+from viobench.solution import workspace
+from viobench.tools.abi.config import default_guest_config
 
 
 @pytest.fixture(scope="module")
 def openvins_path():
-    path = Path(os.environ.get("RELPOSE_OPENVINS") or
+    path = Path(os.environ.get("VIOBENCH_OPENVINS") or
                 workspace.PACKAGE / "examples/native/openvins/build/solution.wasm")
     if not path.is_file():
-        pytest.skip(f"OpenVINS not built ({path}); build examples/native/openvins or set RELPOSE_OPENVINS")
+        pytest.skip(f"OpenVINS not built ({path}); build examples/native/openvins or set VIOBENCH_OPENVINS")
     return path
 
 
@@ -34,7 +34,7 @@ def stationary_inputs(config, textured, seconds):
 
 def dynamic_inputs(config, seconds):
     """Project a fixed 3D corner cloud while translating and turning; borders create short tracks."""
-    from relpose.tools.abi.config import R_BODY_CAMERA_FORWARD
+    from viobench.tools.abi.config import R_BODY_CAMERA_FORWARD
 
     rng = np.random.default_rng(42)
     landmarks = np.column_stack([rng.uniform(3, 10, 900), rng.uniform(-5, 5, 900), rng.uniform(-4, 4, 900)])
@@ -141,8 +141,8 @@ def low_parallax_inputs(config, seconds=15, imu_phase=0.0):
     """
     import cv2
 
-    from relpose.tools.abi.config import R_BODY_CAMERA_FORWARD
-    from relpose.tools.geometry import matrix_to_quaternion
+    from viobench.tools.abi.config import R_BODY_CAMERA_FORWARD
+    from viobench.tools.geometry import matrix_to_quaternion
 
     rng = np.random.default_rng(19)
     lower, upper = np.array([-4, -5, -3]), np.array([8, 5, 3])
@@ -195,7 +195,7 @@ def low_parallax_inputs(config, seconds=15, imu_phase=0.0):
 @pytest.mark.parametrize("blank_images,imu_phase", [(False, 0.0), (True, 0.0), (False, 0.0025)],
                          ids=["normal", "image_dropout", "camera_between_imu_samples"])
 def test_tracking_after_turning_in_place(openvins_path, engine, tmp_path, blank_images, imu_phase):
-    from relpose.tools.runner.metrics import evaluate_trajectory
+    from viobench.tools.runner.metrics import evaluate_trajectory
 
     sandbox = Sandbox(openvins_path, engine, log_dir=tmp_path)
     width, height = sandbox.resolution

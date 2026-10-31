@@ -1,0 +1,128 @@
+"""FastAPI submission server.  Run:  uvicorn viobench.tools.server.app:app --host 0.0.0.0 --port 8000
+
+    POST /submissions        multipart: file (the .wasm), label (optional)  -> 201 and the new submission
+    GET  /submissions        the team's submissions, newest first, each with its overall summary once evaluated
+    GET  /submissions/{id}   one of them, with its results once evaluated
+    GET  /config             the rules: daily quota, upload size, evaluation timeout, sandbox limits (`server.config`)
+    GET  /, /app.js, /style.css   the web UI (ui/): a page on top of the four routes above
+
+Every API request carries "Authorization: Bearer <token>" (tokens: `python -m viobench.tools.server.teams`) and sees
+only its own team's submissions; the UI's files are public. VIOBENCH_SERVER_DIR: uploads, reports and sqlite (default ./server-data); the rules are
+the checked-in viobench/tools/config.json.
+The evaluation itself is done by `viobench.tools.server.worker`, which polls the queue.
+"""
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+
+from fastapi import FastAPI, File, Form, Header, HTTPException, Response, UploadFile
+
+from ..abi import AbiError
+from ..abi.module import runtime_descriptor
+from ..abi.wasm_binary import iter_sections
+from .store import Refused, Store
+
+app = FastAPI(title="viobench submissions", docs_url=None, redoc_url=None, openapi_url=None)  # the routes below, nothing else
+_store = None
+UI_FILES = {name: (Path(__file__).with_name("ui") / name).read_bytes() for name in ("index.html", "app.js", "style.css")}
+UI_TYPES = {".html": "text/html", ".js": "text/javascript", ".css": "text/css"}
+UI_HEADERS = {  # the page runs only its own script and talks only to this server
+    "Content-Security-Policy": "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src data:; "
+                               "form-action 'none'; frame-ancestors 'none'; base-uri 'none'",
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "no-referrer",
+    "Cache-Control": "no-cache",
+}
+
+
+def get_store():
+    global _store
+    if _store is None:
+        _store = Store()
+    return _store
+
+
+def authenticate(authorization):
+    """The token of an "Authorization: Bearer <token>" header, i.e. the team; 401 unless it is one."""
+    scheme, _, token = (authorization or "").partition(" ")
+    token = token.strip()
+    if scheme.lower() != "bearer" or not get_store().is_team(token):
+        raise HTTPException(status_code=401, detail="unknown token", headers={"WWW-Authenticate": "Bearer"})
+    return token
+
+
+def public(row):
+    """A submission as the API shows it: times in ISO 8601 (UTC), results parsed."""
+    for key in ("created", "started", "finished"):
+        if row[key] is not None:
+            row[key] = datetime.fromtimestamp(row[key], timezone.utc).isoformat(timespec="seconds")
+    if "results" in row:  # NaN and infinities (metrics of failed episodes) become null: JSON has neither
+        row["results"] = json.loads(row["results"], parse_constant=lambda constant: None) if row["results"] else None
+    return row
+
+
+@app.post("/submissions", status_code=201)
+async def submit(file: UploadFile = File(...), label: str = Form(""), authorization: str | None = Header(default=None)):
+    token = authenticate(authorization)
+    config = get_store().config
+    data = await file.read()
+    if len(data) > config.max_upload_mib << 20:
+        raise HTTPException(status_code=413, detail=f"file larger than {config.max_upload_mib} MiB")
+    try:
+        sections = list(iter_sections(data))
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=f"not a WebAssembly module: {error}") from None
+    if not sections:
+        raise HTTPException(status_code=400, detail="empty module")
+    try:
+        descriptor = runtime_descriptor(data)
+    except AbiError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    if descriptor is not None and descriptor.length == 0:
+        raise HTTPException(status_code=400, detail="this is the bare Python runtime without solution code: run `viobench bundle`")
+    try:
+        submission_id = get_store().add(token, label[:80], file.filename or "solution.wasm", data)
+    except Refused as error:  # one still queued or running, or today's quota used up
+        raise HTTPException(status_code=429, detail=str(error)) from None
+    return public(get_store().get(token, submission_id))
+
+
+@app.get("/submissions")
+def submissions(authorization: str | None = Header(default=None)):
+    rows = [public(row) for row in get_store().submissions(authenticate(authorization))]
+    for row in rows:  # the headline numbers only; GET /submissions/{id} has the rest
+        row["overall"] = ((row.pop("results") or {}).get("summary") or {}).get("overall")
+    return rows
+
+
+@app.get("/submissions/{submission_id}")
+def submission(submission_id: str, authorization: str | None = Header(default=None)):
+    row = get_store().get(authenticate(authorization), submission_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail="no such submission")
+    return public(row)
+
+
+@app.get("/config")
+def configuration(authorization: str | None = Header(default=None)):
+    authenticate(authorization)
+    return get_store().config.as_dict()
+
+
+def ui_file(name):
+    return Response(UI_FILES[name], media_type=UI_TYPES[Path(name).suffix], headers=UI_HEADERS)
+
+
+@app.get("/")
+def page():
+    return ui_file("index.html")
+
+
+@app.get("/app.js")
+def script():
+    return ui_file("app.js")
+
+
+@app.get("/style.css")
+def style():
+    return ui_file("style.css")

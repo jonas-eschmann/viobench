@@ -4,9 +4,9 @@ import io
 import numpy as np
 import pytest
 
-from relpose import Limits, Sandbox
-from relpose.solution.runtime.python.bundler.bundle import bundle
-from relpose.tools.abi.config import default_guest_config
+from viobench import Limits, Sandbox
+from viobench.solution.runtime.python.bundler.bundle import bundle
+from viobench.tools.abi.config import default_guest_config
 
 torch = pytest.importorskip("torch")
 

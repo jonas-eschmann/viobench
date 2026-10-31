@@ -1,0 +1,938 @@
+--- a/vins_estimator/src/estimator.cpp
++++ b/vins_estimator/src/estimator.cpp
+@@ -1,1 +1,76 @@
+ #include "estimator.h"
++
++// The simulator starts with uniformly distributed sensor biases. Apply this
++// physical prior once at initialization, then retain it through marginalization.
++// Without it, a low-parallax first window can explain a gravity error as a large
++// accelerometer bias and immediately fail the estimator's consistency check.
++class InitialBiasPrior : public ceres::SizedCostFunction<6, 9>
++{
++  public:
++    bool Evaluate(double const *const *parameters, double *residuals, double **jacobians) const override
++    {
++        const double inverse_sigma_a = std::sqrt(3.0) / 0.2;
++        const double inverse_sigma_g = std::sqrt(3.0) / 0.02;
++        for (int i = 0; i < 3; ++i)
++        {
++            residuals[i] = inverse_sigma_a * parameters[0][3 + i];
++            residuals[3 + i] = inverse_sigma_g * parameters[0][6 + i];
++        }
++        if (jacobians && jacobians[0])
++        {
++            Eigen::Map<Eigen::Matrix<double, 6, 9, Eigen::RowMajor>> J(jacobians[0]);
++            J.setZero();
++            J.block<3, 3>(0, 3) = inverse_sigma_a * Eigen::Matrix3d::Identity();
++            J.block<3, 3>(3, 6) = inverse_sigma_g * Eigen::Matrix3d::Identity();
++        }
++        return true;
++    }
++};
++
++// A stationary window supplies zero position/velocity and averaged IMU
++// measurements. The accelerometer residual retains its tilt/bias correlation:
++// horizontal bias uncertainty implies tilt uncertainty, not two independent priors.
++// This factor is consumed by the first marginalization, never re-applied later.
++class StaticInitializationPrior : public ceres::SizedCostFunction<16, 7, 9>
++{
++    Eigen::Quaterniond orientation;
++    Eigen::Matrix3d rotation;
++    Eigen::Vector3d gyro_bias, acceleration;
++    double gyro_sigma;
++  public:
++    StaticInitializationPrior(const Matrix3d& R, const Vector3d& bg, const Vector3d& a, double sigma_bg)
++        : orientation(R), rotation(R), gyro_bias(bg), acceleration(a), gyro_sigma(sigma_bg) {}
++    bool Evaluate(double const *const *parameters, double *residuals, double **jacobians) const override
++    {
++        const Eigen::Map<const Eigen::Vector3d> p(parameters[0]);
++        Eigen::Quaterniond q(parameters[0][6], parameters[0][3], parameters[0][4], parameters[0][5]);
++        Eigen::Quaterniond dq = orientation.conjugate() * q;
++        if (dq.w() < 0) dq.coeffs() *= -1;
++        const Eigen::Vector3d gravity_body = q.conjugate() * G;
++        Eigen::Map<Eigen::Matrix<double, 16, 1>> r(residuals);
++        r.segment<3>(0) = p / 1e-4;
++        r[3] = (rotation * (2.0 * dq.vec())).z() / 1e-4;
++        r.segment<3>(4) = Eigen::Map<const Vector3d>(parameters[1]) / 0.01;
++        r.segment<3>(7) = (gravity_body + Eigen::Map<const Vector3d>(parameters[1] + 3) - acceleration) / 0.04;
++        r.segment<3>(10) = Eigen::Map<const Vector3d>(parameters[1] + 3) * (std::sqrt(3.0) / 0.2);
++        r.segment<3>(13) = (Eigen::Map<const Vector3d>(parameters[1] + 6) - gyro_bias) / gyro_sigma;
++        if (jacobians && jacobians[0])
++        {
++            Eigen::Map<Eigen::Matrix<double, 16, 7, Eigen::RowMajor>> J(jacobians[0]);
++            J.setZero();
++            J.block<3, 3>(0, 0) = Eigen::Matrix3d::Identity() / 1e-4;
++            J.block<1, 3>(3, 3) = rotation.row(2) * (dq.w() * Eigen::Matrix3d::Identity() + Utility::skewSymmetric(dq.vec())) / 1e-4;
++            J.block<3, 3>(7, 3) = Utility::skewSymmetric(gravity_body) / 0.04;
++        }
++        if (jacobians && jacobians[1])
++        {
++            Eigen::Map<Eigen::Matrix<double, 16, 9, Eigen::RowMajor>> J(jacobians[1]);
++            J.setZero();
++            J.block<3, 3>(4, 0) = Eigen::Matrix3d::Identity() / 0.01;
++            J.block<3, 3>(7, 3) = Eigen::Matrix3d::Identity() / 0.04;
++            J.block<3, 3>(10, 3) = Eigen::Matrix3d::Identity() * (std::sqrt(3.0) / 0.2);
++            J.block<3, 3>(13, 6) = Eigen::Matrix3d::Identity() / gyro_sigma;
++        }
++        return true;
++    }
++};
+@@ -17,3 +92,4 @@
+     ProjectionFactor::sqrt_info = FOCAL_LENGTH / 1.5 * Matrix2d::Identity();
+     ProjectionTdFactor::sqrt_info = FOCAL_LENGTH / 1.5 * Matrix2d::Identity();
+     td = TD;
++    g = G;
+@@ -53,3 +129,4 @@
+     }
+
+     solver_flag = INITIAL;
++    static_initialized = false;
+@@ -162,4 +239,4 @@
+             bool result = false;
+             if( ESTIMATE_EXTRINSIC != 2 && (header.stamp.toSec() - initial_timestamp) > 0.1)
+             {
+-               result = initialStructure();
++               result = tryStaticInitialize() || tryRecentStaticInitialize() || initialStructure();
+@@ -215,10 +292,194 @@
+         last_P0 = Ps[0];
+     }
+ }
++bool Estimator::tryStaticInitialize()
++{
++    const double duration = Headers[WINDOW_SIZE].stamp.toSec() - Headers[0].stamp.toSec();
++    if (duration < 0.8 || duration > 1.5) return false;
++    Vector3d mean_a = Vector3d::Zero(), mean_w = Vector3d::Zero();
++    double total_dt = 0;
++    size_t samples = 0;
++    for (int i = 1; i <= WINDOW_SIZE; ++i)
++        for (size_t k = 0; k < dt_buf[i].size(); ++k)
++        {
++            const double dt = dt_buf[i][k];
++            mean_a += dt * linear_acceleration_buf[i][k];
++            mean_w += dt * angular_velocity_buf[i][k];
++            total_dt += dt;
++            ++samples;
++        }
++    if (samples < 100 || total_dt < 0.8) return false;
++    mean_a /= total_dt;
++    mean_w /= total_dt;
++    if (std::abs(mean_a.norm() - G.norm()) > 0.4 || mean_w.norm() > 0.05) return false;
++    double variance_a = 0, variance_w = 0;
++    for (int i = 1; i <= WINDOW_SIZE; ++i)
++        for (size_t k = 0; k < dt_buf[i].size(); ++k)
++        {
++            variance_a += dt_buf[i][k] * (linear_acceleration_buf[i][k] - mean_a).squaredNorm();
++            variance_w += dt_buf[i][k] * (angular_velocity_buf[i][k] - mean_w).squaredNorm();
++        }
++    if (variance_a / total_dt > 0.7 * 0.7 || variance_w / total_dt > 0.2 * 0.2) return false;
++
++    std::vector<double> disparities;
++    for (const auto& feature : f_manager.feature)
++    {
++        if (feature.start_frame > 1 || feature.start_frame + feature.feature_per_frame.size() < WINDOW_SIZE + 1) continue;
++        const Vector3d& before = feature.feature_per_frame.front().point;
++        const Vector3d& after = feature.feature_per_frame.back().point;
++        disparities.push_back((1.5 * ProjectionFactor::sqrt_info * (before.head<2>() - after.head<2>())).norm());
++    }
++    if (disparities.size() < 30) return false;
++    std::sort(disparities.begin(), disparities.end());
++    if (disparities[disparities.size() / 2] > 1.5 || disparities[9 * disparities.size() / 10] > 2.5) return false;
++
++    initializeStaticWindow(mean_a, mean_w, samples, disparities.size());
++    return true;
++}
++
++void Estimator::initializeStaticWindow(const Vector3d& mean_a, const Vector3d& mean_w,
++                                      size_t samples, size_t tracks)
++{
++    static_prior_rotation = Utility::g2R(mean_a);
++    static_prior_gyro = mean_w;
++    static_prior_acceleration = mean_a;
++    static_prior_gyro_sigma = std::max(0.003, GYR_N / std::sqrt(static_cast<double>(samples)));
++    for (int i = 0; i <= WINDOW_SIZE; ++i)
++    {
++        Bas[i].setZero();
++        Bgs[i] = mean_w;
++        if (pre_integrations[i]) pre_integrations[i]->repropagate(Bas[i], Bgs[i]);
++        if (i == 0) Rs[i] = static_prior_rotation;
++        else Rs[i] = Rs[i - 1] * pre_integrations[i]->delta_q.toRotationMatrix();
++        Ps[i].setZero();
++        Vs[i].setZero();
++    }
++    g = G;
++    static_initialized = true;
++    marginalization_flag = MARGIN_OLD;
++    ROS_WARN("stationary initialization at %.3f (%zu tracks, %zu IMU samples)",
++             Headers[WINDOW_SIZE].stamp.toSec(), tracks, samples);
++}
++
++// Parallax-based INITIAL marginalization deliberately keeps old keyframes. They
++// can contain motion long after the sensor has come to rest. Certify a recent
++// interval independently, then rebuild the lag window from those actual images
++// and IMU samples; never impose zero velocity on the earlier moving interval.
++bool Estimator::tryRecentStaticInitialize()
++{
++    const double now = Headers[WINDOW_SIZE].stamp.toSec();
++    std::vector<map<double, ImageFrame>::iterator> recent;
++    for (auto it = all_image_frame.lower_bound(now - 0.9); it != all_image_frame.end(); ++it)
++        recent.push_back(it);
++    if (recent.size() < WINDOW_SIZE + 1 || now - recent.front()->first < 0.8) return false;
++
++    Vector3d mean_a = Vector3d::Zero(), mean_w = Vector3d::Zero();
++    double total_dt = 0;
++    size_t samples = 0;
++    for (size_t i = 1; i < recent.size(); ++i)
++    {
++        const auto* integration = recent[i]->second.pre_integration;
++        if (!integration || std::abs(integration->sum_dt - (recent[i]->first - recent[i - 1]->first)) > 1e-6)
++            return false;
++        for (size_t k = 0; k < integration->dt_buf.size(); ++k)
++        {
++            const double dt = integration->dt_buf[k];
++            mean_a += dt * integration->acc_buf[k];
++            mean_w += dt * integration->gyr_buf[k];
++            total_dt += dt;
++            ++samples;
++        }
++    }
++    if (samples < 100 || total_dt < 0.8) return false;
++    mean_a /= total_dt;
++    mean_w /= total_dt;
++    if (std::abs(mean_a.norm() - G.norm()) > 0.4 || mean_w.norm() > 0.05) return false;
++    double variance_a = 0, variance_w = 0;
++    for (size_t i = 1; i < recent.size(); ++i)
++    {
++        const auto* integration = recent[i]->second.pre_integration;
++        for (size_t k = 0; k < integration->dt_buf.size(); ++k)
++        {
++            variance_a += integration->dt_buf[k] * (integration->acc_buf[k] - mean_a).squaredNorm();
++            variance_w += integration->dt_buf[k] * (integration->gyr_buf[k] - mean_w).squaredNorm();
++        }
++    }
++    if (variance_a / total_dt > 0.7 * 0.7 || variance_w / total_dt > 0.2 * 0.2) return false;
++
++    // Check maximum excursion throughout the interval, not just equal endpoints:
++    // a camera that rotates away and returns has not remained stationary.
++    std::vector<double> disparities;
++    for (const auto& observation : recent.front()->second.points)
++    {
++        if (observation.second.empty()) continue;
++        const Vector2d before = observation.second.front().second.head<2>();
++        double maximum = 0;
++        bool tracked = true;
++        for (size_t i = 1; i < recent.size(); ++i)
++        {
++            const auto found = recent[i]->second.points.find(observation.first);
++            if (found == recent[i]->second.points.end() || found->second.empty())
++            {
++                tracked = false;
++                break;
++            }
++            const Vector2d after = found->second.front().second.head<2>();
++            maximum = std::max(maximum, (1.5 * ProjectionFactor::sqrt_info * (before - after)).norm());
++        }
++        if (tracked) disparities.push_back(maximum);
++    }
++    if (disparities.size() < 30) return false;
++    std::sort(disparities.begin(), disparities.end());
++    if (disparities[disparities.size() / 2] > 1.5 || disparities[9 * disparities.size() / 10] > 2.5) return false;
++
++    // Replay eleven evenly spaced retained images. The integration between each
++    // selected pair contains every original IMU sample, including skipped images.
++    f_manager.clearState();
++    size_t previous = 0;
++    for (int i = 0; i <= WINDOW_SIZE; ++i)
++    {
++        const size_t index = i * (recent.size() - 1) / WINDOW_SIZE;
++        Headers[i].stamp = ros::Time(recent[index]->first);
++        f_manager.addFeatureCheckParallax(i, recent[index]->second.points, td);
++        delete pre_integrations[i];
++        const auto* first_interval = recent[previous + 1]->second.pre_integration;
++        pre_integrations[i] = new IntegrationBase{first_interval->linearized_acc,
++                                                  first_interval->linearized_gyr,
++                                                  Vector3d::Zero(), mean_w};
++        dt_buf[i].clear();
++        linear_acceleration_buf[i].clear();
++        angular_velocity_buf[i].clear();
++        if (i > 0)
++        {
++            for (size_t frame = previous + 1; frame <= index; ++frame)
++            {
++                const auto* integration = recent[frame]->second.pre_integration;
++                for (size_t k = 0; k < integration->dt_buf.size(); ++k)
++                {
++                    const double dt = integration->dt_buf[k];
++                    const Vector3d& a = integration->acc_buf[k];
++                    const Vector3d& w = integration->gyr_buf[k];
++                    pre_integrations[i]->push_back(dt, a, w);
++                    dt_buf[i].push_back(dt);
++                    linear_acceleration_buf[i].push_back(a);
++                    angular_velocity_buf[i].push_back(w);
++                }
++            }
++        }
++        previous = index;
++    }
++    ROS_INFO("rebuilt stationary initialization window %.3f to %.3f", recent.front()->first, now);
++    // The detector has already certified this exact interval. Do not run another
++    // selection-dependent gate after mutating the window: newly included tracks
++    // could otherwise reject initialization with old poses at new timestamps.
++    initializeStaticWindow(mean_a, mean_w, samples, disparities.size());
++    return true;
++}
++
+ bool Estimator::initialStructure()
+ {
+     TicToc t_sfm;
+     //check imu observibility
+     {
+         map<double, ImageFrame>::iterator frame_it;
+-        Vector3d sum_g;
++        Vector3d sum_g = Vector3d::Zero();
+@@ -627,9 +888,9 @@
+     }
+     if (Bas[WINDOW_SIZE].norm() > 2.5)
+     {
+-        ROS_INFO(" big IMU acc bias estimation %f", Bas[WINDOW_SIZE].norm());
++        ROS_WARN(" big IMU acc bias estimation %f", Bas[WINDOW_SIZE].norm());
+         return true;
+     }
+     if (Bgs[WINDOW_SIZE].norm() > 1.0)
+     {
+-        ROS_INFO(" big IMU gyr bias estimation %f", Bgs[WINDOW_SIZE].norm());
++        ROS_WARN(" big IMU gyr bias estimation %f", Bgs[WINDOW_SIZE].norm());
+@@ -645,9 +906,9 @@
+     Vector3d tmp_P = Ps[WINDOW_SIZE];
+     if ((tmp_P - last_P).norm() > 5)
+     {
+-        ROS_INFO(" big translation");
++        ROS_WARN(" big translation");
+         return true;
+     }
+     if (abs(tmp_P.z() - last_P.z()) > 1)
+     {
+-        ROS_INFO(" big z translation");
++        ROS_WARN(" big z translation");
+@@ -706,3 +967,11 @@
+         MarginalizationFactor *marginalization_factor = new MarginalizationFactor(last_marginalization_info);
+         problem.AddResidualBlock(marginalization_factor, NULL,
+                                  last_marginalization_parameter_blocks);
++    }
++    else
++    {
++        if (static_initialized)
++            problem.AddResidualBlock(new StaticInitializationPrior(static_prior_rotation, static_prior_gyro, static_prior_acceleration, static_prior_gyro_sigma),
++                                     nullptr, para_Pose[0], para_SpeedBias[0]);
++        else
++            problem.AddResidualBlock(new InitialBiasPrior(), nullptr, para_SpeedBias[0]);
+@@ -809,10 +1078,11 @@
+     //options.use_explicit_schur_complement = true;
+     //options.minimizer_progress_to_stdout = true;
+     //options.use_nonmonotonic_steps = true;
+-    if (marginalization_flag == MARGIN_OLD)
+-        options.max_solver_time_in_seconds = SOLVER_TIME * 4.0 / 5.0;
+-    else
+-        options.max_solver_time_in_seconds = SOLVER_TIME;
+-    TicToc t_solver;
++    // A host wall clock must not change the metered work performed by a reactor.
++    options.max_solver_time_in_seconds = 1e9;
++    options.logging_type = ceres::SILENT;
++
+     ceres::Solver::Summary summary;
+     ceres::Solve(options, &problem, &summary);
++    if (!summary.IsSolutionUsable())
++        throw std::runtime_error("VINS sliding-window optimization failed");
+@@ -844,3 +1114,13 @@
+                                                                            drop_set);
+
+             marginalization_info->addResidualBlockInfo(residual_block_info);
++        }
++        else
++        {
++            if (static_initialized)
++                marginalization_info->addResidualBlockInfo(new ResidualBlockInfo(
++                    new StaticInitializationPrior(static_prior_rotation, static_prior_gyro, static_prior_acceleration, static_prior_gyro_sigma), nullptr,
++                    vector<double *>{para_Pose[0], para_SpeedBias[0]}, vector<int>{0, 1}));
++            else
++                marginalization_info->addResidualBlockInfo(new ResidualBlockInfo(
++                    new InitialBiasPrior(), nullptr, vector<double *>{para_SpeedBias[0]}, vector<int>{0}));
+--- a/vins_estimator/src/estimator.h
++++ b/vins_estimator/src/estimator.h
+@@ -38,3 +38,6 @@
+     // internal
+     void clearState();
+     bool initialStructure();
++    bool tryStaticInitialize();
++    bool tryRecentStaticInitialize();
++    void initializeStaticWindow(const Vector3d& mean_a, const Vector3d& mean_w, size_t samples, size_t tracks);
+@@ -82,4 +85,4 @@
+     Vector3d back_P0, last_P, last_P0;
+     std_msgs::Header Headers[(WINDOW_SIZE + 1)];
+
+-    IntegrationBase *pre_integrations[(WINDOW_SIZE + 1)];
++    IntegrationBase *pre_integrations[(WINDOW_SIZE + 1)] = {};
+@@ -97,3 +100,8 @@
+     InitialEXRotation initial_ex_rotation;
+
+     bool first_imu;
++    bool static_initialized = false;
++    Matrix3d static_prior_rotation = Matrix3d::Identity();
++    Vector3d static_prior_gyro = Vector3d::Zero();
++    Vector3d static_prior_acceleration = Vector3d::Zero();
++    double static_prior_gyro_sigma = 0.01;
+@@ -116,8 +124,8 @@
+
+     int loop_window_index;
+
+-    MarginalizationInfo *last_marginalization_info;
++    MarginalizationInfo *last_marginalization_info = nullptr;
+     vector<double *> last_marginalization_parameter_blocks;
+
+     map<double, ImageFrame> all_image_frame;
+-    IntegrationBase *tmp_pre_integration;
++    IntegrationBase *tmp_pre_integration = nullptr;
+--- a/vins_estimator/src/factor/imu_factor.h
++++ b/vins_estimator/src/factor/imu_factor.h
+@@ -1,4 +1,4 @@
+ #pragma once
+ #include <ros/assert.h>
+ #include <iostream>
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+--- a/vins_estimator/src/factor/marginalization_factor.cpp
++++ b/vins_estimator/src/factor/marginalization_factor.cpp
+@@ -1,1 +1,2 @@
+ #include "marginalization_factor.h"
++#include "marginalization_qr.h"
+@@ -193,104 +194,27 @@
+
+     n = pos - m;
+
+-    //ROS_DEBUG("marginalization, pos: %d, m: %d, n: %d, size: %d", pos, m, n, (int)parameter_block_idx.size());
+-
+-    TicToc t_summing;
+-    Eigen::MatrixXd A(pos, pos);
+-    Eigen::VectorXd b(pos);
+-    A.setZero();
+-    b.setZero();
+-    /*
+-    for (auto it : factors)
+-    {
+-        for (int i = 0; i < static_cast<int>(it->parameter_blocks.size()); i++)
+-        {
+-            int idx_i = parameter_block_idx[reinterpret_cast<long>(it->parameter_blocks[i])];
+-            int size_i = localSize(parameter_block_size[reinterpret_cast<long>(it->parameter_blocks[i])]);
+-            Eigen::MatrixXd jacobian_i = it->jacobians[i].leftCols(size_i);
+-            for (int j = i; j < static_cast<int>(it->parameter_blocks.size()); j++)
+-            {
+-                int idx_j = parameter_block_idx[reinterpret_cast<long>(it->parameter_blocks[j])];
+-                int size_j = localSize(parameter_block_size[reinterpret_cast<long>(it->parameter_blocks[j])]);
+-                Eigen::MatrixXd jacobian_j = it->jacobians[j].leftCols(size_j);
+-                if (i == j)
+-                    A.block(idx_i, idx_j, size_i, size_j) += jacobian_i.transpose() * jacobian_j;
+-                else
+-                {
+-                    A.block(idx_i, idx_j, size_i, size_j) += jacobian_i.transpose() * jacobian_j;
+-                    A.block(idx_j, idx_i, size_j, size_i) = A.block(idx_i, idx_j, size_i, size_j).transpose();
+-                }
+-            }
+-            b.segment(idx_i, size_i) += jacobian_i.transpose() * it->residuals;
+-        }
+-    }
+-    ROS_INFO("summing up costs %f ms", t_summing.toc());
+-    */
+-    //multi thread
+-
+-
+-    TicToc t_thread_summing;
+-    pthread_t tids[NUM_THREADS];
+-    ThreadsStruct threadsstruct[NUM_THREADS];
+-    int i = 0;
+-    for (auto it : factors)
+-    {
+-        threadsstruct[i].sub_factors.push_back(it);
+-        i++;
+-        i = i % NUM_THREADS;
+-    }
+-    for (int i = 0; i < NUM_THREADS; i++)
+-    {
+-        TicToc zero_matrix;
+-        threadsstruct[i].A = Eigen::MatrixXd::Zero(pos,pos);
+-        threadsstruct[i].b = Eigen::VectorXd::Zero(pos);
+-        threadsstruct[i].parameter_block_size = parameter_block_size;
+-        threadsstruct[i].parameter_block_idx = parameter_block_idx;
+-        int ret = pthread_create( &tids[i], NULL, ThreadsConstructA ,(void*)&(threadsstruct[i]));
+-        if (ret != 0)
+-        {
+-            ROS_WARN("pthread_create error");
+-            ROS_BREAK();
+-        }
+-    }
+-    for( int i = NUM_THREADS - 1; i >= 0; i--)  
+-    {
+-        pthread_join( tids[i], NULL ); 
+-        A += threadsstruct[i].A;
+-        b += threadsstruct[i].b;
+-    }
+-    //ROS_DEBUG("thread summing up costs %f ms", t_thread_summing.toc());
+-    //ROS_INFO("A diff %f , b diff %f ", (A - tmp_A).sum(), (b - tmp_b).sum());
+-
+-
+-    //TODO
+-    Eigen::MatrixXd Amm = 0.5 * (A.block(0, 0, m, m) + A.block(0, 0, m, m).transpose());
+-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> saes(Amm);
+-
+-    //ROS_ASSERT_MSG(saes.eigenvalues().minCoeff() >= -1e-4, "min eigenvalue %f", saes.eigenvalues().minCoeff());
+-
+-    Eigen::MatrixXd Amm_inv = saes.eigenvectors() * Eigen::VectorXd((saes.eigenvalues().array() > eps).select(saes.eigenvalues().array().inverse(), 0)).asDiagonal() * saes.eigenvectors().transpose();
+-    //printf("error1: %f\n", (Amm * Amm_inv - Eigen::MatrixXd::Identity(m, m)).sum());
+-
+-    Eigen::VectorXd bmm = b.segment(0, m);
+-    Eigen::MatrixXd Amr = A.block(0, m, m, n);
+-    Eigen::MatrixXd Arm = A.block(m, 0, n, m);
+-    Eigen::MatrixXd Arr = A.block(m, m, n, n);
+-    Eigen::VectorXd brr = b.segment(m, n);
+-    A = Arr - Arm * Amm_inv * Amr;
+-    b = brr - Arm * Amm_inv * bmm;
+-
+-    Eigen::SelfAdjointEigenSolver<Eigen::MatrixXd> saes2(A);
+-    Eigen::VectorXd S = Eigen::VectorXd((saes2.eigenvalues().array() > eps).select(saes2.eigenvalues().array(), 0));
+-    Eigen::VectorXd S_inv = Eigen::VectorXd((saes2.eigenvalues().array() > eps).select(saes2.eigenvalues().array().inverse(), 0));
+-
+-    Eigen::VectorXd S_sqrt = S.cwiseSqrt();
+-    Eigen::VectorXd S_inv_sqrt = S_inv.cwiseSqrt();
+-
+-    linearized_jacobians = S_sqrt.asDiagonal() * saes2.eigenvectors().transpose();
+-    linearized_residuals = S_inv_sqrt.asDiagonal() * saes2.eigenvectors().transpose() * b;
+-    //std::cout << A << std::endl
+-    //          << std::endl;
+-    //std::cout << linearized_jacobians << std::endl;
+-    //printf("error2: %f %f\n", (linearized_jacobians.transpose() * linearized_jacobians - A).sum(),
+-    //      (linearized_jacobians.transpose() * linearized_residuals - b).sum());
++    // Eliminate the old state directly in square-root form. Forming and
++    // subtracting normal equations squares the conditioning and can erase weak
++    // scale information beside the much stiffer IMU bias constraints.
++    int rows = 0;
++    for (const auto* factor : factors) rows += factor->residuals.size();
++    Eigen::MatrixXd J = Eigen::MatrixXd::Zero(rows, pos);
++    Eigen::VectorXd r(rows);
++    int offset = 0;
++    for (const auto* factor : factors)
++    {
++        const int count = factor->residuals.size();
++        r.segment(offset, count) = factor->residuals;
++        for (size_t i = 0; i < factor->parameter_blocks.size(); ++i)
++        {
++            const long address = reinterpret_cast<long>(factor->parameter_blocks[i]);
++            const int size = localSize(parameter_block_size.at(address));
++            J.block(offset, parameter_block_idx.at(address), count, size) += factor->jacobians[i].leftCols(size);
++        }
++        offset += count;
++    }
++    auto prior = viobench_vins_mono::marginalize_square_root(J, r, m);
++    linearized_jacobians = std::move(prior.jacobian);
++    linearized_residuals = std::move(prior.residual);
++
+--- a/vins_estimator/src/factor/marginalization_factor.h
++++ b/vins_estimator/src/factor/marginalization_factor.h
+@@ -3,4 +3,4 @@
+ #include <ros/ros.h>
+ #include <ros/console.h>
+ #include <cstdlib>
+-#include <pthread.h>
++#include <numeric>
+--- a/vins_estimator/src/factor/pose_local_parameterization.h
++++ b/vins_estimator/src/factor/pose_local_parameterization.h
+@@ -1,3 +1,3 @@
+ #pragma once
+
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+--- a/vins_estimator/src/feature_manager.cpp
++++ b/vins_estimator/src/feature_manager.cpp
+@@ -149,4 +149,4 @@
+
+         it_per_id.estimated_depth = 1.0 / x(++feature_index);
+         //ROS_INFO("feature id %d , start_frame %d, depth %f ", it_per_id->feature_id, it_per_id-> start_frame, it_per_id->estimated_depth);
+-        if (it_per_id.estimated_depth < 0)
++        if (!std::isfinite(it_per_id.estimated_depth) || it_per_id.estimated_depth <= 0)
+@@ -248,4 +248,4 @@
+         it_per_id.estimated_depth = svd_method;
+         //it_per_id->estimated_depth = INIT_DEPTH;
+
+-        if (it_per_id.estimated_depth < 0.1)
++        if (!std::isfinite(it_per_id.estimated_depth) || it_per_id.estimated_depth < 0.1)
+--- a/vins_estimator/src/feature_manager.h
++++ b/vins_estimator/src/feature_manager.h
+@@ -7,4 +7,4 @@
+ #include <numeric>
+ using namespace std;
+
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+--- a/vins_estimator/src/initial/initial_aligment.cpp
++++ b/vins_estimator/src/initial/initial_aligment.cpp
+@@ -61,11 +61,12 @@
+     int n_state = all_frame_count * 3 + 2 + 1;
+
+     MatrixXd A{n_state, n_state};
+-    A.setZero();
+     VectorXd b{n_state};
+-    b.setZero();
+
+     map<double, ImageFrame>::iterator frame_i;
+     map<double, ImageFrame>::iterator frame_j;
+     for(int k = 0; k < 4; k++)
+     {
++        // Each iteration solves in a new tangent plane. Do not accumulate the old system.
++        A.setZero();
++        b.setZero();
+@@ -181,4 +182,4 @@
+     ROS_DEBUG("estimated scale: %f", s);
+     g = x.segment<3>(n_state - 4);
+     ROS_DEBUG_STREAM(" result g     " << g.norm() << " " << g.transpose());
+-    if(fabs(g.norm() - G.norm()) > 1.0 || s < 0)
++    if(!x.allFinite() || fabs(g.norm() - G.norm()) > 1.0 || s <= 0)
+@@ -190,4 +191,4 @@
+     s = (x.tail<1>())(0) / 100.0;
+     (x.tail<1>())(0) = s;
+     ROS_DEBUG_STREAM(" refine     " << g.norm() << " " << g.transpose());
+-    if(s < 0.0 )
++    if(!x.allFinite() || !g.allFinite() || s <= 0.0)
+--- a/vins_estimator/src/initial/initial_alignment.h
++++ b/vins_estimator/src/initial/initial_alignment.h
+@@ -1,2 +1,2 @@
+ #pragma once
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+--- a/vins_estimator/src/initial/initial_ex_rotation.h
++++ b/vins_estimator/src/initial/initial_ex_rotation.h
+@@ -6,4 +6,4 @@
+
+ #include <opencv2/opencv.hpp>
+
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+--- a/vins_estimator/src/initial/initial_sfm.cpp
++++ b/vins_estimator/src/initial/initial_sfm.cpp
+@@ -274,6 +274,9 @@
+ 	ceres::Solver::Options options;
+ 	options.linear_solver_type = ceres::DENSE_SCHUR;
+ 	//options.minimizer_progress_to_stdout = true;
+-	options.max_solver_time_in_seconds = 0.2;
++	options.max_num_iterations = 50;
++	options.max_solver_time_in_seconds = 1e9;
++	options.logging_type = ceres::SILENT;
+ 	ceres::Solver::Summary summary;
+ 	ceres::Solve(options, &problem, &summary);
++	if (!summary.IsSolutionUsable()) return false;
+--- a/vins_estimator/src/initial/initial_sfm.h
++++ b/vins_estimator/src/initial/initial_sfm.h
+@@ -1,4 +1,4 @@
+ #pragma once 
+ #include <ceres/ceres.h>
+ #include <ceres/rotation.h>
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+--- a/vins_estimator/src/initial/solve_5pts.cpp
++++ b/vins_estimator/src/initial/solve_5pts.cpp
+@@ -1,190 +1,1 @@
+ #include "solve_5pts.h"
+-
+-
+-namespace cv {
+-    void decomposeEssentialMat( InputArray _E, OutputArray _R1, OutputArray _R2, OutputArray _t )
+-    {
+-
+-        Mat E = _E.getMat().reshape(1, 3);
+-        CV_Assert(E.cols == 3 && E.rows == 3);
+-
+-        Mat D, U, Vt;
+-        SVD::compute(E, D, U, Vt);
+-
+-        if (determinant(U) < 0) U *= -1.;
+-        if (determinant(Vt) < 0) Vt *= -1.;
+-
+-        Mat W = (Mat_<double>(3, 3) << 0, 1, 0, -1, 0, 0, 0, 0, 1);
+-        W.convertTo(W, E.type());
+-
+-        Mat R1, R2, t;
+-        R1 = U * W * Vt;
+-        R2 = U * W.t() * Vt;
+-        t = U.col(2) * 1.0;
+-
+-        R1.copyTo(_R1);
+-        R2.copyTo(_R2);
+-        t.copyTo(_t);
+-    }
+-
+-    int recoverPose( InputArray E, InputArray _points1, InputArray _points2, InputArray _cameraMatrix,
+-                         OutputArray _R, OutputArray _t, InputOutputArray _mask)
+-    {
+-
+-        Mat points1, points2, cameraMatrix;
+-        _points1.getMat().convertTo(points1, CV_64F);
+-        _points2.getMat().convertTo(points2, CV_64F);
+-        _cameraMatrix.getMat().convertTo(cameraMatrix, CV_64F);
+-
+-        int npoints = points1.checkVector(2);
+-        CV_Assert( npoints >= 0 && points2.checkVector(2) == npoints &&
+-                                  points1.type() == points2.type());
+-
+-        CV_Assert(cameraMatrix.rows == 3 && cameraMatrix.cols == 3 && cameraMatrix.channels() == 1);
+-
+-        if (points1.channels() > 1)
+-        {
+-            points1 = points1.reshape(1, npoints);
+-            points2 = points2.reshape(1, npoints);
+-        }
+-
+-        double fx = cameraMatrix.at<double>(0,0);
+-        double fy = cameraMatrix.at<double>(1,1);
+-        double cx = cameraMatrix.at<double>(0,2);
+-        double cy = cameraMatrix.at<double>(1,2);
+-
+-        points1.col(0) = (points1.col(0) - cx) / fx;
+-        points2.col(0) = (points2.col(0) - cx) / fx;
+-        points1.col(1) = (points1.col(1) - cy) / fy;
+-        points2.col(1) = (points2.col(1) - cy) / fy;
+-
+-        points1 = points1.t();
+-        points2 = points2.t();
+-
+-        Mat R1, R2, t;
+-        decomposeEssentialMat(E, R1, R2, t);
+-        Mat P0 = Mat::eye(3, 4, R1.type());
+-        Mat P1(3, 4, R1.type()), P2(3, 4, R1.type()), P3(3, 4, R1.type()), P4(3, 4, R1.type());
+-        P1(Range::all(), Range(0, 3)) = R1 * 1.0; P1.col(3) = t * 1.0;
+-        P2(Range::all(), Range(0, 3)) = R2 * 1.0; P2.col(3) = t * 1.0;
+-        P3(Range::all(), Range(0, 3)) = R1 * 1.0; P3.col(3) = -t * 1.0;
+-        P4(Range::all(), Range(0, 3)) = R2 * 1.0; P4.col(3) = -t * 1.0;
+-
+-        // Do the cheirality check.
+-        // Notice here a threshold dist is used to filter
+-        // out far away points (i.e. infinite points) since
+-        // there depth may vary between postive and negtive.
+-        double dist = 50.0;
+-        Mat Q;
+-        triangulatePoints(P0, P1, points1, points2, Q);
+-        Mat mask1 = Q.row(2).mul(Q.row(3)) > 0;
+-        Q.row(0) /= Q.row(3);
+-        Q.row(1) /= Q.row(3);
+-        Q.row(2) /= Q.row(3);
+-        Q.row(3) /= Q.row(3);
+-        mask1 = (Q.row(2) < dist) & mask1;
+-        Q = P1 * Q;
+-        mask1 = (Q.row(2) > 0) & mask1;
+-        mask1 = (Q.row(2) < dist) & mask1;
+-
+-        triangulatePoints(P0, P2, points1, points2, Q);
+-        Mat mask2 = Q.row(2).mul(Q.row(3)) > 0;
+-        Q.row(0) /= Q.row(3);
+-        Q.row(1) /= Q.row(3);
+-        Q.row(2) /= Q.row(3);
+-        Q.row(3) /= Q.row(3);
+-        mask2 = (Q.row(2) < dist) & mask2;
+-        Q = P2 * Q;
+-        mask2 = (Q.row(2) > 0) & mask2;
+-        mask2 = (Q.row(2) < dist) & mask2;
+-
+-        triangulatePoints(P0, P3, points1, points2, Q);
+-        Mat mask3 = Q.row(2).mul(Q.row(3)) > 0;
+-        Q.row(0) /= Q.row(3);
+-        Q.row(1) /= Q.row(3);
+-        Q.row(2) /= Q.row(3);
+-        Q.row(3) /= Q.row(3);
+-        mask3 = (Q.row(2) < dist) & mask3;
+-        Q = P3 * Q;
+-        mask3 = (Q.row(2) > 0) & mask3;
+-        mask3 = (Q.row(2) < dist) & mask3;
+-
+-        triangulatePoints(P0, P4, points1, points2, Q);
+-        Mat mask4 = Q.row(2).mul(Q.row(3)) > 0;
+-        Q.row(0) /= Q.row(3);
+-        Q.row(1) /= Q.row(3);
+-        Q.row(2) /= Q.row(3);
+-        Q.row(3) /= Q.row(3);
+-        mask4 = (Q.row(2) < dist) & mask4;
+-        Q = P4 * Q;
+-        mask4 = (Q.row(2) > 0) & mask4;
+-        mask4 = (Q.row(2) < dist) & mask4;
+-
+-        mask1 = mask1.t();
+-        mask2 = mask2.t();
+-        mask3 = mask3.t();
+-        mask4 = mask4.t();
+-
+-        // If _mask is given, then use it to filter outliers.
+-        if (!_mask.empty())
+-        {
+-            Mat mask = _mask.getMat();
+-            CV_Assert(mask.size() == mask1.size());
+-            bitwise_and(mask, mask1, mask1);
+-            bitwise_and(mask, mask2, mask2);
+-            bitwise_and(mask, mask3, mask3);
+-            bitwise_and(mask, mask4, mask4);
+-        }
+-        if (_mask.empty() && _mask.needed())
+-        {
+-            _mask.create(mask1.size(), CV_8U);
+-        }
+-
+-        CV_Assert(_R.needed() && _t.needed());
+-        _R.create(3, 3, R1.type());
+-        _t.create(3, 1, t.type());
+-
+-        int good1 = countNonZero(mask1);
+-        int good2 = countNonZero(mask2);
+-        int good3 = countNonZero(mask3);
+-        int good4 = countNonZero(mask4);
+-
+-        if (good1 >= good2 && good1 >= good3 && good1 >= good4)
+-        {
+-            R1.copyTo(_R);
+-            t.copyTo(_t);
+-            if (_mask.needed()) mask1.copyTo(_mask);
+-            return good1;
+-        }
+-        else if (good2 >= good1 && good2 >= good3 && good2 >= good4)
+-        {
+-            R2.copyTo(_R);
+-            t.copyTo(_t);
+-            if (_mask.needed()) mask2.copyTo(_mask);
+-            return good2;
+-        }
+-        else if (good3 >= good1 && good3 >= good2 && good3 >= good4)
+-        {
+-            t = -t;
+-            R1.copyTo(_R);
+-            t.copyTo(_t);
+-            if (_mask.needed()) mask3.copyTo(_mask);
+-            return good3;
+-        }
+-        else
+-        {
+-            t = -t;
+-            R2.copyTo(_R);
+-            t.copyTo(_t);
+-            if (_mask.needed()) mask4.copyTo(_mask);
+-            return good4;
+-        }
+-    }
+-
+-    int recoverPose( InputArray E, InputArray _points1, InputArray _points2, OutputArray _R,
+-                         OutputArray _t, double focal, Point2d pp, InputOutputArray _mask)
+-    {
+-        Mat cameraMatrix = (Mat_<double>(3,3) << focal, 0, pp.x, 0, focal, pp.y, 0, 0, 1);
+-        return cv::recoverPose(E, _points1, _points2, cameraMatrix, _R, _t, _mask);
+-    }
+-}
+@@ -202,3 +13,4 @@
+         }
+         cv::Mat mask;
+         cv::Mat E = cv::findFundamentalMat(ll, rr, cv::FM_RANSAC, 0.3 / 460, 0.99, mask);
++        if (E.rows != 3 || E.cols != 3 || !cv::checkRange(E)) return false;
+--- a/vins_estimator/src/initial/solve_5pts.h
++++ b/vins_estimator/src/initial/solve_5pts.h
+@@ -5,4 +5,4 @@
+
+ #include <opencv2/opencv.hpp>
+ //#include <opencv2/core/eigen.hpp>
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+--- a/vins_estimator/src/parameters.h
++++ b/vins_estimator/src/parameters.h
+@@ -2,4 +2,4 @@
+
+ #include <ros/ros.h>
+ #include <vector>
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+--- a/vins_estimator/src/utility/tic_toc.h
++++ b/vins_estimator/src/utility/tic_toc.h
+@@ -1,28 +1,9 @@
+ #pragma once
+
+-#include <ctime>
+-#include <cstdlib>
+-#include <chrono>
+-
++// Timing is diagnostic only. Keep it independent of the host clock in the reactor.
+ class TicToc
+ {
+   public:
+-    TicToc()
+-    {
+-        tic();
+-    }
+-
+-    void tic()
+-    {
+-        start = std::chrono::system_clock::now();
+-    }
+-
+-    double toc()
+-    {
+-        end = std::chrono::system_clock::now();
+-        std::chrono::duration<double> elapsed_seconds = end - start;
+-        return elapsed_seconds.count() * 1000;
+-    }
+-
+-  private:
+-    std::chrono::time_point<std::chrono::system_clock> start, end;
++    TicToc() = default;
++    void tic() {}
++    double toc() const { return 0.0; }
+--- a/vins_estimator/src/utility/utility.h
++++ b/vins_estimator/src/utility/utility.h
+@@ -7,4 +7,4 @@
+ #include <cmath>
+ #include <cassert>
+ #include <cstring>
+-#include <eigen3/Eigen/Dense>
++#include <Eigen/Dense>
+@@ -142,44 +142,3 @@
+             two_pi * std::floor((-angle_degrees + T(180)) / two_pi);
+     };
+ };
+-
+-class FileSystemHelper
+-{
+-  public:
+-
+-    /******************************************************************************
+-     * Recursively create directory if `path` not exists.
+-     * Return 0 if success.
+-     *****************************************************************************/
+-    static int createDirectoryIfNotExists(const char *path)
+-    {
+-        struct stat info;
+-        int statRC = stat(path, &info);
+-        if( statRC != 0 )
+-        {
+-            if (errno == ENOENT)  
+-            {
+-                printf("%s not exists, trying to create it \n", path);
+-                if (! createDirectoryIfNotExists(dirname(strdupa(path))))
+-                {
+-                    if (mkdir(path, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH) != 0)
+-                    {
+-                        fprintf(stderr, "Failed to create folder %s \n", path);
+-                        return 1;
+-                    }
+-                    else
+-                        return 0;
+-                }
+-                else 
+-                    return 1;
+-            } // directory not exists
+-            if (errno == ENOTDIR) 
+-            { 
+-                fprintf(stderr, "%s is not a directory path \n", path);
+-                return 1; 
+-            } // something in path prefix is not a dir
+-            return 1;
+-        }
+-        return ( info.st_mode & S_IFDIR ) ? 0 : 1;
+-    }
+-};

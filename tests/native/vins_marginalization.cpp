@@ -21,7 +21,7 @@ MatrixXd random_matrix(int rows, int columns) {
 }
 
 void check_projection(const MatrixXd& J, const VectorXd& r, int marginalized) {
-    const auto prior = relpose_vins_mono::marginalize_square_root(J, r, marginalized);
+    const auto prior = viobench_vins_mono::marginalize_square_root(J, r, marginalized);
     const MatrixXd old = J.leftCols(marginalized), keep = J.rightCols(J.cols() - marginalized);
     const auto decomposition = old.completeOrthogonalDecomposition();
     const MatrixXd projected_J = keep - old * decomposition.solve(keep);
@@ -46,7 +46,7 @@ int main() {
     const MatrixXd regular = random_matrix(48, 17);
     const VectorXd regular_r = random_matrix(48, 1);
     check_projection(regular, regular_r, 7);
-    const auto regular_prior = relpose_vins_mono::marginalize_square_root(regular, regular_r, 7);
+    const auto regular_prior = viobench_vins_mono::marginalize_square_root(regular, regular_r, 7);
     const MatrixXd H = regular.transpose() * regular;
     const VectorXd g = regular.transpose() * regular_r;
     const auto old_inverse = H.topLeftCorner(7, 7).ldlt();
@@ -63,14 +63,14 @@ int main() {
     deficient.col(8).setZero();
     const VectorXd r = random_matrix(42, 1);
     check_projection(deficient, r, 5);
-    const auto rank_prior = relpose_vins_mono::marginalize_square_root(deficient, r, 5);
+    const auto rank_prior = viobench_vins_mono::marginalize_square_root(deficient, r, 5);
     require(rank_prior.jacobian.col(3).norm() == 0, "absent retained variable acquired information");
 
     // A retained direction that can be fully explained by marginalized state
     // must remain a gauge freedom, even when its columns are individually nonzero.
     MatrixXd gauge = random_matrix(36, 9);
     gauge.col(7) = gauge.col(5) + 2 * gauge.col(1);
-    const auto gauge_prior = relpose_vins_mono::marginalize_square_root(gauge, random_matrix(36, 1), 4);
+    const auto gauge_prior = viobench_vins_mono::marginalize_square_root(gauge, random_matrix(36, 1), 4);
     VectorXd null = VectorXd::Zero(5);
     null[1] = 1;
     null[3] = -1;
@@ -85,7 +85,7 @@ int main() {
     mixed.col(5) = 1e7 * basis.col(5);
     mixed.col(6).setZero();
     mixed.col(7) = 0.2 * basis.col(6);
-    const auto weak = relpose_vins_mono::marginalize_square_root(mixed, basis.col(4), 4);
+    const auto weak = viobench_vins_mono::marginalize_square_root(mixed, basis.col(4), 4);
     const MatrixXd information = weak.jacobian.transpose() * weak.jacobian;
     const VectorXd gradient = weak.jacobian.transpose() * weak.residual;
     require(std::abs(information(0, 0) / 1e-10 - 1) < 1e-3, "weak scale information lost");
@@ -95,13 +95,13 @@ int main() {
 
     const MatrixXd direct_J = random_matrix(20, 6);
     const VectorXd direct_r = random_matrix(20, 1);
-    const auto direct = relpose_vins_mono::marginalize_square_root(direct_J, direct_r, 0);
+    const auto direct = viobench_vins_mono::marginalize_square_root(direct_J, direct_r, 0);
     require((direct.jacobian.transpose() * direct.jacobian - direct_J.transpose() * direct_J).norm() < 1e-10,
             "compression without elimination changed information");
     bool rejected = false;
     MatrixXd invalid = direct_J;
     invalid(0, 0) = std::numeric_limits<double>::quiet_NaN();
-    try { relpose_vins_mono::marginalize_square_root(invalid, direct_r, 2); }
+    try { viobench_vins_mono::marginalize_square_root(invalid, direct_r, 2); }
     catch (const std::runtime_error&) { rejected = true; }
     require(rejected, "nonfinite factor accepted");
     std::cout << "VINS marginalization: projection, rank, weak scale and finite checks passed\n";

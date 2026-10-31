@@ -1,6 +1,6 @@
 import pytest
 
-from relpose.tools.abi.wasm_binary import iter_sections, read_leb128, write_leb128
+from viobench.tools.abi.wasm_binary import iter_sections, read_leb128, write_leb128
 
 # the smallest valid module: magic + version, no sections
 EMPTY_MODULE = b"\0asm\x01\0\0\0"
@@ -27,7 +27,7 @@ def test_rejects_non_wasm():
 
 
 def test_memory_and_data_section_roundtrip():
-    from relpose.tools.abi.wasm_binary import (DATA_SECTION_ID, MEMORY_SECTION_ID, DataSegment, Memory, encode_data_section, encode_memory_section,
+    from viobench.tools.abi.wasm_binary import (DATA_SECTION_ID, MEMORY_SECTION_ID, DataSegment, Memory, encode_data_section, encode_memory_section,
                                        parse_data_section, parse_memory_section, read_sleb128, replace_sections, section_payload, write_sleb128)
 
     for value in (0, 1, 63, 64, -1, -64, -65, 2**31 - 1, -2**31):

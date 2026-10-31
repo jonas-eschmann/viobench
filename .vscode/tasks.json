@@ -2,9 +2,9 @@
     "version": "2.0.0",
     "tasks": [
         {
-            "label": "relpose: build native debug",
+            "label": "viobench: build native debug",
             "type": "shell",
-            "command": "cmake -S relpose/solution/examples/native/cpp_minimal -B relpose/solution/examples/native/cpp_minimal/build-host && cmake --build relpose/solution/examples/native/cpp_minimal/build-host",
+            "command": "cmake -S viobench/solution/examples/native/cpp_minimal -B viobench/solution/examples/native/cpp_minimal/build-host && cmake --build viobench/solution/examples/native/cpp_minimal/build-host",
             "options": { "cwd": "${workspaceFolder}" },
             "problemMatcher": ["$gcc"]
         }

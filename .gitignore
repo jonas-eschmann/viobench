@@ -3,8 +3,8 @@ build/
 __pycache__/
 *.pyc
 .pytest_cache/
-relpose/solution/examples/native/*/build/
-relpose/solution/examples/native/*/build-host/
+viobench/solution/examples/native/*/build/
+viobench/solution/examples/native/*/build-host/
 report-*/
 server-data/
 *.egg-info/

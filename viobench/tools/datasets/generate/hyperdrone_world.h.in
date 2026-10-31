@@ -1,0 +1,50 @@
+// HyperDrone World specification of the challenge's data generator; rendered from hyperdrone_world.h.in by
+// viobench.tools.datasets.generate.simulation (the placeholders become numbers) and handed to hyperdrone.Config(spec_header=...).
+// The content hash of the rendered file is part of the JIT key: every distinct configuration compiles once.
+//
+// Preset x500_fpv_imu (200 Hz IMU in the dynamics state chain, FPV camera), visual-inertial localization task
+// (autopilot flies a random waypoint route), rendering every IMU step so the data pipeline can integrate any shutter
+// time itself (viobench.tools.datasets.generate.camera), a hover at the start of each episode, randomised horizontal FOV,
+// and a route length that the generator scales with the episode duration (the preset's EPISODE_STEP_LIMIT is not
+// enforced anywhere; the generator steps for as long as it wants).
+#pragma once
+#include <rl_tools/rl/environments/hyperdrone/presets.h>
+#include <rl_tools/rl/environments/hyperdrone/operations_cpu.h>
+// the environment only includes a task's operations for its built-in task selection; a user World brings its own
+#include <rl_tools/rl/environments/hyperdrone/tasks/visual_inertial_localization/visual_inertial_localization.h>
+#include <rl_tools/rl/environments/hyperdrone/tasks/visual_inertial_localization/operations_cpu.h>
+#include <cstddef>
+
+namespace hyperdrone_user {
+    using T = float;
+    using TI = std::size_t;
+    namespace hyperdrone = rl_tools::rl::environments::hyperdrone;
+
+    struct SPEC: hyperdrone::presets::X500FPVIMU<T, TI> {
+        static constexpr TI INSTANCES_PER_WORLD = @INSTANCES@;
+        static constexpr TI N_CAMERA_AGENTS = 1;
+        static constexpr TI MAX_DRONES = 1;
+        static constexpr TI CAM_WIDTH = @WIDTH@;
+        static constexpr TI CAM_HEIGHT = @HEIGHT@;
+        using SHADING = rl_tools::hyperlux::High;
+        static constexpr bool ENABLE_ANTI_ALIASING = false;
+        static constexpr TI ANTI_ALIASING_GRID_SIZE = 1;
+        static constexpr bool ENABLE_MOTION_BLUR = false;  // exposure is integrated over rendered sub-frames in Python
+        static constexpr TI MOTION_BLUR_SAMPLES = 1;
+        static constexpr bool SELF_VISIBLE = false;  // like the C++ visual-inertial localization harness
+        // the horizontal FOV is drawn per episode from nominal + U(-range, range) degrees;
+        // Python sets the nominal through constructor parameters (--fov); the exact value is reported in the episode config
+        static constexpr T CAMERA_FOV_RANDOMIZATION_RANGE = @FOV_RANGE@;
+        static constexpr T CAMERA_MOUNT_ROTATION_RANDOMIZATION_RANGE = 0;
+        static constexpr T CAMERA_MOUNT_OFFSET_RANDOMIZATION_RANGE = 0;
+        static constexpr T BRIGHTNESS_RANDOMIZATION_RANGE = 0;  // photometry is handled by the ISP stage
+    };
+    using BASE_WORLD = hyperdrone::World<SPEC>;
+
+    struct TASK_SPEC: hyperdrone::tasks::visual_inertial_localization::Specification<BASE_WORLD> {
+        static constexpr TI FRAME_STRIDE = 1;  // render at the IMU rate; frames are subsampled in Python
+        static constexpr TI NUM_WAYPOINTS = @WAYPOINTS@;  // route length (the route cycles when exhausted); scaled with the duration
+        static constexpr TI INITIALIZATION_HOLD_STEPS = @HOLD_STEPS@;  // hover before the route starts
+    };
+    using WORLD = hyperdrone::tasks::visual_inertial_localization::World<TASK_SPEC>;
+}

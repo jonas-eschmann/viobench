@@ -1,4 +1,4 @@
-"""A bundled solution is a self-contained wasip1 reactor: a host that knows nothing about relpose can drive it.
+"""A bundled solution is a self-contained wasip1 reactor: a host that knows nothing about viobench can drive it.
 
 This is the whole protocol in 25 lines of plain wasmtime-py: instantiate, _initialize, frame_width, init(config),
 step(...).
@@ -9,8 +9,8 @@ import json
 import numpy as np
 import wasmtime
 
-from relpose.solution.runtime.python.bundler.bundle import bundle
-from relpose.tools.abi.config import default_guest_config
+from viobench.solution.runtime.python.bundler.bundle import bundle
+from viobench.tools.abi.config import default_guest_config
 
 SOLUTION = """
 import numpy as np

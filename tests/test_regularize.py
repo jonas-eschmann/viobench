@@ -4,9 +4,9 @@ import dataclasses
 import numpy as np
 import pytest
 
-from relpose.tools import abi
-from relpose.tools.datasets.regularize import regularize
-from relpose.tools.datasets.storage import read_episode, write_episode
+from viobench.tools import abi
+from viobench.tools.datasets.regularize import regularize
+from viobench.tools.datasets.storage import read_episode, write_episode
 from tests.test_datasets import synthetic_episode
 
 
