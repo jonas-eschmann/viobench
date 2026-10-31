@@ -287,7 +287,7 @@ def main(argv=None):
     leaderboard.set_defaults(function=command_leaderboard)
 
     simulate = commands.add_parser("simulate", help="[datasets] write episodes generated with HyperDrone (needs a GPU and pip install relpose[sim])")
-    simulate.add_argument("-o", "--output", required=True, help="directory that receives one sub-directory per episode, including trajectory.mp4 by default")
+    simulate.add_argument("-o", "--output", default="datasets", help="directory that receives one sub-directory per episode, including trajectory.mp4 by default (default: datasets)")
     simulate.add_argument("--episodes", type=int, default=8, help="episodes to write (a batch of --instances flights per seed)")
     simulate.add_argument("--no-video", action="store_true", help="skip the camera and ground-truth trajectory MP4 in each episode directory")
     add_simulation_arguments(simulate)

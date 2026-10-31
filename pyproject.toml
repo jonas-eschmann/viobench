@@ -16,7 +16,7 @@ dependencies = [
 
 [project.optional-dependencies]
 data = ["opencv-python-headless>=4.9", "pyyaml>=6"]
-sim = ["opencv-python-headless>=4.9", "pyyaml>=6", "hyperdrone==0.1.8"]
+sim = ["opencv-python-headless>=4.9", "pyyaml>=6", "hyperdrone==0.1.10"]
 train = ["torch", "onnx"]
 server = ["fastapi", "uvicorn", "python-multipart", "tzdata"]  # tzdata: the quota's Pacific-time days where the OS has no zoneinfo
 dev = ["pytest", "opencv-python-headless>=4.9", "pyyaml>=6", "torch", "onnx"]

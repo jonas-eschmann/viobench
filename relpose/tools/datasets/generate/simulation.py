@@ -36,6 +36,9 @@ TEMPLATE = Path(__file__).with_name("hyperdrone_world.h.in")
 CACHE_VARIABLE = "RELPOSE_CACHE"
 SPOOL_VARIABLE = "RELPOSE_SPOOL"
 NOMINAL_FOV_DEGREES = 63.78166175396324  # preset camera, horizontal
+DEFAULT_FOV_DEGREES = 120.0  # base horizontal FOV of generated episodes (SimConfig.fov, --fov): a wide FPV lens, not the preset camera
+DEFAULT_WAYPOINTS = 48  # --waypoints default: the route length of a one-minute flight, fixed so that --duration alone does not change the route
+DEFAULT_SCENE_NAMES = ["ProcTHOR-Train-1"]  # --scene-names default
 WAYPOINTS_PER_SECOND = 0.8  # route length per second of flight unless SimConfig.waypoints is given
 MIN_WAYPOINTS = 8
 
@@ -44,14 +47,14 @@ MIN_WAYPOINTS = 8
 class SimConfig:
     width: int = 640  # stored resolution; the harness resamples to what a solution asks for (320x240 by default)
     height: int = 480
-    instances: int = 8  # episodes rendered in parallel (one reset = one batch); part of the JIT key
+    instances: int = 4  # episodes rendered in parallel (one reset = one batch); part of the JIT key
     frame_rate_hz: float = 20.0
     duration_seconds: float = 60.0  # flight time per episode; frames = duration x frame rate (HyperDrone's own step limit is informational)
     waypoints: int | None = None  # route length; None scales it with the duration (num_waypoints), the route cycles when exhausted
     fov_range: float = 15.0  # horizontal FOV = fov + U(-fov_range, fov_range) degrees per episode
     hold_seconds: float = 1.0  # hover before the route starts
     spool: str | None = None  # directory for the frames while a batch renders (default: $RELPOSE_SPOOL or the system temp dir)
-    fov: float = NOMINAL_FOV_DEGREES  # base horizontal FOV in degrees, before per-episode randomization
+    fov: float = DEFAULT_FOV_DEGREES  # base horizontal FOV in degrees, before per-episode randomization
 
     @property
     def num_waypoints(self):
@@ -329,12 +332,14 @@ def add_simulation_arguments(parser, scenes=SCENES):
     """Adds the generator's options to an argparse parser (names match SimConfig and simulate())."""
     parser.add_argument("--seed", type=int, default=0, help="first seed; seeds also pick the scene round-robin")
     parser.add_argument("--scenes", default="procthor-train", choices=sorted(scenes))
-    parser.add_argument("--scene-names", nargs="*", help="restrict to these scene names")
-    parser.add_argument("--instances", type=int, default=8, help="flights per batch")
+    parser.add_argument("--scene-names", nargs="*", default=DEFAULT_SCENE_NAMES,
+                        help="restrict to these scene names (default: ProcTHOR-Train-1; the option without names uses every scene of --scenes)")
+    parser.add_argument("--instances", type=int, default=4, help="flights per batch (default: 4)")
     parser.add_argument("--frame-rate", type=float, default=20.0)
     parser.add_argument("--duration", type=float, default=60.0, help="seconds of flight per episode (frames = duration x frame rate)")
-    parser.add_argument("--waypoints", type=int, help="route length (default: scales with --duration, 48 for a minute)")
-    parser.add_argument("--fov", type=float, default=NOMINAL_FOV_DEGREES, help="base horizontal FOV in degrees (default: 63.8)")
+    parser.add_argument("--waypoints", type=int, default=DEFAULT_WAYPOINTS,
+                        help="route length (default: 48; 0 scales it with --duration, 0.8 per second)")
+    parser.add_argument("--fov", type=float, default=DEFAULT_FOV_DEGREES, help="base horizontal FOV in degrees (default: 120)")
     parser.add_argument("--fov-range", type=float, default=15.0, help="horizontal FOV = --fov + U(-range, range) degrees (default: 15; 0 fixes the FOV)")
     parser.add_argument("--hover", type=float, default=1.0, help="seconds of hover at the start of each episode")
     parser.add_argument("--spool", help="directory for the frames while a batch renders (default: $RELPOSE_SPOOL or the system temp dir)")

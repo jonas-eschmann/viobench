@@ -27,7 +27,7 @@ relpose simulate -o data/train-short --episodes 64 --seed 900 --duration 15
 `simulate` also writes `trajectory.mp4` inside each episode directory by default: camera playback with ground-truth
 trajectory maps at the episode's frame rate. Add `--no-video` to skip video encoding.
 
-`--fov` sets the base horizontal field of view in degrees (default: about 63.8); each episode samples uniformly within
+`--fov` sets the base horizontal field of view in degrees (default: 120); each episode samples uniformly within
 `--fov-range` degrees of it (default: 15). For example, `--fov 90 --fov-range 10` gives 80–100°, and `--fov-range 0`
 keeps the FOV fixed at the base value.
 
