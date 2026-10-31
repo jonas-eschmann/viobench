@@ -3,7 +3,7 @@
 solution     init                              new workspace: an example solution with its own toolchain
              bundle, unbundle                  solution directory (Python, or native with a CMakeLists.txt) <-> solution.wasm
              build-runtime                     (re)build the workspace's Python runtime; bundle does when it is missing
-runner       check, evaluate, leaderboard      run a module on synthetic frames / on a dataset (disk or freshly simulated); aggregate reports
+runner       check, evaluate, leaderboard      run a module on synthetic frames / on a dataset; aggregate reports
              debug, score                      run a Python solution in-process (debugger-friendly); score an estimate
 datasets     simulate, feed                    write episodes with HyperDrone (GPU); export raw inputs for native debugging
 
@@ -11,7 +11,6 @@ The CLI is the one host component that also reaches into the guest side (for `bu
 runner library never does.
 """
 import argparse
-import itertools
 import sys
 import threading
 
@@ -116,19 +115,12 @@ def command_check(arguments):
 def command_evaluate(arguments):
     from .runner.run import evaluate
 
-    if not arguments.datasets and not arguments.simulate:
-        raise SystemExit("evaluate needs dataset directories and/or --simulate N")
     max_episodes = arguments.max_episodes
 
     def dataset():
         from .datasets.storage import episodes
 
-        if arguments.datasets:
-            yield from episodes(arguments.datasets)
-        if arguments.simulate:
-            from .datasets.generate.simulation import dataset_from_arguments
-
-            yield from itertools.islice(dataset_from_arguments(arguments), arguments.simulate)
+        yield from episodes(arguments.datasets)
 
     def run():
         result = evaluate(arguments.wasm, dataset(), output_dir=arguments.output, max_episodes=max_episodes)
@@ -192,30 +184,28 @@ def command_simulate(arguments):
     output = Path(arguments.output)
     output.mkdir(parents=True, exist_ok=True)
     written = 0
-    for episode in itertools.islice(dataset_from_arguments(arguments), arguments.episodes):
-        directory = write_episode(episode, output / episode.name)
-        if not arguments.no_video:
-            from .runner.video import write_video
+    try:
+        for episode in dataset_from_arguments(arguments):
+            directory = write_episode(episode, output / episode.name)
+            if not arguments.no_video:
+                from .runner.video import write_video
 
-            print(f"video: {write_video(episode, None, directory / 'trajectory.mp4')}")
-        written += 1
-        print(f"wrote {output / episode.name} ({episode.num_frames} frames, {episode.duration:.1f}s, fov {episode.config['camera']['horizontal_fov_degrees']:.1f} deg)")
+                print(f"video: {write_video(episode, None, directory / 'trajectory.mp4')}")
+            written += 1
+            print(f"wrote {output / episode.name} ({episode.num_frames} frames, {episode.duration:.1f}s, fov {episode.config['camera']['horizontal_fov_degrees']:.1f} deg)")
+    except (ValueError, RuntimeError) as error:  # unknown scene, or a scene whose flights keep crashing
+        print(f"error: {error}", file=sys.stderr)
+        print(f"{written} episodes in {output}")
+        return 1
     print(f"{written} episodes in {output}")
-    return 0 if written >= arguments.episodes else 1
+    return 0
 
 
 def command_feed(arguments):
     from .datasets.feed import write_feed
     from .datasets.storage import episodes
 
-    if arguments.episode:
-        episode = next(iter(episodes([arguments.episode])))
-    elif arguments.simulate:
-        from .datasets.generate.simulation import dataset_from_arguments
-
-        episode = next(iter(dataset_from_arguments(arguments)))
-    else:
-        raise SystemExit("feed needs an episode directory or --simulate")
+    episode = next(iter(episodes([arguments.episode])))
     resolution = tuple(int(v) for v in arguments.resolution.split("x"))
     directory = write_feed(episode, arguments.output, resolution=resolution)
     print(f"feed of {episode.name} ({episode.num_frames} frames at {resolution[0]}x{resolution[1]}) in {directory}")
@@ -262,13 +252,11 @@ def main(argv=None):
     check.add_argument("-v", "--verbose", action="store_true", help="pass the guest's stdout/stderr through instead of capturing them")
     check.set_defaults(function=command_check)
 
-    evaluate = commands.add_parser("evaluate", help="[runner] run a module over episodes (directories and/or freshly simulated) and write report.json")
+    evaluate = commands.add_parser("evaluate", help="[runner] run a module over episode directories and write report.json")
     evaluate.add_argument("wasm")
-    evaluate.add_argument("datasets", nargs="*", help="episode directories or directories of episodes")
+    evaluate.add_argument("datasets", nargs="+", help="episode directories or directories of episodes")
     evaluate.add_argument("-o", "--output", help="report directory; also write trajectory.mp4 per episode (default: ./report-<name>, without video)")
     evaluate.add_argument("--max-episodes", type=int)
-    evaluate.add_argument("--simulate", type=int, metavar="N", help="also evaluate on N fresh HyperDrone episodes (GPU; options below)")
-    add_simulation_arguments(evaluate)
     evaluate.set_defaults(function=command_evaluate)
 
     debug = commands.add_parser("debug", help="[runner] run a Python solution directory in this process (no sandbox): breakpoints, prints, plots")
@@ -288,18 +276,15 @@ def main(argv=None):
 
     simulate = commands.add_parser("simulate", help="[datasets] write episodes generated with HyperDrone (needs a GPU and pip install relpose[sim])")
     simulate.add_argument("-o", "--output", default="datasets", help="directory that receives one sub-directory per episode, including trajectory.mp4 by default (default: datasets)")
-    simulate.add_argument("--episodes", type=int, default=8, help="episodes to write (a batch of --instances flights per seed)")
     simulate.add_argument("--no-video", action="store_true", help="skip the camera and ground-truth trajectory MP4 in each episode directory")
     add_simulation_arguments(simulate)
     simulate.set_defaults(function=command_simulate)
 
     feed = commands.add_parser("feed", help="[datasets] export one episode's inputs as raw files for a native debug build (relpose_debug_main.c)")
-    feed.add_argument("episode", nargs="?", help="episode directory (or use --simulate)")
+    feed.add_argument("episode", help="episode directory")
     feed.add_argument("-o", "--output", required=True, help="feed directory")
-    feed.add_argument("--simulate", action="store_true", help="feed a fresh HyperDrone episode instead (GPU; options below)")
     feed.add_argument("--resolution", default="x".join(map(str, abi.DEFAULT_RESOLUTION)), choices=[f"{w}x{h}" for w, h in abi.SUPPORTED_RESOLUTIONS],
                       help="what your solution declares")
-    add_simulation_arguments(feed)
     feed.set_defaults(function=command_feed)
 
     arguments = parser.parse_args(argv)

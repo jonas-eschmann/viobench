@@ -21,6 +21,7 @@ Download the validation episodes from the course page into `data/val`. Generate 
 
 ```bash
 relpose simulate -o data/train --episodes 200 --seed 1                          # ~2 min per 8 one-minute episodes
+relpose simulate -o data/train-scenes --scene-names ProcTHOR-Train-7 ProcTHOR-Train-23 --episodes 50   # 50 episodes in each scene
 relpose simulate -o data/train-short --episodes 64 --seed 900 --duration 15
 ```
 
@@ -36,7 +37,7 @@ keeps the FOV fixed at the base value.
 ```bash
 relpose bundle solution -o solution.wasm        # after every edit; Python: the first time also builds the runtime (10–15 min)
 relpose check solution.wasm                     # a few synthetic frames: errors, fuel per step
-relpose evaluate solution.wasm data/val         # metrics and fuel; --simulate 8 for fresh episodes
+relpose evaluate solution.wasm data/val         # metrics and fuel; for unseen data, simulate into another directory first
 relpose evaluate solution.wasm data/val -o report-solution   # also save trajectory videos
 relpose debug solution data/val                 # in-process, with breakpoint() (docs/DEBUGGING.md)
 ```

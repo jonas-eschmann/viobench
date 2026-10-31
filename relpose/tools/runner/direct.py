@@ -6,7 +6,6 @@ under pdb or VS Code and the returned states can be plotted. Same metrics and es
 but no fuel and the host's numpy/OpenCV: `relpose check` remains the authority on what the sandbox accepts.
 """
 import importlib
-import itertools
 import os
 import sys
 import time
@@ -144,30 +143,15 @@ def run(solution, dataset, output_dir=None, max_episodes=None, log=print):
 
 def add_arguments(parser):
     """The `relpose debug` options."""
-    from ..datasets.generate.simulation import add_simulation_arguments
-
     parser.add_argument("solution", help="solution directory (with solution.py)")
-    parser.add_argument("datasets", nargs="*", help="episode directories or directories of episodes")
-    parser.add_argument("--simulate", type=int, metavar="N", help="also run on N fresh HyperDrone episodes (GPU; options below)")
+    parser.add_argument("datasets", nargs="+", help="episode directories or directories of episodes")
     parser.add_argument("--max-episodes", type=int, help="stop after this many episodes")
     parser.add_argument("-o", "--output", help="write estimate.tum, twist.txt and trajectory.mp4 per episode under this directory")
-    add_simulation_arguments(parser)
 
 
 def run_arguments(arguments):
     from ..datasets.storage import episodes
 
-    if not arguments.datasets and not arguments.simulate:
-        raise SystemExit("debug needs episode directories and/or --simulate N")
     solution = PythonSolution(arguments.solution)
-
-    def dataset():
-        if arguments.datasets:
-            yield from episodes(arguments.datasets)
-        if arguments.simulate:
-            from ..datasets.generate.simulation import dataset_from_arguments
-
-            yield from itertools.islice(dataset_from_arguments(arguments), arguments.simulate)
-
-    run(solution, dataset(), output_dir=arguments.output, max_episodes=arguments.max_episodes)
+    run(solution, episodes(arguments.datasets), output_dir=arguments.output, max_episodes=arguments.max_episodes)
     return 0

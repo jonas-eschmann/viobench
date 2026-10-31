@@ -138,7 +138,7 @@ class Solution:
 
 
 def test_evaluate_accepts_an_in_memory_dataset(engine, runtime_path, solution_dir, tmp_path):
-    """The ad-hoc provider path: a list of Episodes, nothing on disk (this is what --simulate feeds the runner)."""
+    """The ad-hoc provider path: a list of Episodes, nothing on disk (what a library caller or the simulator feeds the runner)."""
     import io
 
     episode = synthetic_episode(n_frames=5, width=320, height=240)

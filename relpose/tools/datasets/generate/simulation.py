@@ -1,18 +1,17 @@
 """Episode generator on HyperDrone: random autopilot flights through ProcTHOR/HSSD scenes, rendered at IMU rate.
 
-    from relpose.tools.datasets.generate.simulation import SimConfig, simulate
-    for episode in simulate(SimConfig(), seeds=range(4)):
+    from relpose.tools.datasets.generate.simulation import SimConfig, scene_references, simulate
+    for episode in simulate(SimConfig(), scene_references(["ProcTHOR-Train-1"]), episodes=8):
         ...
 
 Needs `pip install hyperdrone` and a GPU (the environment module is JIT-compiled per configuration on first use;
 the rendered spec header's hash is the key, so every distinct resolution, duration or route length compiles once).
 Frames are RGB uint8: by default each one is the render at its time (`nominal_camera`); another camera model plugs in
 through `simulate(camera=...)`. Solutions receive frames as stored or rescaled (Episode.adapt). The episode length is
-`SimConfig.duration_seconds` (default one minute); frames are spooled to a temporary directory while a batch renders,
-so memory does not grow with it.
+`SimConfig.duration_seconds` (default one minute); frames are spooled to a temporary directory while a round of
+parallel flights renders, so memory does not grow with it.
 """
 import hashlib
-import itertools
 import json
 import os
 import shutil
@@ -39,6 +38,9 @@ NOMINAL_FOV_DEGREES = 63.78166175396324  # preset camera, horizontal
 DEFAULT_FOV_DEGREES = 120.0  # base horizontal FOV of generated episodes (SimConfig.fov, --fov): a wide FPV lens, not the preset camera
 DEFAULT_WAYPOINTS = 48  # --waypoints default: the route length of a one-minute flight, fixed so that --duration alone does not change the route
 DEFAULT_SCENE_NAMES = ["ProcTHOR-Train-1"]  # --scene-names default
+DEFAULT_EPISODES = 8  # --episodes default: episodes per scene
+PARALLEL_FLIGHTS = 4  # flights the CLI simulates at once (SimConfig.instances); sized for the lab GPUs, not exposed as an option
+MAX_FLIGHTS_PER_EPISODE = 3  # a scene that has not delivered its episodes after this many flights per episode is given up
 WAYPOINTS_PER_SECOND = 0.8  # route length per second of flight unless SimConfig.waypoints is given
 MIN_WAYPOINTS = 8
 
@@ -47,7 +49,7 @@ MIN_WAYPOINTS = 8
 class SimConfig:
     width: int = 640  # stored resolution; the harness resamples to what a solution asks for (320x240 by default)
     height: int = 480
-    instances: int = 4  # episodes rendered in parallel (one reset = one batch); part of the JIT key
+    instances: int = PARALLEL_FLIGHTS  # flights rendered in parallel (one reset = one round); part of the JIT key
     frame_rate_hz: float = 20.0
     duration_seconds: float = 60.0  # flight time per episode; frames = duration x frame rate (HyperDrone's own step limit is informational)
     waypoints: int | None = None  # route length; None scales it with the duration (num_waypoints), the route cycles when exhausted
@@ -126,7 +128,31 @@ def hssd_scenes(split="train", names=None):
     return _catalog_scenes(hyperlux.datasets.hssd.Val43() if split == "val" else hyperlux.datasets.hssd.Train125(), names)
 
 
-SCENES = {"procthor-train": procthor_scenes, "hssd-train": lambda names=None: hssd_scenes("train", names)}  # --scenes choices
+CATALOGS = {"procthor-train": procthor_scenes, "hssd-train": lambda names=None: hssd_scenes("train", names)}  # the public scene catalogs
+
+
+def scene_references(names, catalogs=CATALOGS):
+    """{scene name: conta reference} for scene names and/or catalog names (a catalog name stands for all of its scenes),
+    in the given order; the catalogs are searched in order and loaded only as needed."""
+    names = [str(name) for name in names]
+    if not names:
+        raise ValueError("no scenes given")
+    loaded = {}
+    resolved = {}
+    for name in names:
+        if name in catalogs:
+            loaded.setdefault(name, catalogs[name]())
+            resolved.update(loaded[name])
+            continue
+        for catalog, load in catalogs.items():
+            if catalog not in loaded:
+                loaded[catalog] = load()
+            if name in loaded[catalog]:
+                resolved[name] = loaded[catalog][name]
+                break
+        else:
+            raise ValueError(f"unknown scene {name}: not in the catalogs {list(catalogs)} (scene names look like ProcTHOR-Train-7; a catalog name selects all of its scenes)")
+    return resolved
 
 
 def nominal_camera(rng, imu_rate_hz):
@@ -154,7 +180,7 @@ class Spool:
 
     Developed frames go to disk as PNGs instead of RAM (a batch of 8 one-minute episodes at 640 x 480 would be ~9 GB).
     The yielded Episodes' FrameSequences hold the Spool, so `relpose simulate` (writes an episode, moves on) and
-    `relpose feed --simulate` (keeps one episode, drops the generator) both see their frames for as long as they need them.
+    a library caller that keeps one episode and drops the generator both see their frames for as long as they need them.
     """
 
     def __init__(self, root=None, prefix="relpose-sim-"):
@@ -178,38 +204,49 @@ def _block(vector, layout, name):
     return vector[:, offset:offset + size]
 
 
-def simulate(sim, seeds, scenes=None, camera=nominal_camera, name="sim", log=print):
-    """Yields Episodes: for each seed one batch of `sim.instances` flights in one scene (round-robin over scenes).
+def simulate(sim, scenes, episodes, seed=0, camera=nominal_camera, name="sim", log=print):
+    """Yields `episodes` Episodes per scene, scene by scene: rounds of `sim.instances` parallel flights (consecutive seeds
+    from `seed`) until the scene has its episodes. Flights that crash (terminated by the simulator) are dropped, surplus
+    flights of the last round are discarded; a scene that has not delivered after MAX_FLIGHTS_PER_EPISODE flights per
+    episode raises RuntimeError, after yielding what it had.
 
-    scenes: {name: reference} (default: ProcTHOR Train200). camera: how renders become frames (see nominal_camera).
-    name: prefix of the episode names and the episodes' dataset. Terminated flights (collisions) are skipped.
+    scenes: {name: reference} (scene_references). camera: how renders become frames (see nominal_camera).
+    name: prefix of the episode names and the episodes' dataset.
     """
     import hyperdrone
 
-    if scenes is None:
-        scenes = procthor_scenes()
-    scene_items = list(scenes.items())
-    header = None
+    episodes = int(episodes)
+    if episodes <= 0:
+        raise ValueError("episodes per scene must be positive")
+    header = sim.render_header(200.0)
+    seed = int(seed)
     env = None
-    current_scene = None
-    for seed in seeds:
-        scene_name, reference = scene_items[seed % len(scene_items)]
-        if env is None or scene_name != current_scene:
+    try:
+        for scene_name, reference in scenes.items():
             if env is not None:
                 env.close()
-            if header is None:
-                header = sim.render_header(200.0)
             # A custom spec_header exposes indexed camera names, regardless of the preset's named mounts.
-            env = hyperdrone.HyperDrone([reference], config=hyperdrone.Config(num_worlds=1, spec_header=str(header)), seed=int(seed),
+            env = hyperdrone.HyperDrone([reference], config=hyperdrone.Config(num_worlds=1, spec_header=str(header)), seed=seed,
                                        parameters={"cameras": {"camera0": {"fov": sim.fov}}})
-            current_scene = scene_name
             imu_rate = float(round(1.0 / float(env.dt)))
             if header.name != sim.render_header(imu_rate).name:  # the preset's IMU rate differs from the assumed 200 Hz
                 raise RuntimeError(f"IMU rate {imu_rate} Hz: re-render the spec header for it")
-        yield from _run_batch(env, sim, int(seed), scene_name, camera, name, log)
-    if env is not None:
-        env.close()
-
+            written = flown = crashed = 0
+            while written < episodes:
+                if flown >= MAX_FLIGHTS_PER_EPISODE * episodes:
+                    raise RuntimeError(f"{scene_name}: {written} of {episodes} episodes after {flown} flights ({crashed} crashed)")
+                landed = 0
+                for episode in _run_batch(env, sim, seed, scene_name, camera, name, log):
+                    landed += 1
+                    if written < episodes:
+                        written += 1
+                        yield episode
+                flown += sim.instances
+                crashed += sim.instances - landed
+                seed += 1
+    finally:
+        if env is not None:
+            env.close()
 
 def _run_batch(env, sim, seed, scene_name, camera, name, log):
     import time
@@ -326,28 +363,25 @@ def _versions():
         return {}
 
 
-# --- command-line plumbing shared by `relpose simulate`, `relpose evaluate --simulate`, `relpose debug --simulate`, `relpose feed --simulate`
+# --- command-line plumbing of `relpose simulate`
 
-def add_simulation_arguments(parser, scenes=SCENES):
-    """Adds the generator's options to an argparse parser (names match SimConfig and simulate())."""
-    parser.add_argument("--seed", type=int, default=0, help="first seed; seeds also pick the scene round-robin")
-    parser.add_argument("--scenes", default="procthor-train", choices=sorted(scenes))
-    parser.add_argument("--scene-names", nargs="*", default=DEFAULT_SCENE_NAMES,
-                        help="restrict to these scene names (default: ProcTHOR-Train-1; the option without names uses every scene of --scenes)")
-    parser.add_argument("--instances", type=int, default=4, help="flights per batch (default: 4)")
-    parser.add_argument("--frame-rate", type=float, default=20.0)
+def add_simulation_arguments(parser):
+    """Adds the generator's options to an argparse parser: what to fly, how long, and how to film it."""
+    parser.add_argument("--scene-names", nargs="+", default=DEFAULT_SCENE_NAMES, metavar="SCENE",
+                        help="scenes to fly; a catalog name (procthor-train, hssd-train) stands for all of its scenes (default: ProcTHOR-Train-1)")
+    parser.add_argument("--episodes", type=int, default=DEFAULT_EPISODES, help="episodes per scene (default: 8)")
+    parser.add_argument("--seed", type=int, default=0, help="random seed (default: 0)")
     parser.add_argument("--duration", type=float, default=60.0, help="seconds of flight per episode (frames = duration x frame rate)")
     parser.add_argument("--waypoints", type=int, default=DEFAULT_WAYPOINTS,
                         help="route length (default: 48; 0 scales it with --duration, 0.8 per second)")
     parser.add_argument("--fov", type=float, default=DEFAULT_FOV_DEGREES, help="base horizontal FOV in degrees (default: 120)")
     parser.add_argument("--fov-range", type=float, default=15.0, help="horizontal FOV = --fov + U(-range, range) degrees (default: 15; 0 fixes the FOV)")
     parser.add_argument("--hover", type=float, default=1.0, help="seconds of hover at the start of each episode")
-    parser.add_argument("--spool", help="directory for the frames while a batch renders (default: $RELPOSE_SPOOL or the system temp dir)")
+    parser.add_argument("--spool", help="directory for the frames while they render (default: $RELPOSE_SPOOL or the system temp dir)")
 
 
-def dataset_from_arguments(arguments, scenes=SCENES, camera=nominal_camera, name="sim"):
-    """The ad-hoc Dataset provider configured from add_simulation_arguments() options."""
-    sim = SimConfig(instances=arguments.instances, frame_rate_hz=arguments.frame_rate, duration_seconds=arguments.duration,
-                    waypoints=arguments.waypoints, fov_range=arguments.fov_range, hold_seconds=arguments.hover, spool=arguments.spool,
-                    fov=arguments.fov)
-    return simulate(sim, itertools.count(arguments.seed), scenes=scenes[arguments.scenes](arguments.scene_names), camera=camera, name=name)
+def dataset_from_arguments(arguments, camera=nominal_camera, name="sim"):
+    """The Dataset provider configured from add_simulation_arguments() options."""
+    sim = SimConfig(instances=min(PARALLEL_FLIGHTS, int(arguments.episodes)), duration_seconds=arguments.duration, waypoints=arguments.waypoints,
+                    fov_range=arguments.fov_range, hold_seconds=arguments.hover, spool=arguments.spool, fov=arguments.fov)
+    return simulate(sim, scene_references(arguments.scene_names), arguments.episodes, seed=arguments.seed, camera=camera, name=name)

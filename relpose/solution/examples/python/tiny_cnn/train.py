@@ -68,8 +68,8 @@ def samples_from_episode(episode):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("datasets", nargs="*", help="episode directories or dataset roots")
-    parser.add_argument("--generate", type=int, default=0, metavar="BATCHES",
-                        help="also generate BATCHES x 8 fresh episodes with HyperDrone (GPU)")
+    parser.add_argument("--generate", type=int, default=0, metavar="N",
+                        help="also train on N fresh HyperDrone episodes of the default scene (GPU)")
     parser.add_argument("--generate-seed", type=int, default=10_000)
     parser.add_argument("--out", default=str(Path(__file__).resolve().parent / "solution"))
     parser.add_argument("--epochs", type=int, default=10)
@@ -95,9 +95,14 @@ def main():
     for path in episodes:
         add(read_episode(path))
     if arguments.generate:  # "infinite" data: straight from the simulator
-        from relpose.tools.datasets.generate.simulation import SimConfig, simulate
+        from relpose.tools.datasets.generate.simulation import (
+            DEFAULT_SCENE_NAMES,
+            SimConfig,
+            scene_references,
+            simulate,
+        )
 
-        for episode in simulate(SimConfig(), range(arguments.generate_seed, arguments.generate_seed + arguments.generate)):
+        for episode in simulate(SimConfig(), scene_references(DEFAULT_SCENE_NAMES), arguments.generate, seed=arguments.generate_seed):
             add(episode)
     images, imus, targets = np.concatenate(images), np.concatenate(imus), np.concatenate(targets)
     imu_mean, imu_std = imus.mean(0), imus.std(0) + 1e-6

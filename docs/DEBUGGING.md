@@ -7,7 +7,6 @@ feed: no fuel and no limits, and your host's libraries. `check` and `evaluate` r
 
 ```bash
 relpose debug solution data/val --max-episodes 1
-relpose debug solution --simulate 2                # fresh simulated episodes (GPU)
 relpose debug solution data/val -o out             # writes estimate.tum, twist.txt and trajectory.mp4 under out/<dataset>/<episode>/
 ```
 
@@ -38,7 +37,7 @@ relpose score data/val/<name> estimate.tum                     # reads twist.txt
 gdb --args build-host/debug build/feed                         # VS Code: "relpose: debug native solution (gdb)"
 ```
 
-`relpose feed --simulate -o build/feed` feeds a fresh simulated episode.
+Any episode directory works, including a freshly simulated one (`relpose simulate -o build/sim --episodes 1 --no-video`).
 
 ## Host vs. sandbox
 

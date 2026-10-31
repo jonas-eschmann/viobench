@@ -73,7 +73,7 @@ def test_video_keeps_previous_output_if_frame_loading_fails(tmp_path):
 
 @pytest.mark.parametrize("no_video", [False, True])
 def test_simulate_cli_writes_video_in_each_episode_by_default(tmp_path, monkeypatch, no_video):
-    episodes = [synthetic_episode(n_frames=3, rate=10.0, channels=3) for _ in range(3)]
+    episodes = [synthetic_episode(n_frames=3, rate=10.0, channels=3) for _ in range(2)]  # the provider yields exactly --episodes per scene
     for index, episode in enumerate(episodes):
         episode.name = f"sim-{index}"
         episode.config["camera"]["horizontal_fov_degrees"] = 60.0
@@ -89,7 +89,7 @@ def test_simulate_cli_writes_video_in_each_episode_by_default(tmp_path, monkeypa
         args.append("--no-video")
     assert cli(args) == 0
     assert sorted(path.name for path in output.iterdir()) == ["sim-0", "sim-1"]
-    for episode in episodes[:2]:
+    for episode in episodes:
         directory = output / episode.name
         assert (directory / "episode.json").is_file()
         assert len(list((directory / "mav0/cam0/data").glob("*.png"))) == episode.num_frames
