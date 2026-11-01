@@ -4,7 +4,7 @@ The app queues uploads in SQLite and shows each team its own submissions; the wo
 Both use `VIOBENCH_SERVER_DIR` (default `./server-data`).
 
 ```bash
-pip install -e ".[server,data]"
+pip install -e ".[server]"
 python -m viobench.tools.server.teams add "team a" "team b"     # prints a token per team; `teams list` repeats them
 VIOBENCH_DATASETS=/data/test/first:/data/test/second python -m viobench.tools.server.worker &   # exactly one worker
 uvicorn viobench.tools.server.app:app --host 0.0.0.0 --port 8000

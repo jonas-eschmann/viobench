@@ -5,7 +5,7 @@ WORKDIR /opt/viobench
 COPY pyproject.toml README.md ./
 COPY viobench viobench
 # server-data is created here so that a fresh named volume mounted on it is owned by the unprivileged user
-RUN pip install --no-cache-dir ".[server,data]" \
+RUN pip install --no-cache-dir ".[server]" \
  && useradd --system --create-home --uid 10001 viobench \
  && mkdir -p /srv/server-data && chown viobench /srv/server-data
 USER viobench

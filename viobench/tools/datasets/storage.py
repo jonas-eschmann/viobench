@@ -26,7 +26,7 @@ import numpy as np
 
 from .episode import Episode, FrameSequence
 
-# cv2 and yaml (viobench[data]) are imported where they are used: the CLI loads this module, and has to start without them
+# cv2 and yaml are imported where they are used: the CLI loads this module, and they stay out of its startup
 
 FORMAT = 1
 PNG_COMPRESSION = 6  # encoder level for frames from arrays (also the simulator's spool): 9 % smaller than level 1 at twice the time; level 9 gains 2 % more at six times

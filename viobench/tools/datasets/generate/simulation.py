@@ -256,7 +256,7 @@ def _run_batch(env, sim, seed, scene_name, camera, name, log, progress=(0, None)
     progress: (episodes of the scene before this round, episodes wanted) for the log line."""
     import time
 
-    import cv2  # not at the top: the CLI loads this module for its arguments, without viobench[data]
+    import cv2  # not at the top: the CLI loads this module for its arguments, and cv2 stays out of its startup
 
     imu_rate = float(round(1.0 / float(env.dt)))  # env.dt is float32 (0.00499999989)
     dt = 1.0 / imu_rate

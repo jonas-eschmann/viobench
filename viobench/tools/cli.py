@@ -308,7 +308,7 @@ def main(argv=None):
     leaderboard.add_argument("--plot", help="write an RPE-vs-fuel PNG here (needs matplotlib)")
     leaderboard.set_defaults(function=command_leaderboard)
 
-    simulate = commands.add_parser("simulate", help="[datasets] write episodes generated with HyperDrone (needs a GPU and pip install viobench[sim])")
+    simulate = commands.add_parser("simulate", help="[datasets] write episodes generated with HyperDrone (needs an NVIDIA GPU)")
     simulate.add_argument("-o", "--output", default="datasets", help="directory that receives one .zip per episode, with trajectory.mp4 inside by default (default: datasets)")
     simulate.add_argument("--no-video", action="store_true", help="skip the camera and ground-truth trajectory MP4 in each episode")
     add_simulation_arguments(simulate)

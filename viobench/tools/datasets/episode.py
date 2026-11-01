@@ -184,7 +184,7 @@ class Episode:
         if resolution != source_resolution:
             width, height = resolution
             scale_x, scale_y = width / source_resolution[0], height / source_resolution[1]
-            import cv2  # viobench[data]: not at the top, the CLI loads this module without it
+            import cv2  # not at the top: the CLI loads this module, and cv2 stays out of its startup
 
             interpolation = cv2.INTER_AREA if scale_x < 1 else cv2.INTER_LINEAR
             transforms.append(lambda f: cv2.resize(f, (width, height), interpolation=interpolation))

@@ -12,7 +12,7 @@ accuracy-vs-compute curve.
 | [`tests/`](tests/) | pytest suite |
 
 ```bash
-python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev,data]"
+python -m venv .venv && . .venv/bin/activate && pip install -e ".[dev]"
 viobench build-runtime                                          # viobench/solution/build/runtime/dist/runtime.wasm, 10–15 min once
 pytest
 viobench bundle viobench/solution/examples/python/klt_imu -o klt.wasm && viobench check klt.wasm

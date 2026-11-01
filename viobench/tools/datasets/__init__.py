@@ -2,7 +2,7 @@
 
 A *Dataset* is simply an iterable of `Episode`s. Two providers implement it:
 - `storage.episodes(roots)`            episode archives (or unzipped directories) on disk, frames streamed
-- `generate.simulation.simulate(...)`  fresh episodes from HyperDrone, frames spooled to a temporary directory (GPU; `pip install viobench[sim]`)
+- `generate.simulation.simulate(...)`  fresh episodes from HyperDrone, frames spooled to a temporary directory (NVIDIA GPU)
 The runner and the training example consume either; the server uses the first.
 """
 from .episode import Episode

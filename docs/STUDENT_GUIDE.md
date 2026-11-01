@@ -8,7 +8,7 @@ macOS: `xcode-select --install`, `brew install cmake`, Python from Homebrew or p
 
 ```bash
 git clone <repo> viobench
-python -m venv .venv && source .venv/bin/activate && pip install -e "./viobench[data]"   # lab machines: "./viobench[data,sim,train]"
+python -m venv .venv && source .venv/bin/activate && pip install -e "./viobench"         # lab machines: "./viobench[train]"
 viobench init python my_workspace && cd my_workspace                                   # C/C++: viobench init native
 ```
 
