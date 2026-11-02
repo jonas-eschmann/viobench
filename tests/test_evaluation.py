@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from viobench.solution.runtime.python.bundler.bundle import bundle
-from viobench.tools.datasets.storage import read_episode, write_episode
+from viobench.tools.datasets.storage import archive_hash, read_episode, write_episode
 from viobench.tools.runner.metrics import evaluate_trajectory
 from viobench.tools.runner.run import evaluate
 from tests.test_datasets import synthetic_episode
@@ -28,7 +28,7 @@ class Solution:
 def test_evaluate_report(engine, runtime_path, solution_dir, tmp_path):
     episode = synthetic_episode(n_frames=12, width=640, height=480)
     dataset = tmp_path / "set"
-    write_episode(episode, dataset / f"{episode.name}.zip")
+    digest = archive_hash(write_episode(episode, dataset / f"{episode.name}.zip"))
     gt = episode.ground_truth_state()
     import io
 
@@ -44,17 +44,18 @@ def test_evaluate_report(engine, runtime_path, solution_dir, tmp_path):
     assert episode_report["metrics"]["velocity_rmse"] < 1e-6 and episode_report["metrics"]["angular_velocity_rmse"] < 1e-6
     assert episode_report["fuel_per_frame_median"] > 0
     assert (tmp_path / "report" / "report.json").is_file()
-    assert json.loads((tmp_path / "report" / "report.json").read_text())["episodes"][0]["name"] == episode.name
-    estimate = np.loadtxt(tmp_path / "report" / "logs" / "set" / episode.name / "estimate.tum")
+    saved = json.loads((tmp_path / "report" / "report.json").read_text())["episodes"][0]
+    assert saved["hash"] == digest and saved["dataset"] == "set" and "name" not in saved
+    estimate = np.loadtxt(tmp_path / "report" / "logs" / digest / "estimate.tum")
     np.testing.assert_allclose(estimate[:, 1:], gt[:, :7], atol=1e-6)
-    twist = np.loadtxt(tmp_path / "report" / "logs" / "set" / episode.name / "twist.txt")
+    twist = np.loadtxt(tmp_path / "report" / "logs" / digest / "twist.txt")
     np.testing.assert_allclose(twist[:, 1:], gt[:, 7:], atol=1e-6)
 
 
 @pytest.mark.parametrize("failure", ["raise RuntimeError('flaky')", "return [float('nan')] * 13"])
 def test_a_failed_step_ends_the_episode(failure, engine, runtime_path, solution_dir, tmp_path):
     episode = synthetic_episode(n_frames=6, width=640, height=480)
-    write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
+    digest = archive_hash(write_episode(episode, tmp_path / "set" / f"{episode.name}.zip"))
     flaky = f"""
 class Solution:
     def __init__(self, config):
@@ -71,7 +72,7 @@ class Solution:
     assert report["summary"]["overall"]["completed"] == 0
     episode_report = report["episodes"][0]
     assert not episode_report["completed"] and episode_report["failure"].startswith("step")
-    estimate = np.loadtxt(tmp_path / "report" / "logs" / "set" / episode.name / "estimate.tum")
+    estimate = np.loadtxt(tmp_path / "report" / "logs" / digest / "estimate.tum")
     assert list(estimate[:2, 1]) == [1, 2] and np.isnan(estimate[2:, 1:]).all()
     held = np.tile([0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0], (6, 1))
     held[:, 0] = [1, 2, 2, 2, 2, 2]  # the frames from the failure on repeat the last pose, standing still
@@ -84,8 +85,8 @@ class Solution:
 def test_evaluate_delivers_rgb_from_gray_and_rgb_sets(engine, runtime_path, solution_dir, tmp_path):
     gray = synthetic_episode(n_frames=6, width=640, height=480)
     rgb = synthetic_episode(n_frames=6, width=640, height=480, channels=3)
-    write_episode(gray, tmp_path / "gray" / f"{gray.name}.zip")
-    write_episode(rgb, tmp_path / "rgb" / f"{rgb.name}.zip")
+    digests = {"gray": archive_hash(write_episode(gray, tmp_path / "gray" / f"{gray.name}.zip")),
+               "rgb": archive_hash(write_episode(rgb, tmp_path / "rgb" / f"{rgb.name}.zip"))}
     probe = """
 import numpy as np
 class Solution:
@@ -100,14 +101,14 @@ class Solution:
     report = evaluate(wasm, [tmp_path / "gray", tmp_path / "rgb"], output_dir=tmp_path / "report", engine=engine, log=lambda *a: None)
     assert report["summary"]["overall"]["completed"] == 2
     for dataset, replicated in (("gray", 1.0), ("rgb", 0.0)):
-        estimate = np.loadtxt(tmp_path / "report" / "logs" / dataset / gray.name / "estimate.tum")
+        estimate = np.loadtxt(tmp_path / "report" / "logs" / digests[dataset] / "estimate.tum")
         assert estimate[0, 1] == 3 and estimate[0, 2] == 3 and estimate[0, 3] == replicated
 
 
 def test_evaluate_resolution_opt_in(engine, runtime_path, solution_dir, tmp_path):
     episode = synthetic_episode(n_frames=4, width=640, height=480)
     dataset = tmp_path / "set"
-    write_episode(episode, dataset / f"{episode.name}.zip")
+    digest = archive_hash(write_episode(episode, dataset / f"{episode.name}.zip"))
     probe = """
 class Solution:
 {declaration}
@@ -125,7 +126,7 @@ class Solution:
         wasm = tmp_path / f"{name}.wasm"
         bundle(solution_dir(probe.format(declaration=declaration), name=name), wasm, runtime=runtime_path)
         report = evaluate(wasm, [dataset], output_dir=tmp_path / name, engine=engine, log=lambda *a: None)
-        estimate = np.loadtxt(tmp_path / name / "logs" / "set" / episode.name / "estimate.tum")
+        estimate = np.loadtxt(tmp_path / name / "logs" / digest / "estimate.tum")
         assert (estimate[0, 1], estimate[0, 2]) == size and report["summary"]["overall"]["completed"] == 1
         assert estimate[0, 3] == pytest.approx(episode.config["camera"]["fx"] * size[0] / 640)
 
@@ -143,7 +144,8 @@ def test_evaluate_accepts_an_in_memory_dataset(engine, runtime_path, solution_di
     bundle(solution_dir(PERFECT, {"gt.npy": buffer.getvalue()}, name="perfect"), wasm, runtime=runtime_path)
     report = evaluate(wasm, [episode, episode], output_dir=tmp_path / "report", engine=engine, log=lambda *a: None)
     assert report["summary"]["overall"]["episodes"] == 2 and list(report["summary"]["datasets"]) == ["adhoc"]
-    assert report["episodes"][0]["metrics"]["ate_rmse"] < 1e-9
+    assert report["episodes"][0]["metrics"]["ate_rmse"] < 1e-9 and report["episodes"][0]["hash"] is None
+    assert (tmp_path / "report" / "logs" / episode.name / "estimate.tum").is_file()  # no archive, no hash: logs by name
 
 
 def test_streamed_frames_from_disk(tmp_path):
@@ -174,7 +176,25 @@ def test_cli_evaluates_conta_references(engine, runtime_path, solution_dir, tmp_
     bundle(solution_dir(PERFECT, {"gt.npy": buffer.getvalue()}), wasm, runtime=runtime_path)
     assert main(["evaluate", str(wasm), f"conta:{digest}", "-o", str(tmp_path / "report")]) == 0
     report = json.loads((tmp_path / "report" / "report.json").read_text())
-    assert list(report["summary"]["datasets"]) == ["conta"] and report["episodes"][0]["name"] == episode.name
+    assert list(report["summary"]["datasets"]) == ["conta"] and report["episodes"][0]["hash"] == digest
+    assert (tmp_path / "report" / "logs" / digest / "estimate.tum").is_file()
+
+
+def test_evaluate_rejects_an_episode_given_twice(engine, tmp_path):
+    """An episode is its hash: a copy of an archive is the same episode, which would count twice in one log directory."""
+    import shutil
+
+    import wasmtime
+
+    from tests.test_video import IDENTITY
+
+    episode = synthetic_episode(n_frames=4, width=640, height=480)
+    path = write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
+    copy = shutil.copyfile(path, tmp_path / "copy.zip")
+    wasm = tmp_path / "identity.wasm"
+    wasm.write_bytes(wasmtime.wat2wasm(IDENTITY))
+    with pytest.raises(ValueError, match=f"episode {archive_hash(path)} given twice"):
+        evaluate(wasm, [path, copy], output_dir=tmp_path / "report", engine=engine, log=lambda *a: None)
 
 
 def test_cli_rejects_unknown_sources_before_running(tmp_path, conta_store, capsys):

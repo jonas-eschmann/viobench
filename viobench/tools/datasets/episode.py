@@ -119,6 +119,17 @@ class Episode:
         return self.meta.get("dataset", "episodes")
 
     @property
+    def hash(self):
+        """The sha1 of the archive the episode was read from: its identity. None for one without an archive."""
+        return self.meta.get("hash")
+
+    @property
+    def key(self):
+        """What logs and output directories call the episode: its hash; the name only for an episode without an archive
+        (unzipped or in memory), which the server never evaluates."""
+        return self.hash or self.name
+
+    @property
     def channels(self):
         return 1 if len(self.frames.shape) == 3 else int(self.frames.shape[3])
 

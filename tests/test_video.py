@@ -9,7 +9,7 @@ import wasmtime
 
 from viobench.tools.cli import main as cli
 from viobench.tools.datasets.episode import FrameSequence
-from viobench.tools.datasets.storage import write_episode
+from viobench.tools.datasets.storage import archive_hash, write_episode
 from viobench.tools.runner.video import write_video
 from tests.test_datasets import synthetic_episode
 
@@ -125,7 +125,7 @@ IDENTITY = """
 @pytest.mark.parametrize("output", [False, True])
 def test_evaluate_cli_only_writes_video_with_explicit_output(tmp_path, monkeypatch, output):
     episode = synthetic_episode(n_frames=4, width=640, height=480)
-    write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
+    digest = archive_hash(write_episode(episode, tmp_path / "set" / f"{episode.name}.zip"))
     wasm = tmp_path / "identity.wasm"
     wasm.write_bytes(wasmtime.wat2wasm(IDENTITY))
     monkeypatch.chdir(tmp_path)
@@ -134,7 +134,7 @@ def test_evaluate_cli_only_writes_video_with_explicit_output(tmp_path, monkeypat
         args += ["-o", str(tmp_path / "out")]
     assert cli(args) == 0
     report = tmp_path / ("out" if output else "report-identity")
-    directory = report / "logs" / "set" / episode.name
+    directory = report / "logs" / digest
     assert (directory / "estimate.tum").is_file() and (report / "report.json").is_file()
     assert (directory / "twist.txt").is_file()
     video = directory / "trajectory.mp4"
@@ -146,12 +146,12 @@ def test_evaluate_cli_only_writes_video_with_explicit_output(tmp_path, monkeypat
 
 def test_evaluate_failure_still_produces_complete_video(tmp_path):
     episode = synthetic_episode(n_frames=4, width=640, height=480)
-    write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
+    digest = archive_hash(write_episode(episode, tmp_path / "set" / f"{episode.name}.zip"))
     wasm = tmp_path / "broken.wasm"
     # No solution exports: evaluation fails before it can produce any poses.
     wasm.write_bytes(wasmtime.wat2wasm("(module)"))
     assert cli(["evaluate", str(wasm), str(tmp_path / "set"), "-o", str(tmp_path / "out")]) == 1
-    video = tmp_path / "out" / "logs" / "set" / episode.name / "trajectory.mp4"
+    video = tmp_path / "out" / "logs" / digest / "trajectory.mp4"
     _, frames = read_video(video)
     assert len(frames) == episode.num_frames
 

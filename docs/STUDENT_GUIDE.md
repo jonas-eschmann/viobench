@@ -47,7 +47,8 @@ viobench debug solution                          # in-process, with breakpoint()
 ```
 
 `bundle` embeds Python code into the runtime and compiles native code (a `CMakeLists.txt`) with wasi-sdk. `evaluate`
-writes `report-solution/report.json` and, per episode, `estimate.tum` (readable by `evo`) and `twist.txt`.
+writes `report-solution/report.json` and, per episode, `estimate.tum` (readable by `evo`) and `twist.txt` under
+`logs/<hash>/`. An episode is known by its hash, the sha1 of its archive, in reports and on the server.
 
 ## Submit
 

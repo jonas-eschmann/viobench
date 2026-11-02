@@ -254,7 +254,7 @@ def command_feed(arguments):
     episode = next(iter(episodes([arguments.episode])))
     resolution = tuple(int(v) for v in arguments.resolution.split("x"))
     directory = write_feed(episode, arguments.output, resolution=resolution)
-    print(f"feed of {episode.name} ({episode.num_frames} frames at {resolution[0]}x{resolution[1]}) in {directory}")
+    print(f"feed of {episode.key} ({episode.num_frames} frames at {resolution[0]}x{resolution[1]}) in {directory}")
     return 0
 
 

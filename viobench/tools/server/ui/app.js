@@ -156,6 +156,14 @@ function get(object, ...keys) {
   return object;
 }
 
+function episodeHash(hash) {
+  // an episode is the sha1 of its archive: its first 12 digits here, all of them on hover
+  if (typeof hash !== "string") return DASH;
+  const element = node("code", hash.slice(0, 12));
+  element.title = hash;
+  return element;
+}
+
 function node(tag, text, className) {
   const element = document.createElement(tag);
   if (text !== undefined && text !== null) element.textContent = String(text);
@@ -350,7 +358,7 @@ const SUMMARY_COLUMNS = [
 ];
 const EPISODE_COLUMNS = [
   ["Dataset", (e) => e.dataset],
-  ["Episode", (e) => e.name],
+  ["Episode", (e) => episodeHash(e.hash)],
   ["Frames", (e) => e.frames],
   ["Completed", (e) => (e.completed === true ? "yes" : e.completed === false ? "no" : DASH)],
   ["RPE (m)", (e) => decimal(get(e, "metrics", "rpe_translation_rmse"))],

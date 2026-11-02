@@ -13,8 +13,10 @@ uvicorn viobench.tools.server.app:app --host 0.0.0.0 --port 8000
 The worker evaluates every submission on `EPISODES` in [`worker.py`](worker.py), conta references to episode archives
 (the public set, [`viobench.episodes`](../../episodes/__init__.py), for now). That constant is the only place the
 evaluation set is configured: change it and restart the worker. On start the worker resolves the references through
-conta, downloading what its cache (`CONTA_CACHE`, default `~/.cache/conta`) lacks, and exits if one cannot be had;
-`--fetch` does only that, for a worker without network.
+conta, downloading what its cache (`CONTA_CACHE`, default `~/.cache/conta`) lacks, and exits if one cannot be had
+(or if a hash is listed twice); `--fetch` does only that, for a worker without network. An episode is its hash, the
+sha1 of its archive: results list the episodes by hash, in the order of `EPISODES`, and the worker fails a submission
+(internal error) whose report lists any others. Nothing from inside an archive (its manifest's name) identifies it.
 
 A team is its token: every API request sends `Authorization: Bearer <token>` and sees only that team's submissions.
 Teams can also open the server's root in a browser: a page ([`ui/`](ui/), no dependencies) that signs in with the token

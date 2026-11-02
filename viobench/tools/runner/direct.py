@@ -126,12 +126,12 @@ def run(solution, dataset, output_dir=None, max_episodes=None, log=print):
             seconds.append(step.seconds)
         metrics = evaluate_trajectory(episode.ground_truth_state(), estimates, episode.frame_times)
         if output_dir is not None:
-            directory = Path(output_dir) / episode.dataset / episode.name
+            directory = Path(output_dir) / episode.key
             write_estimates(directory, episode.frame_times, estimates)
             from .video import write_video
 
             log(f"video: {write_video(episode, estimates, directory / 'trajectory.mp4')}")
-        log(f"{episode.dataset}/{episode.name}: RPE {metrics.rpe_translation_rmse:.3f} m/1 s  ATE {metrics.ate_rmse:.3f} m  "
+        log(f"{episode.dataset}/{episode.key}: RPE {metrics.rpe_translation_rmse:.3f} m/1 s  ATE {metrics.ate_rmse:.3f} m  "
             f"rot {np.degrees(metrics.rotation_rmse):.1f} deg  vel {metrics.velocity_rmse:.3f} m/s  held {metrics.held}  "
             f"{np.median(seconds) * 1e3:.1f} ms/frame (host, no fuel)")
         results.append((episode, estimates, metrics))

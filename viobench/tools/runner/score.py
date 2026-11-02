@@ -53,7 +53,7 @@ def score(episode_dir, pose_path, log=print):
     episode = read_episode(episode_dir, frames="none")
     estimates = load_estimates(pose_path, episode.frame_times)
     metrics = evaluate_trajectory(episode.ground_truth_state(), estimates, episode.frame_times)
-    log(f"{episode.dataset}/{episode.name}: RPE {metrics.rpe_translation_rmse:.3f} m/1 s  ATE {metrics.ate_rmse:.3f} m  "
+    log(f"{episode.dataset}/{episode.key}: RPE {metrics.rpe_translation_rmse:.3f} m/1 s  ATE {metrics.ate_rmse:.3f} m  "
         f"rot {np.degrees(metrics.rotation_rmse):.1f} deg  vel {metrics.velocity_rmse:.3f} m/s  "
         f"ang vel {np.degrees(metrics.angular_velocity_rmse):.1f} deg/s  held {metrics.held}  sim3 scale {metrics.sim3_scale:.3f}")
     return metrics

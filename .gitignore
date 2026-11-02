@@ -13,4 +13,3 @@ data
 output
 dist
 .env
-tunnel-token

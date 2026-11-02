@@ -10,7 +10,7 @@ import pytest
 
 from viobench.tools.cli import main as cli
 from viobench.tools.datasets.feed import write_feed
-from viobench.tools.datasets.storage import write_episode
+from viobench.tools.datasets.storage import archive_hash, write_episode
 from viobench.tools.runner import direct
 from viobench.tools.runner.score import load_estimates, score
 from tests.test_datasets import synthetic_episode
@@ -26,20 +26,20 @@ def test_direct_run_matches_the_sandbox(engine, runtime_path, tmp_path):
 
     episode = synthetic_episode(n_frames=30, width=640, height=480)  # 1.5 s: dead reckoning calibrates on the first 0.5 s (identity), then estimates
     dataset = tmp_path / "set"
-    write_episode(episode, dataset / f"{episode.name}.zip")
+    digest = archive_hash(write_episode(episode, dataset / f"{episode.name}.zip"))
     solution = direct.PythonSolution(EXAMPLES / "python" / "dead_reckoning")
     assert solution.resolution == (320, 240)
     [(_, estimates, metrics)] = direct.run(solution, [dataset], output_dir=tmp_path / "direct", log=lambda *a: None)
     assert estimates.shape == (30, 13) and metrics.held == 0
     np.testing.assert_array_equal(estimates[0], [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0])
     assert np.abs(estimates[-1, 7:]).max() > 0  # dead reckoning reports its twist once it has calibrated
-    written = load_estimates(tmp_path / "direct" / "set" / episode.name / "estimate.tum", episode.frame_times)
+    written = load_estimates(tmp_path / "direct" / digest / "estimate.tum", episode.frame_times)
     np.testing.assert_allclose(written, estimates, atol=1e-8)
 
     wasm = tmp_path / "dr.wasm"
     bundle(EXAMPLES / "python" / "dead_reckoning", wasm, runtime=runtime_path)
     evaluate(wasm, [dataset], output_dir=tmp_path / "report", engine=engine, log=lambda *a: None)
-    sandboxed = load_estimates(tmp_path / "report" / "logs" / "set" / episode.name / "estimate.tum", episode.frame_times)
+    sandboxed = load_estimates(tmp_path / "report" / "logs" / digest / "estimate.tum", episode.frame_times)
     np.testing.assert_allclose(estimates, sandboxed, atol=1e-6)
 
 
@@ -80,14 +80,14 @@ def test_direct_frame_width_and_host_solution_bundle(solution_dir, tmp_path):
 
 def test_direct_cli(tmp_path, capsys):
     episode = synthetic_episode(n_frames=4, width=640, height=480)
-    write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
+    digest = archive_hash(write_episode(episode, tmp_path / "set" / f"{episode.name}.zip"))
     assert cli(["debug", str(EXAMPLES / "python" / "minimal"), str(tmp_path / "set"), "-o", str(tmp_path / "out")]) == 0
-    assert "ATE" in capsys.readouterr().out
-    assert (tmp_path / "out" / "set" / episode.name / "estimate.tum").is_file()
-    assert (tmp_path / "out" / "set" / episode.name / "twist.txt").is_file()
+    assert f"set/{digest}: RPE" in capsys.readouterr().out
+    assert (tmp_path / "out" / digest / "estimate.tum").is_file()
+    assert (tmp_path / "out" / digest / "twist.txt").is_file()
     from tests.test_video import read_video
 
-    fps, frames = read_video(tmp_path / "out" / "set" / episode.name / "trajectory.mp4")
+    fps, frames = read_video(tmp_path / "out" / digest / "trajectory.mp4")
     assert fps == pytest.approx(20.0) and len(frames) == episode.num_frames
 
 

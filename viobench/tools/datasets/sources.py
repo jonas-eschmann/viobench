@@ -7,9 +7,10 @@ A source is
   (CONTA_CACHE, default ~/.cache/conta; with CONTA_ROOT=<store> it reads <store>/data/<sha1> instead, without network),
   and the archive is read in place from there like one on disk.
 
-An episode of a set in `viobench.episodes.SETS` belongs to the dataset of the set's name, however the reference is
-spelled; one referenced by any other hash to the dataset "conta". An existing path wins over a bare hash of the same
-spelling.
+An episode is its hash, the sha1 of its archive (`Episode.hash`), however it is named: a reference, or a path to the
+archive (hashed when read); an unzipped episode has none. An episode whose hash a set in `viobench.episodes.SETS` lists
+belongs to the dataset of the set's name; any other to the dataset "conta" if referenced, to its directory's name if
+on disk. An existing path wins over a bare hash of the same spelling.
 """
 from pathlib import Path
 
@@ -113,7 +114,10 @@ def _read(classified, frames):
     listed = _listed()
     for source, digest in classified:
         if digest is None:
-            yield from stored_episodes([source], frames=frames)
+            for episode in stored_episodes([source], frames=frames):
+                if episode.hash in listed:  # a published archive on disk: its set, as if referenced
+                    episode.meta["dataset"] = listed[episode.hash][0]
+                yield episode
         else:
             [path] = _resolve_all([digest], listed)
-            yield read_episode(path, frames=frames, dataset=listed[digest][0] if digest in listed else UNLISTED_DATASET)
+            yield read_episode(path, frames=frames, dataset=listed[digest][0] if digest in listed else UNLISTED_DATASET, digest=digest)

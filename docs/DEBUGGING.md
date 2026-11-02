@@ -7,7 +7,7 @@ feed: no fuel and no limits, and your host's libraries. `check` and `evaluate` r
 
 ```bash
 viobench debug solution --max-episodes 1           # the public set, like evaluate; or name episodes, directories, conta hashes
-viobench debug solution -o out                     # writes estimate.tum, twist.txt and trajectory.mp4 under out/<dataset>/<episode>/
+viobench debug solution -o out                     # writes estimate.tum, twist.txt and trajectory.mp4 under out/<hash>/ (the archive's sha1)
 ```
 
 `breakpoint()` works anywhere in your code; in VS Code, use the launch configuration *viobench: debug Python solution*.

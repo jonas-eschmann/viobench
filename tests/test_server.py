@@ -27,7 +27,7 @@ def api(tmp_path, monkeypatch):
 
 def results(rpe):
     overall = {"episodes": 2, "completed": 1, "rpe_translation_rmse_median": rpe, "fuel_per_frame_median": 4.1e6}
-    episode = {"dataset": "val", "name": "e0", "completed": False, "metrics": {"rpe_translation_rmse": NAN, "drift_per_metre": float("inf")}}
+    episode = {"hash": "0" * 40, "dataset": "val", "completed": False, "metrics": {"rpe_translation_rmse": NAN, "drift_per_metre": float("inf")}}
     return {"summary": {"overall": overall, "datasets": {"val": overall}}, "episodes": [episode]}
 
 

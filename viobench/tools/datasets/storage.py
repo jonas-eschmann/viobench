@@ -11,11 +11,13 @@
       <name>/trajectory.mp4                             attachments, if any (`viobench simulate` adds this video)
 
 Members are stored, not deflated (PNGs are compressed already), in a fixed order with fixed timestamps, so the same
-episode always gives the same bytes and the archive is content-addressable. `unzip` restores the directory layout that
-evo / ORB-SLAM / OpenVINS tooling reads; `read_episode` accepts such a directory as well as the archive.
+episode always gives the same bytes and the archive is content-addressable: its sha1 is the episode's identity
+(`Episode.hash`, what conta stores it under); an unzipped episode has none. `unzip` restores the directory layout
+that evo / ORB-SLAM / OpenVINS tooling reads; `read_episode` accepts such a directory as well as the archive.
 Timestamps are integer nanoseconds in the files and float seconds (relative to the first IMU sample) in memory. Frames
 are decoded on demand by default (`FrameSequence`), so episodes of any length cost little memory.
 """
+import hashlib
 import io
 import json
 import os
@@ -35,7 +37,7 @@ ZIP_DATE_TIME = (1980, 1, 1, 0, 0, 0)  # member timestamps are fixed: identical 
 CAM_HEADER = "#timestamp [ns],filename"
 IMU_HEADER = "#timestamp [ns],w_RS_S_x [rad s^-1],w_RS_S_y [rad s^-1],w_RS_S_z [rad s^-1],a_RS_S_x [m s^-2],a_RS_S_y [m s^-2],a_RS_S_z [m s^-2]"
 GT_HEADER = "#timestamp, p_RS_R_x [m], p_RS_R_y [m], p_RS_R_z [m], q_RS_w [], q_RS_x [], q_RS_y [], q_RS_z []"
-READ_ONLY_META = ("dataset", "path", "origin_ns")  # set by read_episode, not stored in the manifest's meta
+READ_ONLY_META = ("dataset", "path", "origin_ns", "hash")  # set by read_episode, not stored in the manifest's meta
 
 
 def _nanoseconds(seconds, origin_ns=0):
@@ -216,15 +218,25 @@ def _open(path):
     return _Archive(path) if path.is_file() else _Directory(path)
 
 
+def archive_hash(path):
+    """The sha1 of an episode archive: the episode's identity, the hash conta stores the archive under."""
+    digest = hashlib.sha1()
+    with open(path, "rb") as file:
+        for chunk in iter(lambda: file.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
 def _read_csv(data):
     rows = np.genfromtxt(io.BytesIO(data), delimiter=",", comments="#", dtype=np.float64, ndmin=2)
     stamps = np.genfromtxt(io.BytesIO(data), delimiter=",", comments="#", usecols=0, dtype=np.int64, ndmin=1)
     return stamps, rows
 
 
-def read_episode(path, frames="lazy", dataset=None):
+def read_episode(path, frames="lazy", dataset=None, digest=None):
     """path: an episode archive or an unzipped episode directory.
-    frames: "lazy" (decode PNGs on demand, default), "memory" (load everything), "none" (metadata only)."""
+    frames: "lazy" (decode PNGs on demand, default), "memory" (load everything), "none" (metadata only).
+    digest: the archive's sha1 when the caller has it (a conta reference); otherwise computed for an archive."""
     import yaml
 
     path = Path(path)
@@ -274,6 +286,7 @@ def read_episode(path, frames="lazy", dataset=None):
     meta["dataset"] = dataset or path.parent.name
     meta["path"] = str(path)
     meta["origin_ns"] = origin_ns
+    meta["hash"] = digest or (archive_hash(path) if path.is_file() else None)
     return Episode(manifest["name"], config, frame_times, frame_data, imu, ground_truth, T_body_camera, meta)
 
 

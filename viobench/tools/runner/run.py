@@ -22,7 +22,7 @@ from .score import write_estimates
 
 @dataclass
 class EpisodeReport:
-    name: str
+    hash: str | None  # the sha1 of the episode's archive, its identity (Episode.hash); None for one without an archive
     dataset: str
     frames: int
     frames_attempted: int  # includes a failing step, excludes frames held after the failure
@@ -93,7 +93,7 @@ def run_episode(wasm_path, episode, engine, limits, log_dir):
     per_frame_fuel = fuel[:fed]
     per_frame_wall = wall[:max(fed, 1)]
     return EpisodeReport(
-        name=episode.name,
+        hash=episode.hash,
         dataset=episode.dataset,
         frames=episode.num_frames,
         duration_s=float(episode.duration),
@@ -158,15 +158,20 @@ def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_
     output_dir.mkdir(parents=True, exist_ok=True)
     reports = []
     frame_fuels = []
+    hashes = set()
     started = time.perf_counter()
     for episode in islice(as_dataset(dataset), max_episodes):  # never asks for one more: it may be a download
-        log_dir = output_dir / "logs" / episode.dataset / episode.name
+        if episode.hash in hashes:  # one episode (copies of an archive are one): it would count twice, in one log directory
+            raise ValueError(f"episode {episode.hash} given twice")
+        if episode.hash is not None:
+            hashes.add(episode.hash)
+        log_dir = output_dir / "logs" / episode.key
         report, estimates, fuel = run_episode(wasm_path, episode, engine, limits, log_dir)
         reports.append(report)
         frame_fuels.append(fuel)
         write_estimates(log_dir, episode.frame_times, estimates)
         m = report.metrics
-        log(f"{episode.dataset}/{episode.name}: {'ok' if report.completed else 'FAILED'} RPE {m['rpe_translation_rmse']:.3f} m/1 s  ATE {m['ate_rmse']:.3f} m  "
+        log(f"{episode.dataset}/{episode.key}: {'ok' if report.completed else 'FAILED'} RPE {m['rpe_translation_rmse']:.3f} m/1 s  ATE {m['ate_rmse']:.3f} m  "
             f"rot {np.degrees(m['rotation_rmse']):.1f} deg  vel {m['velocity_rmse']:.3f} m/s  held {m['held']}  fuel/frame max {report.fuel_per_frame_max:,.0f} (p95 {report.fuel_per_frame_p95:,.0f})  "
             f"wall/frame {report.wall_per_frame_median_ms:.1f} ms" + (f"  [{report.failure}]" if report.failure else ""))
         if save_video:

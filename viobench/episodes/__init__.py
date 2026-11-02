@@ -3,10 +3,11 @@
     viobench evaluate solution.wasm          # evaluates `public`, downloaded once into the conta cache
     viobench evaluate solution.wasm conta:<sha1> data/val
 
-A set is a list of {"description", "hash"} entries (the sha1 of an archive; conta prints the description in its log
-lines): the `metadata.json` of the conta shard that holds the archives, copied verbatim. `SETS` names the sets, and that
-name is the dataset of their episodes in reports, however a reference to them is spelled. The submission server
-evaluates `viobench.tools.server.worker.EPISODES`.
+A set is a list of {"description", "hash"} entries: the `metadata.json` of the conta shard that holds the archives,
+copied verbatim. The hash, the sha1 of an archive, is the episode: reports, logs and the server know it by nothing
+else. The description only labels conta's log lines. `SETS` names the sets, and that name is the dataset of their
+episodes in reports, however they are named (a reference, a path to the archive). The submission server evaluates
+`viobench.tools.server.worker.EPISODES`.
 """
 
 # conta shard viobench-public: the validation episodes, HyperDrone flights through ProcTHOR-Train-1

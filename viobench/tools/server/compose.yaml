@@ -1,17 +1,18 @@
 # The submission server: the REST API (app) and the evaluation worker, sharing the server-data volume; `episodes`,
 # which downloads the worker's evaluation episodes (worker.EPISODES) into the conta-cache volume before the worker starts
-# (the worker has no network); and a Cloudflare tunnel in front of the app. From the viobench repository root:
+# (the worker has no network); and a Cloudflare tunnel in front of the app. From the viobench repository root, with
+# TUNNEL_TOKEN (below) in viobench/tools/server/.env (gitignored, chmod 600; write it with an editor, not on the command
+# line, which keeps it in the shell history):
 #
-#   (umask 077; printf %s "<tunnel token>" > viobench/tools/server/tunnel-token)  # once; see the tunnel below
-#   sudo chown 65532 viobench/tools/server/tunnel-token  # cloudflared's uid: outside swarm, secrets keep the host owner
 #   docker compose -f viobench/tools/server/compose.yaml up -d --build
 #   docker compose -f viobench/tools/server/compose.yaml exec app python -m viobench.tools.server.teams add "team a"
 #
 # After changing EPISODES, the same `up -d --build` fetches the new episodes and restarts the worker.
 # No port is published: the tunnel service connects out to Cloudflare, which terminates TLS. Create a tunnel in the
 # Cloudflare dashboard (Zero Trust > Networks > Tunnels), give it a public hostname with service http://app:8000 and put
-# its token in the gitignored tunnel-token file (a secret: not in the environment or `docker inspect`; rotate it in the
-# dashboard if it leaks). Cloudflare's request body limit (100 MB on Free and Pro) caps the uploads.
+# its token in TUNNEL_TOKEN. Compose copies it into the tunnel container as a secret file, not a bind mount, so a daemon
+# in a VM without host mounts works too; it stays out of the container's environment and `docker inspect`. Rotate it in
+# the dashboard if it leaks. Cloudflare's request body limit (100 MB on Free and Pro) caps the uploads.
 name: viobench-server
 
 x-server: &server
@@ -34,7 +35,7 @@ services:
     restart: unless-stopped
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
-    secrets: [tunnel_token]
+    secrets: [{source: tunnel_token, uid: "65532", gid: "65532", mode: 0400}]  # cloudflared's user
     depends_on: [app]
 
   episodes:
@@ -61,4 +62,4 @@ volumes:
 
 secrets:
   tunnel_token:
-    file: tunnel-token
+    environment: TUNNEL_TOKEN  # from .env
