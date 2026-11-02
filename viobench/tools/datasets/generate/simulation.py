@@ -5,7 +5,7 @@
         ...
 
 Needs `pip install hyperdrone` and a GPU (the environment module is JIT-compiled per configuration on first use;
-the rendered spec header's hash is the key, so every distinct resolution, duration or route length compiles once).
+the rendered spec header's hash is the key, so every distinct duration or route length compiles once).
 Frames are RGB uint8: by default each one is the render at its time (`nominal_camera`); another camera model plugs in
 through `simulate(camera=...)`. Solutions receive frames as stored or rescaled (Episode.adapt). The episode length is
 `SimConfig.duration_seconds` (default one minute); frames are spooled to a temporary directory while a round of
@@ -27,7 +27,7 @@ import numpy as np
 from ... import abi
 from ...abi.config import make_config, pinhole_intrinsics
 from ...geometry import matrix_to_quaternion, quaternion_to_matrix
-from ..episode import Episode, FrameSequence
+from ..episode import STORAGE_RESOLUTION, Episode, FrameSequence, validate_storage_resolution
 from ..regularize import regularize
 from ..storage import PNG_COMPRESSION, read_png
 
@@ -47,8 +47,8 @@ MIN_WAYPOINTS = 8
 
 @dataclass(frozen=True)
 class SimConfig:
-    width: int = 640  # stored resolution; the harness resamples to what a solution asks for (320x240 by default)
-    height: int = 480
+    width: int = STORAGE_RESOLUTION[0]
+    height: int = STORAGE_RESOLUTION[1]
     instances: int = PARALLEL_FLIGHTS  # flights rendered in parallel (one reset = one round); part of the JIT key
     frame_rate_hz: float = 20.0
     duration_seconds: float = 60.0  # flight time per episode; frames = duration x frame rate (HyperDrone's own step limit is informational)
@@ -57,6 +57,9 @@ class SimConfig:
     hold_seconds: float = 1.0  # hover before the route starts
     spool: str | None = None  # directory for the frames while a batch renders (default: $VIOBENCH_SPOOL or the system temp dir)
     fov: float = DEFAULT_FOV_DEGREES  # base horizontal FOV in degrees, before per-episode randomization
+
+    def __post_init__(self):
+        validate_storage_resolution((self.width, self.height))
 
     @property
     def num_waypoints(self):

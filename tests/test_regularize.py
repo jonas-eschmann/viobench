@@ -30,7 +30,7 @@ def test_regular_episode_passes_through():
 
 
 def test_dropped_frame_repeats_the_previous_one(tmp_path):
-    episode = synthetic_episode(n_frames=8)
+    episode = synthetic_episode(n_frames=8, width=640, height=480)
     keep = np.r_[0:3, 4:8]
     dropped = dataclasses.replace(episode, frame_times=episode.frame_times[keep], frames=episode.frames[keep])
     with pytest.raises(AssertionError):

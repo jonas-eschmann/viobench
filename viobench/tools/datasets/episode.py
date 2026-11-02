@@ -14,6 +14,15 @@ from ..geometry import (
 )
 
 
+STORAGE_RESOLUTION = (640, 480)
+
+
+def validate_storage_resolution(resolution):
+    if tuple(resolution) != STORAGE_RESOLUTION:
+        width, height = resolution
+        raise ValueError(f"episodes must be stored at 640x480, got {width}x{height}; regenerate the dataset at 640x480")
+
+
 class FrameSequence:
     """Frames decoded on demand: behaves like a read-only (N, H, W[, C]) uint8 array for len/indexing/iteration/shape.
 
@@ -169,15 +178,12 @@ class Episode:
         """(guest config, frames) for a solution that declared 320x240 or 640x480 (docs/ABI.md, "step arguments").
 
         Frames are always RGB (H, W, 3): a grayscale source arrives with its gray value in all three channels, and
-        nothing says so. Downscaling averages areas, upscaling interpolates bilinearly; either way the intrinsics are
-        rescaled with the pixel-centre convention. Streamed frames stay streamed: the conversion is applied per frame
-        as the runner consumes them."""
+        nothing says so. Stored frames are 640x480; downscaling averages areas and rescales intrinsics with the pixel-centre convention. Streamed frames are converted as the runner consumes them."""
         resolution = self.resolution if resolution is None else (int(resolution[0]), int(resolution[1]))
         if resolution not in abi.SUPPORTED_RESOLUTIONS:
             raise ValueError(f"resolution must be one of {abi.SUPPORTED_RESOLUTIONS}, got {resolution}")
         source_resolution = self.resolution
-        if source_resolution not in abi.SUPPORTED_RESOLUTIONS:
-            raise ValueError(f"{self.name} is stored at {source_resolution[0]}x{source_resolution[1]}; sets must be stored at 640x480 (or 320x240)")
+        validate_storage_resolution(source_resolution)
         camera = self.config["camera"]
         fx, fy, cx, cy = camera["fx"], camera["fy"], camera["cx"], camera["cy"]
         transforms = []
@@ -186,8 +192,7 @@ class Episode:
             scale_x, scale_y = width / source_resolution[0], height / source_resolution[1]
             import cv2  # not at the top: the CLI loads this module, and cv2 stays out of its startup
 
-            interpolation = cv2.INTER_AREA if scale_x < 1 else cv2.INTER_LINEAR
-            transforms.append(lambda f: cv2.resize(f, (width, height), interpolation=interpolation))
+            transforms.append(lambda f: cv2.resize(f, (width, height), interpolation=cv2.INTER_AREA))
             fx, fy = fx * scale_x, fy * scale_y
             cx, cy = (cx + 0.5) * scale_x - 0.5, (cy + 0.5) * scale_y - 0.5
         if self.channels == 1:  # after the resize: one channel to resample instead of three

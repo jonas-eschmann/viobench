@@ -26,7 +26,7 @@ class Solution:
 
 
 def test_evaluate_report(engine, runtime_path, solution_dir, tmp_path):
-    episode = synthetic_episode(n_frames=12, width=320, height=240)
+    episode = synthetic_episode(n_frames=12, width=640, height=480)
     dataset = tmp_path / "set"
     write_episode(episode, dataset / f"{episode.name}.zip")
     gt = episode.ground_truth_state()
@@ -53,7 +53,7 @@ def test_evaluate_report(engine, runtime_path, solution_dir, tmp_path):
 
 @pytest.mark.parametrize("failure", ["raise RuntimeError('flaky')", "return [float('nan')] * 13"])
 def test_a_failed_step_ends_the_episode(failure, engine, runtime_path, solution_dir, tmp_path):
-    episode = synthetic_episode(n_frames=6, width=320, height=240)
+    episode = synthetic_episode(n_frames=6, width=640, height=480)
     write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
     flaky = f"""
 class Solution:
@@ -76,14 +76,14 @@ class Solution:
     held = np.tile([0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0], (6, 1))
     held[:, 0] = [1, 2, 2, 2, 2, 2]  # the frames from the failure on repeat the last pose, standing still
     held[:2, 7] = 0.5
-    stored = read_episode(tmp_path / "set" / episode.name, frames="none")  # the ground truth the runner scored against
+    stored = read_episode(tmp_path / "set" / f"{episode.name}.zip", frames="none")  # the ground truth the runner scored against
     expected = evaluate_trajectory(stored.ground_truth_state(), held, stored.frame_times)
     assert episode_report["metrics"]["held"] == 4 and episode_report["metrics"]["ate_rmse"] == expected.ate_rmse
 
 
 def test_evaluate_delivers_rgb_from_gray_and_rgb_sets(engine, runtime_path, solution_dir, tmp_path):
-    gray = synthetic_episode(n_frames=6, width=320, height=240)
-    rgb = synthetic_episode(n_frames=6, width=320, height=240, channels=3)
+    gray = synthetic_episode(n_frames=6, width=640, height=480)
+    rgb = synthetic_episode(n_frames=6, width=640, height=480, channels=3)
     write_episode(gray, tmp_path / "gray" / f"{gray.name}.zip")
     write_episode(rgb, tmp_path / "rgb" / f"{rgb.name}.zip")
     probe = """
@@ -128,20 +128,13 @@ class Solution:
         estimate = np.loadtxt(tmp_path / name / "logs" / "set" / episode.name / "estimate.tum")
         assert (estimate[0, 1], estimate[0, 2]) == size and report["summary"]["overall"]["completed"] == 1
         assert estimate[0, 3] == pytest.approx(episode.config["camera"]["fx"] * size[0] / 640)
-    # a set stored at 320x240 serves a 640x480 solution: the harness upscales
-    small = synthetic_episode(n_frames=4, width=320, height=240)
-    write_episode(small, tmp_path / "small" / f"{small.name}.zip")
-    report = evaluate(tmp_path / "vga.wasm", [tmp_path / "small"], output_dir=tmp_path / "upscaled", engine=engine, log=lambda *a: None)
-    estimate = np.loadtxt(tmp_path / "upscaled" / "logs" / "small" / small.name / "estimate.tum")
-    assert (estimate[0, 1], estimate[0, 2]) == (640, 480) and report["summary"]["overall"]["completed"] == 1
-    assert estimate[0, 3] == pytest.approx(small.config["camera"]["fx"] * 2)
 
 
 def test_evaluate_accepts_an_in_memory_dataset(engine, runtime_path, solution_dir, tmp_path):
     """The ad-hoc provider path: a list of Episodes, nothing on disk (what a library caller or the simulator feeds the runner)."""
     import io
 
-    episode = synthetic_episode(n_frames=5, width=320, height=240)
+    episode = synthetic_episode(n_frames=5, width=640, height=480)
     episode.meta["dataset"] = "adhoc"
     gt = episode.ground_truth_state()
     buffer = io.BytesIO()
@@ -157,12 +150,12 @@ def test_streamed_frames_from_disk(tmp_path):
     from viobench.tools.datasets.episode import FrameSequence
     from viobench.tools.datasets.storage import episodes, read_episode
 
-    episode = synthetic_episode(n_frames=6, width=320, height=240)
+    episode = synthetic_episode(n_frames=6, width=640, height=480)
     write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
     lazy = read_episode(tmp_path / "set" / f"{episode.name}.zip")
-    assert isinstance(lazy.frames, FrameSequence) and lazy.frames.shape == (6, 240, 320) and lazy.channels == 1
+    assert isinstance(lazy.frames, FrameSequence) and lazy.frames.shape == (6, 480, 640) and lazy.channels == 1
     np.testing.assert_array_equal(lazy.frames[3], episode.frames[3])
     np.testing.assert_array_equal(np.asarray(lazy.frames), episode.frames)
-    config, frames = lazy.adapt()
+    config, frames = lazy.adapt((320, 240))
     assert isinstance(frames, FrameSequence) and frames.shape == (6, 240, 320, 3)
     assert next(iter(episodes([tmp_path / "set"]))).dataset == "set"

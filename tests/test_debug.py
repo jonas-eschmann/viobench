@@ -24,7 +24,7 @@ def test_direct_run_matches_the_sandbox(engine, runtime_path, tmp_path):
     from viobench.solution.runtime.python.bundler.bundle import bundle
     from viobench.tools.runner.run import evaluate
 
-    episode = synthetic_episode(n_frames=30, width=320, height=240)  # 1.5 s: dead reckoning calibrates on the first 0.5 s (identity), then estimates
+    episode = synthetic_episode(n_frames=30, width=640, height=480)  # 1.5 s: dead reckoning calibrates on the first 0.5 s (identity), then estimates
     dataset = tmp_path / "set"
     write_episode(episode, dataset / f"{episode.name}.zip")
     solution = direct.PythonSolution(EXAMPLES / "python" / "dead_reckoning")
@@ -79,7 +79,7 @@ def test_direct_frame_width_and_host_solution_bundle(solution_dir, tmp_path):
 
 
 def test_direct_cli(tmp_path, capsys):
-    episode = synthetic_episode(n_frames=4, width=320, height=240)
+    episode = synthetic_episode(n_frames=4, width=640, height=480)
     write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
     assert cli(["debug", str(EXAMPLES / "python" / "minimal"), str(tmp_path / "set"), "-o", str(tmp_path / "out")]) == 0
     assert "ATE" in capsys.readouterr().out
@@ -129,7 +129,7 @@ def test_native_host_debug_build(tmp_path):
     assert "debug" in configure.stdout
     compile_ = subprocess.run(["cmake", "--build", str(build)], capture_output=True, text=True)
     assert compile_.returncode == 0, compile_.stderr
-    episode = synthetic_episode(n_frames=5, width=320, height=240)
+    episode = synthetic_episode(n_frames=5, width=640, height=480)
     write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
     feed = write_feed(episode, tmp_path / "feed")
     tum = tmp_path / "estimate.tum"

@@ -26,8 +26,7 @@ Little-endian, row-major. `frame` and `imu` are overwritten for the next step an
 during `init`: copy what you keep.
 
 - `t`: frame timestamp in seconds, mid-exposure.
-- `frame`: `height × width × 3` `uint8`, RGB. `frame_width` selects 320 × 240 or 640 × 480; the smaller one saves
-  fuel. Rectified pinhole camera, no distortion.
+- `frame`: `height × width × 3` `uint8`, RGB. Episodes are stored at 640 × 480. `frame_width` selects the full frame or an area-averaged 320 × 240 downsample with matching intrinsics; the smaller one saves fuel. Rectified pinhole camera, no distortion.
 - `imu`: `imu_count × 7` `f64`, rows `[t, ax, ay, az, gx, gy, gz]` with `t_prev_frame < t ≤ t_frame` (the first frame:
   one frame interval): specific force in m/s² (gravity included) and angular rate in rad/s, in the IMU frame. Frames
   are 20 Hz and the IMU 200 Hz, so `imu_count` is always 10; use the timestamps for the spacing.

@@ -6,7 +6,7 @@ BUNDLE_MAGIC = b"VIOBENCHBUNDLE1\0"  # 16-byte head of the runtime's bundle desc
 CHANNELS = 3  # frames are always RGB (H, W, 3); a grayscale source arrives with its gray value in all three channels
 FRAME_WIDTH = "frame_width"  # optional export (native) / class attribute of Solution (Python): 640 opts into 640x480
 DEFAULT_RESOLUTION = (320, 240)  # (width, height) unless the solution declares a frame_width of 640
-SUPPORTED_RESOLUTIONS = ((320, 240), (640, 480))  # also the only resolutions a set may be stored at; either serves both
+SUPPORTED_RESOLUTIONS = ((320, 240), (640, 480))
 SOLUTION_MODULE = "solution"  # the entry point is always class Solution in solution.py (or solution/__init__.py)
 SOLUTION_CLASS = "Solution"
 

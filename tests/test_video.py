@@ -74,7 +74,7 @@ def test_video_keeps_previous_output_if_frame_loading_fails(tmp_path):
 
 @pytest.mark.parametrize("no_video", [False, True])
 def test_simulate_cli_writes_video_in_each_episode_by_default(tmp_path, monkeypatch, no_video):
-    episodes = [synthetic_episode(n_frames=3, rate=10.0, channels=3) for _ in range(2)]  # the provider yields exactly --episodes per scene
+    episodes = [synthetic_episode(n_frames=3, rate=10.0, width=640, height=480, channels=3) for _ in range(2)]  # the provider yields exactly --episodes per scene
     for index, episode in enumerate(episodes):
         episode.name = f"sim-{index}"
         episode.config["camera"]["horizontal_fov_degrees"] = 60.0
@@ -124,7 +124,7 @@ IDENTITY = """
 
 @pytest.mark.parametrize("output", [False, True])
 def test_evaluate_cli_only_writes_video_with_explicit_output(tmp_path, monkeypatch, output):
-    episode = synthetic_episode(n_frames=4, width=320, height=240)
+    episode = synthetic_episode(n_frames=4, width=640, height=480)
     write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
     wasm = tmp_path / "identity.wasm"
     wasm.write_bytes(wasmtime.wat2wasm(IDENTITY))
@@ -145,7 +145,7 @@ def test_evaluate_cli_only_writes_video_with_explicit_output(tmp_path, monkeypat
 
 
 def test_evaluate_failure_still_produces_complete_video(tmp_path):
-    episode = synthetic_episode(n_frames=4, width=320, height=240)
+    episode = synthetic_episode(n_frames=4, width=640, height=480)
     write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
     wasm = tmp_path / "broken.wasm"
     # No solution exports: evaluation fails before it can produce any poses.
@@ -157,7 +157,7 @@ def test_evaluate_failure_still_produces_complete_video(tmp_path):
 
 
 def test_debug_without_output_does_not_render_video(tmp_path, monkeypatch):
-    episode = synthetic_episode(n_frames=4, width=320, height=240)
+    episode = synthetic_episode(n_frames=4, width=640, height=480)
     write_episode(episode, tmp_path / "set" / f"{episode.name}.zip")
     solution = Path(__file__).resolve().parents[1] / "viobench/solution/examples/python/minimal"
 

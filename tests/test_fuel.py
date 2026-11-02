@@ -46,10 +46,10 @@ def metered_module(tmp_path, failure="", init_status=0):
 
 
 def workload(dataset, name, counts):
-    episode = synthetic_episode(n_frames=len(counts), width=320, height=240, channels=3)
+    episode = synthetic_episode(n_frames=len(counts), width=640, height=480, channels=3)
     episode.meta["dataset"] = dataset
     episode.name = name
-    episode.frames[:, 0, 0, 0] = counts
+    episode.frames[:, :2, :2, 0] = np.asarray(counts)[:, None, None]
     return episode
 
 

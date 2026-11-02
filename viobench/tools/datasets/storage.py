@@ -3,7 +3,7 @@
     <name>.zip
       <name>/episode.json                               our config + metadata (format, name, frame count)
       <name>/mav0/cam0/data.csv                         "#timestamp [ns],filename"
-      <name>/mav0/cam0/data/<timestamp ns>.png          8-bit RGB or grayscale PNG
+      <name>/mav0/cam0/data/<timestamp ns>.png          640x480 8-bit RGB or grayscale PNG
       <name>/mav0/cam0/sensor.yaml                      Kalibr-style intrinsics and T_BS (camera in body)
       <name>/mav0/imu0/data.csv                         "#timestamp [ns],w_RS_S_x [rad s^-1],...,a_RS_S_x [m s^-2],..." (gyro first, like EuRoC)
       <name>/mav0/imu0/sensor.yaml                      noise densities, rate
@@ -19,12 +19,13 @@ are decoded on demand by default (`FrameSequence`), so episodes of any length co
 import io
 import json
 import os
+import struct
 import zipfile
 from pathlib import Path
 
 import numpy as np
 
-from .episode import Episode, FrameSequence
+from .episode import Episode, FrameSequence, validate_storage_resolution
 
 # cv2 and yaml are imported where they are used: the CLI loads this module, and they stay out of its startup
 
@@ -67,6 +68,10 @@ def read_png(path, channels):
     return decode_png(Path(path).read_bytes(), channels)
 
 
+def _validate_png_resolution(data):
+    validate_storage_resolution(struct.unpack_from(">II", data, 16))
+
+
 def write_episode(episode, path, origin_ns=None, attachments=None):
     """Writes the episode as the archive `path` (a .zip, replaced atomically when complete).
 
@@ -78,6 +83,9 @@ def write_episode(episode, path, origin_ns=None, attachments=None):
     path = Path(path)
     if path.suffix != ".zip":
         raise ValueError(f"an episode is stored as one .zip archive, got {path}")
+    image = episode.config["image"]
+    validate_storage_resolution((image["width"], image["height"]))
+    validate_storage_resolution(episode.resolution)
     if origin_ns is None:
         origin_ns = int(episode.meta.get("origin_ns", 0))
     root = path.stem + "/"
@@ -94,7 +102,6 @@ def write_episode(episode, path, origin_ns=None, attachments=None):
         gt_lines.append(f"{stamp},{x:.9g},{y:.9g},{z:.9g},{qw:.12g},{qx:.12g},{qy:.12g},{qz:.12g}")
 
     camera = episode.config["camera"]
-    image = episode.config["image"]
     cam_yaml = {
         "sensor_type": "camera",
         "comment": "camera in body/IMU frame; intrinsics as in episode.json",
@@ -143,7 +150,9 @@ def write_episode(episode, path, origin_ns=None, attachments=None):
             add("mav0/cam0/sensor.yaml", yaml.safe_dump(cam_yaml, sort_keys=False))
             add("mav0/cam0/data.csv", "\n".join(camera_lines) + "\n")
             for index, stamp in enumerate(frame_ns):
-                add(f"mav0/cam0/data/{stamp}.png", encoded(index) if encoded is not None else encode_png(episode.frames[index]))
+                png = encoded(index) if encoded is not None else encode_png(episode.frames[index])
+                _validate_png_resolution(png)
+                add(f"mav0/cam0/data/{stamp}.png", png)
             add("mav0/imu0/sensor.yaml", yaml.safe_dump(imu_yaml, sort_keys=False))
             add("mav0/imu0/data.csv", "\n".join(imu_lines) + "\n")
             add("mav0/state_groundtruth_estimate0/data.csv", "\n".join(gt_lines) + "\n")
@@ -225,6 +234,13 @@ def read_episode(path, frames="lazy", dataset=None):
         tree.close()
         raise ValueError(f"{path}: unsupported episode format {manifest.get('format')}")
     config = manifest["config"]
+    try:
+        validate_storage_resolution((config["image"]["width"], config["image"]["height"]))
+        cam_yaml = yaml.safe_load(tree.read_bytes("mav0/cam0/sensor.yaml").decode("utf-8"))
+        validate_storage_resolution(cam_yaml["resolution"])
+    except Exception:
+        tree.close()
+        raise
     origin_ns = int(manifest["origin_ns"])
     names = np.genfromtxt(io.BytesIO(tree.read_bytes("mav0/cam0/data.csv")), delimiter=",", comments="#", dtype=str, ndmin=2, encoding="utf-8")
     frame_ns = names[:, 0].astype(np.int64)
@@ -237,18 +253,23 @@ def read_episode(path, frames="lazy", dataset=None):
     imu = np.column_stack([(imu_ns - origin_ns) / 1e9, imu_rows[:, 4:7], imu_rows[:, 1:4]])  # file: gyro then accel
     gt_ns, gt_rows = _read_csv(tree.read_bytes("mav0/state_groundtruth_estimate0/data.csv"))
     ground_truth = np.column_stack([(gt_ns - origin_ns) / 1e9, gt_rows[:, 1:4], gt_rows[:, 5:8], gt_rows[:, 4]])  # file: qw first
-    cam_yaml = yaml.safe_load(tree.read_bytes("mav0/cam0/sensor.yaml").decode("utf-8"))
     T_body_camera = np.asarray(cam_yaml["T_BS"]["data"], dtype=float).reshape(4, 4)
 
     if frames == "none":
         tree.close()
         frame_data = FrameSequence(lambda index: (_ for _ in ()).throw(RuntimeError("frames were not loaded")), len(members), shape)
     else:
-        frame_data = FrameSequence(lambda index: decode_png(tree.read_bytes(members[index]), channels), len(members), shape,
-                                   encoded=lambda index: tree.read_bytes(members[index]))
+        def encoded(index):
+            png = tree.read_bytes(members[index])
+            _validate_png_resolution(png)
+            return png
+
+        frame_data = FrameSequence(lambda index: decode_png(encoded(index), channels), len(members), shape, encoded=encoded)
         if frames == "memory":
-            frame_data = frame_data.materialize()
-            tree.close()
+            try:
+                frame_data = frame_data.materialize()
+            finally:
+                tree.close()
     meta = dict(manifest["meta"])
     meta["dataset"] = dataset or path.parent.name
     meta["path"] = str(path)
