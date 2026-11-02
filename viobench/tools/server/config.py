@@ -3,8 +3,8 @@ worker (restart both after editing it). Every key is required, `limits` with eve
 `viobench.tools.runner.sandbox.Limits`, which also takes its defaults from there: local runs apply the server's limits.
 GET /config serves it as loaded.
 
-Deployment details stay in the environment: VIOBENCH_SERVER_DIR (uploads, reports, sqlite) and VIOBENCH_DATASETS (the
-worker's evaluation sets).
+Deployment details stay in the environment: VIOBENCH_SERVER_DIR (uploads, reports, sqlite) and CONTA_CACHE (where the
+worker's episodes are cached). What the worker evaluates is code: `worker.EPISODES`.
 """
 import json
 from dataclasses import asdict, dataclass, fields

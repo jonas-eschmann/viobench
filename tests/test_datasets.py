@@ -442,3 +442,67 @@ def test_disk_frames_downsample_lazily_and_preserve_full_resolution(tmp_path, mo
     assert (full_config["fx"], full_config["fy"], full_config["cx"], full_config["cy"]) == (470.0, 462.0, 303.25, 227.75)
     np.testing.assert_array_equal(config["T_cam_imu"], full_config["T_cam_imu"])
     assert loaded.config == episode.config and path.read_bytes() == before
+
+
+# --- sources: paths and conta references ------------------------------------------------------------------------
+
+def stored_archive(tmp_path, conta_store, name="synthetic"):
+    """An episode archive under tmp_path/set and the sha1 under which the conta store holds it."""
+    import dataclasses
+
+    episode = dataclasses.replace(synthetic_episode(width=640, height=480), name=name)
+    path = write_episode(episode, tmp_path / "set" / f"{name}.zip")
+    return episode, path, conta_store(path)
+
+
+def test_sources_read_paths_and_conta_references_alike(tmp_path, conta_store):
+    from viobench.tools.datasets import sources
+
+    episode, path, digest = stored_archive(tmp_path, conta_store)
+    read = list(sources.episodes([tmp_path / "set", digest, f"conta:{digest.upper()}", {"description": "x", "hash": digest}]))
+    assert [e.dataset for e in read] == ["set", "conta", "conta", "conta"] and {e.name for e in read} == {episode.name}
+    np.testing.assert_array_equal(np.asarray(read[1].frames), np.asarray(read[0].frames))
+    assert sources.argument({"hash": digest.upper()}) == f"conta:{digest}" and sources.reference_hash(str(path)) is None
+
+
+def test_a_listed_hash_belongs_to_its_set(tmp_path, conta_store, monkeypatch):
+    from viobench import episodes as published
+    from viobench.tools.datasets import sources
+
+    _, _, digest = stored_archive(tmp_path, conta_store)
+    val = [{"description": "val/synthetic.zip", "hash": digest}]
+    monkeypatch.setattr(published, "SETS", {"val": val})
+    monkeypatch.setattr(published, "public", val)
+    assert [e.dataset for e in sources.episodes([f"conta:{digest}"])] == ["val"]
+    assert [e.dataset for e in sources.from_arguments([])] == ["val"]  # no sources: the public set
+
+
+def test_sources_are_checked_when_named_and_downloaded_when_read(tmp_path, conta_store):
+    import conta
+
+    from viobench.tools.datasets import sources
+
+    with pytest.raises(FileNotFoundError, match="neither an episode"):
+        sources.episodes([tmp_path / "missing"])
+    with pytest.raises(ValueError, match="malformed conta reference"):
+        sources.episodes(["conta:1234"])
+    _, path, digest = stored_archive(tmp_path, conta_store)
+    read = sources.episodes([digest, "0" * 40])  # the second is a hash the store does not hold
+    assert next(read).name == "synthetic"
+    with pytest.raises(conta.ContaError):
+        next(read)
+    assert sources.resolve([digest, path])[1] == path
+    with pytest.raises(conta.ContaError):
+        sources.resolve([digest, "0" * 40])
+
+
+def test_published_sets_are_well_formed():
+    from viobench import episodes as published
+    from viobench.tools.datasets.sources import reference_hash
+
+    assert published.SETS["public"] is published.public and published.public
+    for name, entries in published.SETS.items():
+        hashes = [entry["hash"] for entry in entries]
+        assert all(reference_hash(entry) == entry["hash"] for entry in entries), name  # bare lower-case sha1s
+        assert len(set(hashes)) == len(hashes) and len({entry["description"] for entry in entries}) == len(entries), name
+    assert all(entry["description"].startswith("viobench-public/") for entry in published.public)

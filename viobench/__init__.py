@@ -4,6 +4,7 @@ Two halves, split at the WebAssembly boundary:
 - `viobench.tools`    host side — runs, scores, serves: `abi` (the contract), `datasets`, `runner`, `server`, `cli`.
 - `viobench.solution` guest side — how a solution .wasm is built: toolchain, runtime/{native,python}, examples.
                      Mostly files, not modules; the Python runtime's bundler is the one importable piece.
+`viobench.episodes` lists the published episode sets as conta references (`public`: what `viobench evaluate` runs by default).
 
 `import viobench` gives the host-side essentials: Engine, Sandbox, Limits, StepResult, Episode, read_episode, evaluate.
 """

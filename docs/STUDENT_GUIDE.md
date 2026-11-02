@@ -17,8 +17,10 @@ The workspace holds your code in `solution/` (the minimal example to start from)
 (`runtime/python/README.md`, `runtime/native/README.md`). Everything built lands in `build/`. Other starting points
 (`dead_reckoning`, `klt_imu`, `tiny_cnn`) are in `viobench/solution/examples/` of the clone: copy one over `solution/`.
 
-Download the validation episodes from the course page into `data/val`: one `.zip` per episode, read in place (`unzip`
-only if another tool needs the EuRoC directory layout). Generate training data on the lab GPUs:
+The validation episodes are the public set, `viobench.episodes.public`: `viobench evaluate` and `viobench debug` use it
+when given no episodes, downloading each archive (~200 MB) once into conta's cache (`~/.cache/conta`, or `$CONTA_CACHE`).
+An episode is one `.zip`, read in place; `conta <sha1>` (hashes in `viobench/episodes/__init__.py`) prints its path,
+for tools that take a path or need the EuRoC directory layout (`unzip`). Generate training data on the lab GPUs:
 
 ```bash
 viobench simulate -o data/train --episodes 200 --seed 1                          # ~2 min per 8 one-minute episodes
@@ -38,9 +40,10 @@ keeps the FOV fixed at the base value.
 ```bash
 viobench bundle solution -o solution.wasm        # after every edit; Python: the first time also builds the runtime (10–15 min)
 viobench check solution.wasm                     # a few synthetic frames: errors, fuel per step
-viobench evaluate solution.wasm data/val         # metrics and fuel; for unseen data, simulate into another directory first
-viobench evaluate solution.wasm data/val -o report-solution   # also save trajectory videos
-viobench debug solution data/val                 # in-process, with breakpoint() (docs/DEBUGGING.md)
+viobench evaluate solution.wasm                  # metrics and fuel on the public set
+viobench evaluate solution.wasm -o report-solution   # also save trajectory videos
+viobench evaluate solution.wasm data/train-short # or on other episodes: paths, directories, conta hashes
+viobench debug solution                          # in-process, with breakpoint() (docs/DEBUGGING.md)
 ```
 
 `bundle` embeds Python code into the runtime and compiles native code (a `CMakeLists.txt`) with wasi-sdk. `evaluate`
@@ -58,8 +61,8 @@ curl -H "Authorization: Bearer $TOKEN" https://<server>/submissions/<id>     # o
 curl -H "Authorization: Bearer $TOKEN" https://<server>/config               # the rules: quota, limits, timeouts
 ```
 
-The server evaluates on unpublished episodes and returns metrics only, no logs; `viobench evaluate` applies the same
-limits, so reproduce failures locally. Quota (see `/config`): one submission at a time, one per day (from midnight
+The server evaluates on `EPISODES` in `viobench/tools/server/worker.py` (for now the public set) and returns metrics
+only, no logs; `viobench evaluate` applies the same limits, so reproduce failures locally. Quota (see `/config`): one submission at a time, one per day (from midnight
 Pacific time) plus one retry after a failed one.
 
 ## Tips

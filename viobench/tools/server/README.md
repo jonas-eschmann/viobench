@@ -6,9 +6,15 @@ Both use `VIOBENCH_SERVER_DIR` (default `./server-data`).
 ```bash
 pip install -e ".[server]"
 python -m viobench.tools.server.teams add "team a" "team b"     # prints a token per team; `teams list` repeats them
-VIOBENCH_DATASETS=/data/test/first:/data/test/second python -m viobench.tools.server.worker &   # exactly one worker
+python -m viobench.tools.server.worker &                        # exactly one worker
 uvicorn viobench.tools.server.app:app --host 0.0.0.0 --port 8000
 ```
+
+The worker evaluates every submission on `EPISODES` in [`worker.py`](worker.py), conta references to episode archives
+(the public set, [`viobench.episodes`](../../episodes/__init__.py), for now). That constant is the only place the
+evaluation set is configured: change it and restart the worker. On start the worker resolves the references through
+conta, downloading what its cache (`CONTA_CACHE`, default `~/.cache/conta`) lacks, and exits if one cannot be had;
+`--fetch` does only that, for a worker without network.
 
 A team is its token: every API request sends `Authorization: Bearer <token>` and sees only that team's submissions.
 Teams can also open the server's root in a browser: a page ([`ui/`](ui/), no dependencies) that signs in with the token
@@ -34,6 +40,7 @@ per episode, per dataset and overall. Dataset and overall statistics pool the fr
 the other statistics are diagnostics. Initialization fuel is reported separately per episode.
 
 Deployment: [`compose.yaml`](compose.yaml) (usage in its header) runs the app on 0.0.0.0:8000 and the worker
-unprivileged, without network and with a memory limit (wasmtime sandboxes the guest, not the host process); put TLS in
+unprivileged, without network and with a memory limit (wasmtime sandboxes the guest, not the host process); a one-shot
+`episodes` service fills the `conta-cache` volume (`worker --fetch`) before the worker starts. Put TLS in
 front of the app; keep the `server-data` volume private (the sqlite holds the tokens) and back it up. Behind a path
 prefix, serve the page with a trailing slash (`/prefix/`): its requests are relative to it.

@@ -50,5 +50,6 @@ Set in `viobench/tools/config.json`; `viobench check` and `evaluate` apply the s
 
 ## Data
 
-Train on `viobench simulate` output, validate on the episodes from the course page. The evaluation episodes are not
-published. `viobench.tools.datasets.read_episode` loads an episode.
+Train on `viobench simulate` output, validate on the public set (`viobench.episodes.public`, which `viobench evaluate`
+runs when given no episodes). The server evaluates on `EPISODES` in `viobench/tools/server/worker.py`.
+`viobench.tools.datasets.read_episode` loads an episode.

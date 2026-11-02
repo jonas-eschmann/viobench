@@ -159,3 +159,45 @@ def test_streamed_frames_from_disk(tmp_path):
     config, frames = lazy.adapt((320, 240))
     assert isinstance(frames, FrameSequence) and frames.shape == (6, 240, 320, 3)
     assert next(iter(episodes([tmp_path / "set"]))).dataset == "set"
+
+
+def test_cli_evaluates_conta_references(engine, runtime_path, solution_dir, tmp_path, conta_store):
+    import io
+
+    from viobench.tools.cli import main
+
+    episode = synthetic_episode(n_frames=6, width=640, height=480)
+    digest = conta_store(write_episode(episode, tmp_path / "set" / f"{episode.name}.zip"))
+    buffer = io.BytesIO()
+    np.save(buffer, episode.ground_truth_state())
+    wasm = tmp_path / "perfect.wasm"
+    bundle(solution_dir(PERFECT, {"gt.npy": buffer.getvalue()}), wasm, runtime=runtime_path)
+    assert main(["evaluate", str(wasm), f"conta:{digest}", "-o", str(tmp_path / "report")]) == 0
+    report = json.loads((tmp_path / "report" / "report.json").read_text())
+    assert list(report["summary"]["datasets"]) == ["conta"] and report["episodes"][0]["name"] == episode.name
+
+
+def test_cli_rejects_unknown_sources_before_running(tmp_path, conta_store, capsys):
+    from viobench.tools.cli import main
+
+    assert main(["evaluate", str(tmp_path / "never-read.wasm"), str(tmp_path / "missing")]) == 1
+    assert main(["evaluate", str(tmp_path / "never-read.wasm"), "f" * 40]) == 1  # not in the store
+    error = capsys.readouterr().err
+    assert "neither an episode" in error and "f" * 40 in error
+
+
+def test_evaluate_never_asks_for_an_episode_beyond_max_episodes(engine, runtime_path, tmp_path):
+    """A Dataset's next episode may be a download (a conta reference): a run that stops early must not ask for it."""
+    from pathlib import Path
+
+    episode = synthetic_episode(n_frames=4, width=640, height=480)
+    episode.meta["dataset"] = "adhoc"
+
+    def dataset():
+        yield episode
+        pytest.fail("asked for an episode beyond max_episodes")
+
+    wasm = tmp_path / "minimal.wasm"
+    bundle(Path(__file__).resolve().parent.parent / "viobench" / "solution" / "examples" / "python" / "minimal", wasm, runtime=runtime_path)
+    report = evaluate(wasm, dataset(), output_dir=tmp_path / "report", engine=engine, max_episodes=1, log=lambda *a: None)
+    assert report["summary"]["overall"]["episodes"] == 1

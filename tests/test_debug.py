@@ -140,3 +140,16 @@ def test_native_host_debug_build(tmp_path):
     np.testing.assert_allclose(estimates, np.tile([0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0], (5, 1)))
     metrics = score(tmp_path / "set" / f"{episode.name}.zip", tum, log=lambda *a: None)
     assert metrics.held == 0
+
+
+def test_debug_never_asks_for_an_episode_beyond_max_episodes():
+    """A Dataset's next episode may be a download (a conta reference): a run that stops early must not ask for it."""
+    episode = synthetic_episode(n_frames=4, width=640, height=480)
+    episode.meta["dataset"] = "adhoc"
+
+    def dataset():
+        yield episode
+        pytest.fail("asked for an episode beyond max_episodes")
+
+    [(read, _, _)] = direct.run(direct.PythonSolution(EXAMPLES / "python" / "minimal"), dataset(), max_episodes=1, log=lambda *a: None)
+    assert read is episode

@@ -1,12 +1,14 @@
 """`viobench evaluate`: run a solution .wasm over a Dataset (any iterable of Episodes), meter it, score it, write a report.
 
-The Dataset may be episode directories on disk (`datasets.storage.episodes`) or fresh episodes from the simulator
-(`datasets.generate.simulation.simulate`); the runner does not care, and reads frames one at a time either way.
+The Dataset may be episodes on disk or in the conta cache (`datasets.sources.episodes`: paths and conta hashes) or fresh
+episodes from the simulator (`datasets.generate.simulation.simulate`); the runner does not care, and reads frames one at
+a time either way.
 """
 import json
 import platform
 import time
 from dataclasses import asdict, dataclass
+from itertools import islice
 from pathlib import Path
 
 import numpy as np
@@ -133,13 +135,15 @@ def summarize(reports, frame_fuels):
 
 
 def as_dataset(dataset):
-    """Anything a user may pass as a dataset -> an iterable of Episodes: paths go through the file-system provider."""
-    from ..datasets.storage import episodes
+    """Anything a user may pass as a dataset -> an iterable of Episodes: sources (paths, conta references) go through
+    `datasets.sources`, anything else is taken as the Dataset itself."""
+    from ..datasets.sources import episodes
 
-    if isinstance(dataset, (str, Path)):
+    source_types = (str, Path, dict)
+    if isinstance(dataset, source_types):
         return episodes([dataset])
     dataset = list(dataset) if not hasattr(dataset, "__next__") else dataset
-    if isinstance(dataset, list) and dataset and all(isinstance(item, (str, Path)) for item in dataset):
+    if isinstance(dataset, list) and dataset and all(isinstance(item, source_types) for item in dataset):
         return episodes(dataset)
     return dataset
 
@@ -155,9 +159,7 @@ def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_
     reports = []
     frame_fuels = []
     started = time.perf_counter()
-    for count, episode in enumerate(as_dataset(dataset)):
-        if max_episodes is not None and count >= max_episodes:
-            break
+    for episode in islice(as_dataset(dataset), max_episodes):  # never asks for one more: it may be a download
         log_dir = output_dir / "logs" / episode.dataset / episode.name
         report, estimates, fuel = run_episode(wasm_path, episode, engine, limits, log_dir)
         reports.append(report)

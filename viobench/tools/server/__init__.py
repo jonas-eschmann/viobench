@@ -1,1 +1,1 @@
-"""Submission server: a team uploads a solution .wasm, a worker evaluates it on the server's datasets, the team sees its results."""
+"""Submission server: a team uploads a solution .wasm, a worker evaluates it on worker.EPISODES, the team sees its results."""

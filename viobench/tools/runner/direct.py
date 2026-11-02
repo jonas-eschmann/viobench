@@ -11,6 +11,7 @@ import sys
 import time
 import types
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 
 import numpy as np
@@ -117,9 +118,7 @@ def run(solution, dataset, output_dir=None, max_episodes=None, log=print):
     from .run import as_dataset
 
     results = []
-    for count, episode in enumerate(as_dataset(dataset)):
-        if max_episodes is not None and count >= max_episodes:
-            break
+    for episode in islice(as_dataset(dataset), max_episodes):  # never asks for one more: it may be a download
         estimates = np.empty((episode.num_frames, abi.STATE_VALUES))
         seconds = []
         for step in trace(solution, episode):
@@ -143,15 +142,16 @@ def run(solution, dataset, output_dir=None, max_episodes=None, log=print):
 
 def add_arguments(parser):
     """The `viobench debug` options."""
+    from ..datasets.sources import add_argument
+
     parser.add_argument("solution", help="solution directory (with solution.py)")
-    parser.add_argument("datasets", nargs="+", help="episodes (.zip or unzipped) or directories of them")
+    add_argument(parser)
     parser.add_argument("--max-episodes", type=int, help="stop after this many episodes")
     parser.add_argument("-o", "--output", help="write estimate.tum, twist.txt and trajectory.mp4 per episode under this directory")
 
 
-def run_arguments(arguments):
-    from ..datasets.storage import episodes
-
+def run_arguments(arguments, dataset):
+    """`viobench debug` over dataset (the episodes its `datasets` argument names)."""
     solution = PythonSolution(arguments.solution)
-    run(solution, episodes(arguments.datasets), output_dir=arguments.output, max_episodes=arguments.max_episodes)
+    run(solution, dataset, output_dir=arguments.output, max_episodes=arguments.max_episodes)
     return 0

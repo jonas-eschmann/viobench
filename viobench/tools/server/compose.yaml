@@ -1,10 +1,11 @@
-# The submission server: the REST API (app) and the evaluation worker, sharing the server-data volume. From the
-# viobench repository root, with DATASETS_DIR (host directory with the evaluation sets) and VIOBENCH_DATASETS (the worker's
-# colon-separated set directories under /datasets) in the environment or in viobench/tools/server/.env:
+# The submission server: the REST API (app) and the evaluation worker, sharing the server-data volume, and `episodes`,
+# which downloads the worker's evaluation episodes (worker.EPISODES) into the conta-cache volume before the worker starts
+# (the worker has no network). From the viobench repository root:
 #
 #   docker compose -f viobench/tools/server/compose.yaml up -d --build
 #   docker compose -f viobench/tools/server/compose.yaml exec app python -m viobench.tools.server.teams add "team a"
 #
+# After changing EPISODES, the same `up -d --build` fetches the new episodes and restarts the worker.
 # The app is published on 0.0.0.0:8000, plain HTTP (Docker bypasses ufw): for public use, bind it to 127.0.0.1 and put a
 # TLS reverse proxy in front of it, with a request body limit of ~130 MB.
 name: viobench-server
@@ -24,16 +25,24 @@ services:
     ports: ["0.0.0.0:8000:8000"]
     volumes: [server-data:/srv/server-data]
 
+  episodes:
+    <<: *server
+    command: python -m viobench.tools.server.worker --fetch  # through the conta index; cached episodes are not fetched again
+    restart: "no"  # one-shot
+    volumes: [conta-cache:/srv/conta]
+
   worker:
     <<: *server
     command: python -m viobench.tools.server.worker  # exactly one: on start it requeues what a previous one left running
     network_mode: none  # wasmtime sandboxes the guest, not the evaluation process
     mem_limit: ${WORKER_MEMORY:-8g}
-    environment:
-      VIOBENCH_DATASETS: ${VIOBENCH_DATASETS:?colon-separated set directories under /datasets}
+    depends_on:
+      episodes:
+        condition: service_completed_successfully
     volumes:
       - server-data:/srv/server-data
-      - ${DATASETS_DIR:?host directory with the evaluation sets}:/datasets:ro
+      - conta-cache:/srv/conta:ro
 
 volumes:
   server-data:
+  conta-cache:

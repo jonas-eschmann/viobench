@@ -15,6 +15,7 @@ dependencies = [
     "opencv-python-headless>=4.9",
     "pyyaml>=6",
     "hyperdrone==0.1.10",
+    "conta>=0.0.6",  # episode archives by hash (viobench.episodes)
 ]
 
 [project.optional-dependencies]
@@ -26,9 +27,10 @@ dev = ["pytest", "torch", "onnx", "fastapi", "python-multipart", "tzdata", "http
 viobench = "viobench.tools.cli:main"
 
 # viobench.tools is the host side; viobench.solution is the guest side and consists of files, not modules, except
-# workspace.py and the Python runtime's bundler, reached through implicit namespace packages (no __init__.py in solution/).
+# workspace.py and the Python runtime's bundler, reached through implicit namespace packages (no __init__.py in solution/);
+# viobench.episodes lists the published episode sets.
 [tool.setuptools.packages.find]
-include = ["viobench", "viobench.tools*", "viobench.solution", "viobench.solution.runtime", "viobench.solution.runtime.python", "viobench.solution.runtime.python.bundler"]
+include = ["viobench", "viobench.episodes", "viobench.tools*", "viobench.solution", "viobench.solution.runtime", "viobench.solution.runtime.python", "viobench.solution.runtime.python.bundler"]
 namespaces = true
 
 [tool.setuptools.package-data]

@@ -3,7 +3,7 @@
 solution     init                              new workspace: an example solution with its own toolchain
              bundle, unbundle                  solution directory (Python, or native with a CMakeLists.txt) <-> solution.wasm
              build-runtime                     (re)build the workspace's Python runtime; bundle does when it is missing
-runner       check, evaluate, leaderboard      run a module on synthetic frames / on a dataset; aggregate reports
+runner       check, evaluate, leaderboard      run a module on synthetic frames / on episodes (default: the public set); aggregate reports
              debug, score                      run a Python solution in-process (debugger-friendly); score an estimate
 datasets     simulate, pack, feed              write episodes with HyperDrone (GPU); re-pack episodes as archives; export raw inputs for native debugging
 
@@ -112,18 +112,30 @@ def command_check(arguments):
                                               verbose=arguments.verbose))
 
 
+def run_on_episodes(arguments, function):
+    """function(dataset) for the episodes that the `datasets` argument names (`datasets.sources.add_argument`); 1, after
+    saying why, for a source that is malformed or missing (before function runs) or cannot be downloaded (when read)."""
+    import conta
+
+    from .datasets.sources import from_arguments
+
+    try:
+        dataset = from_arguments(arguments.datasets)
+    except (OSError, ValueError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    try:
+        return function(dataset)
+    except conta.ContaError as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+
+
 def command_evaluate(arguments):
     from .runner.run import evaluate
 
-    max_episodes = arguments.max_episodes
-
-    def dataset():
-        from .datasets.storage import episodes
-
-        yield from episodes(arguments.datasets)
-
-    def run():
-        result = evaluate(arguments.wasm, dataset(), output_dir=arguments.output, max_episodes=max_episodes)
+    def run(dataset):
+        result = evaluate(arguments.wasm, dataset, output_dir=arguments.output, max_episodes=arguments.max_episodes)
         summary = result["summary"]["overall"]
         print(f"overall: {summary['completed']}/{summary['episodes']} episodes completed, RPE median {summary['rpe_translation_rmse_median']:.3f} m/1 s, "
               f"fuel/frame max (all datasets) {summary['fuel_per_frame_max']:,.0f} "
@@ -131,13 +143,13 @@ def command_evaluate(arguments):
               f"p95 {summary['fuel_per_frame_p95']:,.0f}, p99 {summary['fuel_per_frame_p99']:,.0f})")
         return 0 if summary["completed"] == summary["episodes"] else 1
 
-    return run_with_large_stack(run)
+    return run_on_episodes(arguments, lambda dataset: run_with_large_stack(lambda: run(dataset)))
 
 
 def command_debug(arguments):
     from .runner.direct import run_arguments
 
-    return run_arguments(arguments)  # plain Python on the main thread: breakpoint() and Ctrl-C behave
+    return run_on_episodes(arguments, lambda dataset: run_arguments(arguments, dataset))  # plain Python on the main thread: breakpoint() and Ctrl-C behave
 
 
 def command_score(arguments):
@@ -251,6 +263,7 @@ def command_feed(arguments):
 def main(argv=None):
     from ..solution.workspace import EXAMPLES
     from .datasets.generate.simulation import add_simulation_arguments
+    from .datasets.sources import add_argument as add_datasets_argument
     from .runner.direct import add_arguments as add_debug_arguments
 
     parser = argparse.ArgumentParser(prog="viobench", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -288,7 +301,7 @@ def main(argv=None):
 
     evaluate = commands.add_parser("evaluate", help="[runner] run a module over episodes and write report.json")
     evaluate.add_argument("wasm")
-    evaluate.add_argument("datasets", nargs="+", help="episodes (.zip or unzipped) or directories of them")
+    add_datasets_argument(evaluate)
     evaluate.add_argument("-o", "--output", help="report directory; also write trajectory.mp4 per episode (default: ./report-<name>, without video)")
     evaluate.add_argument("--max-episodes", type=int)
     evaluate.set_defaults(function=command_evaluate)

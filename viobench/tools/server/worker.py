@@ -1,6 +1,11 @@
-"""Evaluation worker: polls the queue, runs `viobench evaluate` on the server's datasets, stores the team's results.
+"""Evaluation worker: polls the queue, runs `viobench evaluate` on EPISODES, stores the team's results.
 
-    VIOBENCH_DATASETS=/data/test/first:/data/test/second python -m viobench.tools.server.worker
+    python -m viobench.tools.server.worker            # exactly one; resolves EPISODES first (downloads what the cache lacks)
+    python -m viobench.tools.server.worker --fetch    # only download EPISODES into the conta cache, then exit
+
+EPISODES, below, is the one place that says what the server evaluates: change it and restart the worker. The episodes
+come through conta's cache (CONTA_CACHE, default ~/.cache/conta). A worker without network (compose.yaml) evaluates
+from a cache that `--fetch` filled; it fails at start, not at the first submission, if an episode is missing there.
 
 Runs each evaluation in a subprocess (own process = own memory, killed on timeout). Run the worker as an unprivileged
 user in a container without network: the guest is sandboxed by wasmtime, but the evaluation host process is not.
@@ -8,15 +13,17 @@ user in a container without network: the guest is sandboxed by wasmtime, but the
 Students get metrics only: nothing the guest wrote (stdout, stderr, failure messages) leaves the server, since it could
 carry the hidden episodes out. The full report and logs stay in the report directory for the instructors.
 """
+import argparse
 import json
-import os
 import subprocess
 import sys
 import time
-from pathlib import Path
 
+from ... import episodes
+from ..datasets.sources import argument, resolve
 from .store import Store
 
+EPISODES = episodes.public  # what every submission is evaluated on: conta references (viobench.episodes)
 POLL_SECONDS = 3.0
 EPISODE_FIELDS = ("dataset", "name", "frames", "frames_attempted", "duration_s", "completed", "metrics", "fuel_init", "fuel_per_frame_max", "fuel_per_frame_median",
                   "fuel_per_frame_p95", "fuel_per_frame_p99", "fuel_per_frame_mean", "fuel_total", "wall_init_s", "wall_per_frame_median_ms",
@@ -28,23 +35,24 @@ def public_results(report):
     return {"summary": report["summary"], "episodes": [{key: episode[key] for key in EPISODE_FIELDS} for episode in report["episodes"]]}
 
 
-def datasets_from_environment():
-    value = os.environ.get("VIOBENCH_DATASETS", "")
-    paths = [Path(p) for p in value.split(os.pathsep) if p]
-    if not paths:
-        sys.exit("VIOBENCH_DATASETS must list the dataset directories (os.pathsep separated)")
-    for path in paths:
-        if not path.is_dir():
-            sys.exit(f"dataset directory {path} does not exist")
-    return paths
+def prepare(references):
+    """The cached archives of references, downloading what the cache lacks; exits with conta's reason if one cannot be had."""
+    import conta
+
+    if not references:
+        sys.exit("worker: no evaluation episodes (EPISODES is empty)")
+    try:
+        return resolve(references)
+    except conta.ContaError as error:
+        sys.exit(f"worker: cannot provide the evaluation episodes\n{error}")
 
 
-def evaluate_submission(store, submission, datasets, log=print):
+def evaluate_submission(store, submission, references, log=print):
     wasm = store.upload_path(submission["id"])
     report_dir = store.report_dir(submission["id"])
     report_dir.mkdir(parents=True, exist_ok=True)
     config = store.config
-    command = [sys.executable, "-m", "viobench", "evaluate", str(wasm), *map(str, datasets), "-o", str(report_dir)]  # limits: config.json
+    command = [sys.executable, "-m", "viobench", "evaluate", str(wasm), *map(argument, references), "-o", str(report_dir)]  # limits: config.json
     log(f"submission {submission['id']} by {submission['name']}: {' '.join(command)}")
     with open(report_dir / "worker.txt", "w") as output:
         try:
@@ -65,18 +73,25 @@ def evaluate_submission(store, submission, datasets, log=print):
     log(f"submission {submission['id']}: {overall['completed']}/{overall['episodes']} episodes completed")
 
 
-def main():
+def main(argv=None):
+    parser = argparse.ArgumentParser(prog="python -m viobench.tools.server.worker", description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--fetch", action="store_true", help="download EPISODES into the conta cache and exit")
+    arguments = parser.parse_args(argv)
+    paths = prepare(EPISODES)
+    if arguments.fetch:
+        print(f"worker: {len(paths)} episodes in the conta cache")
+        return
     store = Store()
-    datasets = datasets_from_environment()
     requeued = store.requeue_running()  # interrupted by a restart: there is only ever one worker
-    print(f"worker: {len(datasets)} dataset directories, polling {store.path}, {requeued} interrupted submission(s) requeued")
+    print(f"worker: {len(paths)} episodes, polling {store.path}, {requeued} interrupted submission(s) requeued")
     while True:
         submission = store.claim_next()
         if submission is None:
             time.sleep(POLL_SECONDS)
             continue
         try:
-            evaluate_submission(store, submission, datasets)
+            evaluate_submission(store, submission, EPISODES)
         except Exception as error:  # noqa: BLE001 - keep the worker alive
             print(f"submission {submission['id']}: worker error: {error!r}")
             store.finish(submission["id"], error="internal error")  # the details (host paths, ...) stay in the worker's log
