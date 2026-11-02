@@ -34,8 +34,10 @@ Rules: [`viobench/tools/config.json`](../config.json), checked in; every key is 
 `viobench check` and `evaluate` apply locally too (restart app and worker after editing).
 
 A team has one submission in flight at a time and `daily_quota` per day (from midnight in `quota_time_zone`); up to
-`daily_failed_quota` failed ones (crashed, timed out or no episode completed; no results) do not count. Teams never
-see the guest's output: `report.json` and the logs stay in `reports/<id>/`.
+`daily_failed_quota` failed ones (crashed, timed out or no episode completed; no results) do not count. A team created
+with `teams add --unlimited` (e.g. the instructors' debug team; the `unlimited` column of `teams`) has no daily quota,
+but still one submission at a time.
+Teams never see the guest's output: `report.json` and the logs stay in `reports/<id>/`.
 
 Results include maximum, mean, median, p95 and p99 fuel per attempted frame, total step fuel and attempted-frame counts
 per episode, per dataset and overall. Dataset and overall statistics pool the frames. Judging uses the overall maximum;
