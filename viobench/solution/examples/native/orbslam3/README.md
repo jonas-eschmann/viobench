@@ -66,8 +66,15 @@ the map and continues local inertial optimization, while later scale/bias refine
 Tracking-requested resets still take effect. The port also initializes the frame's IMU mutex before the
 featureless-image early return, which matters in the native debug build.
 
-Whole-map inertial bundle adjustment uses ten iterations per refinement instead of upstream's hundred,
-because it runs inside one metered `step`. Local bundle adjustment retains its upstream iteration schedule.
+Everything runs inside one metered `step`, so the cost of each bundle adjustment must stay bounded. Inertial
+initialization runs the whole-map inertial bundle adjustment once, while the map is still small, with ten
+iterations instead of upstream's hundred. The two later refinements (upstream's VIBA 1 and 2, after 5 s and 15 s
+of motion) keep the inertial-only optimization of scale, gravity direction, biases and velocities over all
+keyframes, but skip the whole-map bundle adjustment that follows it upstream: its cost grows with the map, and it
+exceeded the step's fuel on EuRoC episodes where a refinement came late, e.g. after a long pause. Local bundle
+adjustment then refines the latest keyframes with its upstream iteration schedule. Replacing the whole-map
+adjustment by the 25-keyframe local inertial window instead lost tracking right after the refinement on most EuRoC
+episodes.
 
 Monocular translation has arbitrary scale until inertial initialization succeeds. Until then the adapter
 returns identity pose and zero twist, with a warning every five seconds. Stationary scenes and pure rotation

@@ -194,6 +194,30 @@
  
                          bool bLarge = ((mpTracker->GetMatchesInliers()>75)&&mbMonocular)||((mpTracker->GetMatchesInliers()>100)&&!mbMonocular);
                          Optimizer::LocalInertialBA(mpCurrentKeyFrame, &mbAbortBA, mpCurrentKeyFrame->GetMap(),num_FixedKF_BA,num_OptKF_BA,num_MPs_BA,num_edges_BA, bLarge, !mpCurrentKeyFrame->GetMap()->GetIniertialBA2());
+@@ -207,9 +200,9 @@
+                                 cout << "start VIBA 1" << endl;
+                                 mpCurrentKeyFrame->GetMap()->SetIniertialBA1();
+                                 if (mbMonocular)
+-                                    InitializeIMU(1.f, 1e5, true);
++                                    InitializeIMU(1.f, 1e5, false);
+                                 else
+-                                    InitializeIMU(1.f, 1e5, true);
++                                    InitializeIMU(1.f, 1e5, false);
+ 
+                                 cout << "end VIBA 1" << endl;
+                             }
+@@ -219,9 +212,9 @@
+                                 cout << "start VIBA 2" << endl;
+                                 mpCurrentKeyFrame->GetMap()->SetIniertialBA2();
+                                 if (mbMonocular)
+-                                    InitializeIMU(0.f, 0.f, true);
++                                    InitializeIMU(0.f, 0.f, false);
+                                 else
+-                                    InitializeIMU(0.f, 0.f, true);
++                                    InitializeIMU(0.f, 0.f, false);
+ 
+                                 cout << "end VIBA 2" << endl;
+                             }
 @@ -256,29 +249,15 @@
              vdLMTotal_ms.push_back(timeLocalMap);
  #endif
@@ -262,11 +286,13 @@
      cout << "LM: Active map reset, Done!!!" << endl;
  }
  
-@@ -1301,12 +1264,13 @@
+@@ -1301,12 +1264,15 @@
      }
  
      std::chrono::steady_clock::time_point t4 = std::chrono::steady_clock::now();
-+    // Bound each synchronous update; local BA refines the solution on later keyframes.
++    // Bound each synchronous update; local BA refines the solution on later keyframes. The refinements (VIBA 1 and 2)
++    // pass bFIBA false and keep only the inertial-only optimization above: a whole-map BA grows with the map until it
++    // exceeds one step's fuel.
      if (bFIBA)
      {
          if (priorA!=0.f)
@@ -278,6 +304,28 @@
      }
  
      std::chrono::steady_clock::time_point t5 = std::chrono::steady_clock::now();
+@@ -1326,8 +1292,10 @@
+         lpKF.push_back(mpCurrentKeyFrame);
+     }
+ 
+-    // Correct keyframes starting at map first keyframe
+-    list<KeyFrame*> lpKFtoCheck(mpAtlas->GetCurrentMap()->mvpKeyFrameOrigins.begin(),mpAtlas->GetCurrentMap()->mvpKeyFrameOrigins.end());
++    // Correct keyframes starting at map first keyframe (only the full BA stores results for this correction)
++    list<KeyFrame*> lpKFtoCheck;
++    if (bFIBA)
++        lpKFtoCheck.assign(mpAtlas->GetCurrentMap()->mvpKeyFrameOrigins.begin(),mpAtlas->GetCurrentMap()->mvpKeyFrameOrigins.end());
+ 
+     while(!lpKFtoCheck.empty())
+     {
+@@ -1376,7 +1344,7 @@
+     }
+ 
+     // Correct MapPoints
+-    const vector<MapPoint*> vpMPs = mpAtlas->GetCurrentMap()->GetAllMapPoints();
++    const vector<MapPoint*> vpMPs = bFIBA ? mpAtlas->GetCurrentMap()->GetAllMapPoints() : vector<MapPoint*>();
+ 
+     for(size_t i=0; i<vpMPs.size(); i++)
+     {
 --- a/src/Optimizer.cc
 +++ b/src/Optimizer.cc
 @@ -18,6 +18,7 @@
