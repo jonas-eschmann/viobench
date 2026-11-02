@@ -11,3 +11,4 @@ server-data/
 data
 /**/.DS_Store
 output
+dist
