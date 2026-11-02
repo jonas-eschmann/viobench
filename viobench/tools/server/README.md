@@ -39,8 +39,8 @@ Results include maximum, mean, median, p95 and p99 fuel per attempted frame, tot
 per episode, per dataset and overall. Dataset and overall statistics pool the frames. Judging uses the overall maximum;
 the other statistics are diagnostics. Initialization fuel is reported separately per episode.
 
-Deployment: [`compose.yaml`](compose.yaml) (usage in its header) runs the app on 0.0.0.0:8000 and the worker
-unprivileged, without network and with a memory limit (wasmtime sandboxes the guest, not the host process); a one-shot
-`episodes` service fills the `conta-cache` volume (`worker --fetch`) before the worker starts. Put TLS in
-front of the app; keep the `server-data` volume private (the sqlite holds the tokens) and back it up. Behind a path
-prefix, serve the page with a trailing slash (`/prefix/`): its requests are relative to it.
+Deployment: [`compose.yaml`](compose.yaml) (usage in its header) runs the app behind a Cloudflare tunnel (no open port;
+Cloudflare terminates TLS) and the worker unprivileged, without network and with a memory limit (wasmtime sandboxes
+the guest, not the host process); a one-shot `episodes` service fills the `conta-cache` volume (`worker --fetch`)
+before the worker starts. Keep the `server-data` volume private (the sqlite holds the tokens) and back it up. Behind a
+path prefix, serve the page with a trailing slash (`/prefix/`): its requests are relative to it.

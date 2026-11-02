@@ -1,13 +1,17 @@
-# The submission server: the REST API (app) and the evaluation worker, sharing the server-data volume, and `episodes`,
+# The submission server: the REST API (app) and the evaluation worker, sharing the server-data volume; `episodes`,
 # which downloads the worker's evaluation episodes (worker.EPISODES) into the conta-cache volume before the worker starts
-# (the worker has no network). From the viobench repository root:
+# (the worker has no network); and a Cloudflare tunnel in front of the app. From the viobench repository root:
 #
+#   (umask 077; printf %s "<tunnel token>" > viobench/tools/server/tunnel-token)  # once; see the tunnel below
+#   sudo chown 65532 viobench/tools/server/tunnel-token  # cloudflared's uid: outside swarm, secrets keep the host owner
 #   docker compose -f viobench/tools/server/compose.yaml up -d --build
 #   docker compose -f viobench/tools/server/compose.yaml exec app python -m viobench.tools.server.teams add "team a"
 #
 # After changing EPISODES, the same `up -d --build` fetches the new episodes and restarts the worker.
-# The app is published on 0.0.0.0:8000, plain HTTP (Docker bypasses ufw): for public use, bind it to 127.0.0.1 and put a
-# TLS reverse proxy in front of it, with a request body limit of ~130 MB.
+# No port is published: the tunnel service connects out to Cloudflare, which terminates TLS. Create a tunnel in the
+# Cloudflare dashboard (Zero Trust > Networks > Tunnels), give it a public hostname with service http://app:8000 and put
+# its token in the gitignored tunnel-token file (a secret: not in the environment or `docker inspect`; rotate it in the
+# dashboard if it leaks). Cloudflare's request body limit (100 MB on Free and Pro) caps the uploads.
 name: viobench-server
 
 x-server: &server
@@ -21,9 +25,17 @@ x-server: &server
 services:
   app:
     <<: *server
-    command: uvicorn viobench.tools.server.app:app --host 0.0.0.0 --port 8000
-    ports: ["0.0.0.0:8000:8000"]
+    command: uvicorn viobench.tools.server.app:app --host 0.0.0.0 --port 8000  # reachable only on the compose network
     volumes: [server-data:/srv/server-data]
+
+  tunnel:
+    image: cloudflare/cloudflared:latest  # Cloudflare supports a release for a year: `docker compose pull` now and then
+    command: tunnel --no-autoupdate run --token-file /run/secrets/tunnel_token
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    secrets: [tunnel_token]
+    depends_on: [app]
 
   episodes:
     <<: *server
@@ -46,3 +58,7 @@ services:
 volumes:
   server-data:
   conta-cache:
+
+secrets:
+  tunnel_token:
+    file: tunnel-token
