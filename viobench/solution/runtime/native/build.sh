@@ -13,6 +13,7 @@ SOLUTION=$(cd "$1" && pwd)
 shift
 bash "$HERE/../../toolchain/download_dependencies.sh" native
 mkdir -p "$SOLUTION/build"
-cmake -S "$SOLUTION" -B "$SOLUTION/build" -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN/wasi-sdk/share/cmake/wasi-sdk-p1.cmake" -DVIOBENCH_NATIVE_DIR="$HERE" "$@" > "$SOLUTION/build/cmake.log" 2>&1 || (cat "$SOLUTION/build/cmake.log"; exit 1)
+# Configuring OpenCV-based examples can build the runtime: stream progress as well as keeping the log.
+cmake -S "$SOLUTION" -B "$SOLUTION/build" -DCMAKE_TOOLCHAIN_FILE="$TOOLCHAIN/wasi-sdk/share/cmake/wasi-sdk-p1.cmake" -DVIOBENCH_NATIVE_DIR="$HERE" "$@" 2>&1 | tee "$SOLUTION/build/cmake.log"
 cmake --build "$SOLUTION/build"
 ls -la "$SOLUTION"/build/*.wasm

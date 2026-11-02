@@ -7,6 +7,10 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 set(VIOBENCH_NATIVE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../runtime/native" CACHE PATH "viobench native runtime directory")
 include(${VIOBENCH_NATIVE_DIR}/viobench_reactor.cmake)
+viobench_find_opencv(core imgproc features2d calib3d)
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+    add_compile_options(-msimd128 -fwasm-exceptions "SHELL:-mllvm -wasm-use-legacy-eh=false")
+endif()
 
 # fetch(<name> <url> <sha256> <top-level directory> [PATCH <file>] [PATHS <paths in the archive>...]): download the archive into
 # build/downloads, unpack it (only PATHS, if given) into build/src/<name> and apply the patch; once per archive and patch
@@ -67,17 +71,6 @@ foreach(header System FrameDrawer MapDrawer Viewer LoopClosing)
     configure_file(${CMAKE_CURRENT_SOURCE_DIR}/compat/${header}.h ${orbslam3_DIR}/include/${header}.h COPYONLY)
 endforeach()
 
-if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
-    add_compile_options(-msimd128 -fwasm-exceptions "SHELL:-mllvm -wasm-use-legacy-eh=false")
-    get_filename_component(VIOBENCH_WORKSPACE ${VIOBENCH_NATIVE_DIR}/../.. ABSOLUTE)
-    set(VIOBENCH_OPENCV_DIR ${VIOBENCH_WORKSPACE}/build/runtime/opencv-build CACHE PATH "OpenCV built by viobench build-runtime")
-    if(NOT EXISTS ${VIOBENCH_OPENCV_DIR}/OpenCVConfig.cmake)
-        message(FATAL_ERROR "no wasm OpenCV in ${VIOBENCH_OPENCV_DIR}: run viobench build-runtime first")
-    endif()
-    find_package(OpenCV REQUIRED COMPONENTS core imgproc features2d calib3d PATHS ${VIOBENCH_OPENCV_DIR} NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-else()
-    find_package(OpenCV REQUIRED COMPONENTS core imgproc features2d calib3d)
-endif()
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_compile_definitions(EIGEN_DONT_PARALLELIZE)
 
