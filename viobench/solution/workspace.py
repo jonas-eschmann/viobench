@@ -36,9 +36,10 @@ def runtime_path(workspace):
     return Path(workspace) / "build" / "runtime" / "dist" / "runtime.wasm"
 
 
-def run(workspace, script, *arguments):
-    """Runs one of the workspace's build scripts."""
+def run(workspace, script, *arguments, env=None):
+    """Runs one of the workspace's build scripts with optional environment overrides."""
     environment = dict(os.environ)
+    environment.update(env or {})
     environment.setdefault("PYTHON3", sys.executable)  # new enough for the build, unlike macOS's /usr/bin/python3
     status = subprocess.run(["bash", str(Path(workspace) / script), *map(str, arguments)], env=environment).returncode
     if status:
@@ -54,11 +55,13 @@ def build_runtime(workspace, force=False):
     print(f"building {runtime_path(workspace)}: the first build takes 10-15 min and downloads the toolchain into "
           f"{Path(workspace) / 'build' / 'toolchain'}", flush=True)
     try:
-        run(workspace, "runtime/python/build.sh")
+        # Conda's compiler activation also exports BUILD, but as a host triplet.
+        # The automatic build must write where runtime_path() and its logs point.
+        run(workspace, "runtime/python/build.sh", env={"BUILD": str(build.resolve())})
     except WorkspaceError as error:
         raise WorkspaceError(f"{error}; logs in {build / 'logs'}") from None
     if not runtime_path(workspace).is_file():
-        raise WorkspaceError(f"the build did not write {runtime_path(workspace)} (is $BUILD set?)")
+        raise WorkspaceError(f"the build did not write {runtime_path(workspace)}")
     return runtime_path(workspace)
 
 

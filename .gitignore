@@ -13,3 +13,4 @@ data
 output
 dist
 .env
+*.wasm

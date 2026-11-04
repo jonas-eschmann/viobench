@@ -44,7 +44,15 @@ if [ ! -f "$CPYTHON/cross-build/wasm32-wasip1/python.wasm" ]; then
     if command -v taskset > /dev/null; then
         PIN="taskset -c 0-$((JOBS - 1))"
     fi
-    (cd "$CPYTHON" && WASI_SDK_PATH=$SDK $PIN python3 Tools/wasm/wasi build --quiet --logdir "$BUILD/logs")
+    # The native bootstrap needs its compiler's flags and include/library paths.
+    (cd "$CPYTHON" && WASI_SDK_PATH=$SDK $PIN python3 Tools/wasm/wasi build-python --quiet --logdir "$BUILD/logs")
+fi
+# Compiler activation (notably Conda) exports native CPU flags and library paths.
+# The WASI driver selects target tools, but inherits these flags unchanged.
+# Clear them only after building native Python, for all WebAssembly compilation.
+unset CFLAGS CXXFLAGS CPPFLAGS LDFLAGS CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH
+if [ ! -f "$CPYTHON/cross-build/wasm32-wasip1/python.wasm" ]; then
+    (cd "$CPYTHON" && WASI_SDK_PATH=$SDK $PIN python3 Tools/wasm/wasi build-host --quiet --logdir "$BUILD/logs")
 fi
 BUILD_PYTHON=$CPYTHON/cross-build/$(python3 -c "import sysconfig; print(sysconfig.get_config_var('BUILD_GNU_TYPE'))")/python
 if [ ! -f "$BUILD_PYTHON" ]; then
@@ -99,7 +107,7 @@ rm -rf "$BUILD/prefix/usr/local/lib/python3.14/site-packages/numpy"
 cp -r "$NUMPY/install/usr/local/lib/python3.14/site-packages/numpy" "$BUILD/prefix/usr/local/lib/python3.14/site-packages/"
 
 OPENCV=$BUILD/opencv-build
-if [ ! -f "$OPENCV/build.ninja" ]; then
+if [ ! -f "$OPENCV/build.ninja" ] || ! grep -q "^BUILD_ZLIB:BOOL=ON$" "$OPENCV/CMakeCache.txt"; then
     DISABLED=""
     for feature in PTHREADS_PF OPENCL IPP ITT LAPACK EIGEN ADE JPEG PNG SPNG TIFF WEBP OPENJPEG JASPER OPENEXR AVIF FFMPEG GSTREAMER GTK QT VTK V4L 1394 TBB OPENMP CAROTENE KLEIDICV FLATBUFFERS VA VA_INTEL QUIRC OBSENSOR CUDA GDAL GDCM OPENVX OPENNI2 LIBREALSENSE WAYLAND IMGCODEC_HDR IMGCODEC_SUNRASTER IMGCODEC_PXM IMGCODEC_PFM HAL_RVV NDSRVP; do
         DISABLED="$DISABLED -DWITH_$feature=OFF"
@@ -107,7 +115,8 @@ if [ ! -f "$OPENCV/build.ninja" ]; then
     WASI_DEFINES="-D_WASI_EMULATED_PROCESS_CLOCKS -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_GETPID"
     # OPENCV_DISABLE_THREAD_SUPPORT turns the python3 and dnn modules off unless BUILD_opencv_python3/BUILD_opencv_dnn are set explicitly;
     # dnn (ONNX inference via cv2.dnn) needs the bundled protobuf, which builds fine on wasi-libc's single-threaded pthread stubs
-    cmake -S "$BUILD/src/opencv" -B "$OPENCV" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$SDK/share/cmake/wasi-sdk-p1.cmake" -DWASI_SDK_PREFIX="$SDK" -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CROSSCOMPILING_EMULATOR=$WASMTIME;run;--dir=/" "-DCMAKE_C_FLAGS=-msimd128 $WASI_DEFINES" "-DCMAKE_CXX_FLAGS=-msimd128 -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false $WASI_DEFINES" -DBUILD_SHARED_LIBS=OFF -DBUILD_LIST=core,imgproc,features2d,flann,calib3d,video,dnn,python3 -DOPENCV_DISABLE_THREAD_SUPPORT=ON -DBUILD_opencv_python3=ON -DBUILD_opencv_dnn=ON -DWITH_PROTOBUF=ON -DBUILD_PROTOBUF=ON -DPROTOBUF_UPDATE_FILES=OFF -DOPENCV_DNN_OPENCL=OFF -DOPENCV_DNN_CUDA=OFF -DOPENCV_DNN_TFLITE=OFF -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_opencv_apps=OFF -DBUILD_JAVA=OFF -DBUILD_opencv_python2=OFF -DBUILD_DOCS=OFF -DBUILD_opencv_js=OFF -DOPENCV_ENABLE_NONFREE=OFF $DISABLED -DOPENCV_SKIP_PYTHON_LOADER=ON -DPYTHON3_EXECUTABLE="$VENV/bin/python" -DPYTHON3_INCLUDE_DIR="$BUILD/prefix/usr/local/include/python3.14" -DPYTHON3_LIBRARY="$CPYTHON/cross-build/wasm32-wasip1/libpython3.14.a" -DPYTHON3_NUMPY_INCLUDE_DIRS="$NUMPY/install/usr/local/lib/python3.14/site-packages/numpy/_core/include" -DPYTHON3_PACKAGES_PATH=lib/python3.14/site-packages > "$BUILD/logs/opencv-configure.log"
+    # Build zlib for WASI too: CMake may otherwise discover the host Conda library.
+    cmake -S "$BUILD/src/opencv" -B "$OPENCV" -G Ninja -DCMAKE_TOOLCHAIN_FILE="$SDK/share/cmake/wasi-sdk-p1.cmake" -DWASI_SDK_PREFIX="$SDK" -DCMAKE_BUILD_TYPE=Release "-DCMAKE_CROSSCOMPILING_EMULATOR=$WASMTIME;run;--dir=/" "-DCMAKE_C_FLAGS=-msimd128 $WASI_DEFINES" "-DCMAKE_CXX_FLAGS=-msimd128 -fwasm-exceptions -mllvm -wasm-use-legacy-eh=false $WASI_DEFINES" -DBUILD_SHARED_LIBS=OFF -DBUILD_LIST=core,imgproc,features2d,flann,calib3d,video,dnn,python3 -DOPENCV_DISABLE_THREAD_SUPPORT=ON -DBUILD_opencv_python3=ON -DBUILD_opencv_dnn=ON -DWITH_PROTOBUF=ON -DBUILD_PROTOBUF=ON -DBUILD_ZLIB=ON -DPROTOBUF_UPDATE_FILES=OFF -DOPENCV_DNN_OPENCL=OFF -DOPENCV_DNN_CUDA=OFF -DOPENCV_DNN_TFLITE=OFF -DBUILD_TESTS=OFF -DBUILD_PERF_TESTS=OFF -DBUILD_EXAMPLES=OFF -DBUILD_opencv_apps=OFF -DBUILD_JAVA=OFF -DBUILD_opencv_python2=OFF -DBUILD_DOCS=OFF -DBUILD_opencv_js=OFF -DOPENCV_ENABLE_NONFREE=OFF $DISABLED -DOPENCV_SKIP_PYTHON_LOADER=ON -DPYTHON3_EXECUTABLE="$VENV/bin/python" -DPYTHON3_INCLUDE_DIR="$BUILD/prefix/usr/local/include/python3.14" -DPYTHON3_LIBRARY="$CPYTHON/cross-build/wasm32-wasip1/libpython3.14.a" -DPYTHON3_NUMPY_INCLUDE_DIRS="$NUMPY/install/usr/local/lib/python3.14/site-packages/numpy/_core/include" -DPYTHON3_PACKAGES_PATH=lib/python3.14/site-packages > "$BUILD/logs/opencv-configure.log"
 fi
 # the cv2 module target is a shared library as well: only its objects are used
 ninja -C "$OPENCV" -j "$JOBS" -k 0 > "$BUILD/logs/opencv-build.log" 2>&1 || true
