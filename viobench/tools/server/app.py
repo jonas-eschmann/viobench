@@ -1,13 +1,15 @@
 """FastAPI submission server.  Run:  uvicorn viobench.tools.server.app:app --host 0.0.0.0 --port 8000
 
     POST /submissions        multipart: file (the .wasm), label (optional)  -> 201 and the new submission
-    GET  /submissions        the team's submissions, newest first, each with its overall summary once evaluated
+    GET  /submissions        the team's submissions (all for admins), newest first, with overall summaries once evaluated
     GET  /submissions/{id}   one of them, with its results once evaluated
-    GET  /config             the rules: daily quota, upload size, evaluation timeout, sandbox limits (`server.config`)
-    GET  /, /app.js, /style.css   the web UI (ui/): a page on top of the four routes above
+    GET  /config             the rules (`server.config`), admin status and submission pause message
+    PUT  /submission-pause   admin: {"message": "reason"} to pause, {"message": null} to resume
+    GET  /, /app.js, /style.css   the web UI (ui/): a page on top of the routes above
 
 Every API request carries "Authorization: Bearer <token>" (tokens: `python -m viobench.tools.server.teams`) and sees
-only its own team's submissions; the UI's files are public. VIOBENCH_SERVER_DIR: uploads, reports and sqlite (default ./server-data); the rules are
+only its own team's submissions, or all submissions for admins; the UI's files are public.
+VIOBENCH_SERVER_DIR: uploads, reports and sqlite (default ./server-data); the rules are
 the checked-in viobench/tools/config.json.
 The evaluation itself is done by `viobench.tools.server.worker`, which polls the queue.
 """
@@ -15,12 +17,12 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI, File, Form, Header, HTTPException, Response, UploadFile
+from fastapi import Body, FastAPI, File, Form, Header, HTTPException, Response, UploadFile
 
 from ..abi import AbiError
 from ..abi.module import runtime_descriptor
 from ..abi.wasm_binary import iter_sections
-from .store import Refused, Store
+from .store import MAX_PAUSE_MESSAGE, Paused, Refused, Store
 
 app = FastAPI(title="viobench submissions", docs_url=None, redoc_url=None, openapi_url=None)  # the routes below, nothing else
 _store = None
@@ -53,6 +55,7 @@ def authenticate(authorization):
 
 def public(row):
     """A submission as the API shows it: times in ISO 8601 (UTC), results parsed."""
+    row["is_participant"] = bool(row["is_participant"])
     for key in ("created", "started", "finished"):
         if row[key] is not None:
             row[key] = datetime.fromtimestamp(row[key], timezone.utc).isoformat(timespec="seconds")
@@ -64,6 +67,11 @@ def public(row):
 @app.post("/submissions", status_code=201)
 async def submit(file: UploadFile = File(...), label: str = Form(""), authorization: str | None = Header(default=None)):
     token = authenticate(authorization)
+    if get_store().is_admin(token):
+        raise HTTPException(status_code=403, detail="admin accounts cannot upload submissions")
+    message = get_store().pause_message()
+    if message is not None:
+        raise HTTPException(status_code=503, detail=message)
     config = get_store().config
     data = await file.read()
     if len(data) > config.max_upload_mib << 20:
@@ -82,6 +90,8 @@ async def submit(file: UploadFile = File(...), label: str = Form(""), authorizat
         raise HTTPException(status_code=400, detail="this is the bare Python runtime without solution code: run `viobench bundle`")
     try:
         submission_id = get_store().add(token, label[:80], file.filename or "solution.wasm", data)
+    except Paused as error:  # the admin may have paused while the upload was being read and checked
+        raise HTTPException(status_code=503, detail=str(error)) from None
     except Refused as error:  # one still queued or running, or today's quota used up
         raise HTTPException(status_code=429, detail=str(error)) from None
     return public(get_store().get(token, submission_id))
@@ -105,8 +115,20 @@ def submission(submission_id: str, authorization: str | None = Header(default=No
 
 @app.get("/config")
 def configuration(authorization: str | None = Header(default=None)):
-    authenticate(authorization)
-    return get_store().config.as_dict()
+    token = authenticate(authorization)
+    return {**get_store().config.as_dict(), "is_admin": get_store().is_admin(token), "pause_message": get_store().pause_message()}
+
+
+@app.put("/submission-pause")
+def submission_pause(message: str | None = Body(..., embed=True, max_length=MAX_PAUSE_MESSAGE, strict=True),
+                     authorization: str | None = Header(default=None)):
+    token = authenticate(authorization)
+    if not get_store().is_admin(token):
+        raise HTTPException(status_code=403, detail="admin access required")
+    try:
+        return {"pause_message": get_store().set_pause_message(message)}
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
 
 
 def ui_file(name):

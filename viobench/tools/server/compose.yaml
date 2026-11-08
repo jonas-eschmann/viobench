@@ -5,7 +5,8 @@
 # line, which keeps it in the shell history):
 #
 #   docker compose -f viobench/tools/server/compose.yaml up -d --build
-#   docker compose -f viobench/tools/server/compose.yaml exec app python -m viobench.tools.server.teams add "team a"
+#   docker compose -f viobench/tools/server/compose.yaml exec app python -m viobench.tools.server.teams add --participant "team a"
+#   docker compose -f viobench/tools/server/compose.yaml exec app python -m viobench.tools.server.teams add --admin admin
 #
 # After changing EPISODES, the same `up -d --build` fetches the new episodes and restarts the worker.
 # No port is published: the tunnel service connects out to Cloudflare, which terminates TLS. Create a tunnel in the

@@ -5,7 +5,7 @@
 const TOKEN_KEY = "viobench-token";
 const REQUEST_TIMEOUT_MS = 30000;
 const UPLOAD_STALL_MS = 120000;  // an upload that makes no progress for this long is given up
-const POLL_MS = 15000;  // while a submission is queued or running
+const POLL_MS = 15000;  // submissions and pause status, including while idle
 const MAX_RETRY_MS = 120000;
 const DASH = "—";
 const STATUS_TEXT = {0: "the server cannot be reached", 413: "the file is too large for the server", 502: "the server is unavailable",
@@ -18,7 +18,9 @@ let pollTimer = null;
 let waiting = false;  // a refresh came due while the tab was hidden
 let retryMs = POLL_MS;
 let generation = 0;  // only the newest list request renders
+let session = 0;  // discard details requested before signing out
 let uploading = false;
+let pauseSaving = false;
 let shown = null;  // {id, status} of the submission in the details section
 const finished = new Map();  // id -> details of done and failed submissions, which no longer change
 
@@ -73,11 +75,12 @@ function answer(status, statusText, text) {
   throw new ApiError(status, STATUS_TEXT[status] || `the server answered ${status} ${statusText || ""}`.trim());
 }
 
-async function api(path) {
+async function api(path, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
-    const response = await fetch(path, {headers: {Authorization: `Bearer ${token}`}, cache: "no-store", signal: controller.signal});
+    const response = await fetch(path, {...options, headers: {Authorization: `Bearer ${token}`, ...options.headers},
+                                        cache: "no-store", signal: controller.signal});
     return answer(response.status, response.statusText, await response.text());
   } catch (error) {
     if (error instanceof ApiError) throw error;
@@ -204,11 +207,18 @@ function notice(message, kind = "error") {
 function showSignIn(message, kind = "error") {
   clearTimeout(pollTimer);
   generation++;  // drop answers still on their way
+  session++;
+  waiting = false;
+  retryMs = POLL_MS;
   token = null;
   config = null;
+  pauseSaving = false;
+  $("pause-message").value = "";
   shown = null;
   finished.clear();
-  for (const id of ["team", "sign-out", "details", "connection"]) $(id).hidden = true;
+  $("submissions").tBodies[0].replaceChildren();
+  for (const id of ["details-title", "details-facts", "details-results", "details-json", "updated", "rules"]) $(id).replaceChildren();
+  for (const id of ["team", "sign-out", "details", "connection", "pause-controls", "pause-banner"]) $(id).hidden = true;
   $("sign-in").hidden = false;
   notice(message, kind);
   $("token").focus();
@@ -239,9 +249,67 @@ async function signIn(value, remember) {
   $("sign-in").hidden = true;
   $("team").hidden = false;
   $("sign-out").hidden = false;
+  $("pause-message").value = config.pause_message || "";
+  renderConfiguration(config);
   notice("");
-  renderRules(config);
   refresh();
+}
+
+function renderConfiguration(next) {
+  if (config && config.is_admin !== next.is_admin) {
+    session++;  // discard details requested with the previous permissions
+    shown = null;
+    finished.clear();
+    $("submissions").tBodies[0].replaceChildren();
+    $("details").hidden = true;
+  }
+  config = next;
+  const admin = config.is_admin === true;
+  $("upload-section").hidden = admin;
+  $("pause-controls").hidden = !admin;
+  $("team-column").hidden = !admin;
+  $("account-column").hidden = !admin;
+  $("submissions-title").textContent = admin ? "All submissions" : "Submissions";
+  renderPause();
+  renderRules(config);
+}
+
+function renderPause() {
+  const message = config.pause_message;
+  $("pause-banner").textContent = message ? `Submissions are paused: ${message}` : "";
+  $("pause-banner").hidden = !message;
+  $("pause-status").textContent = message ? "New submissions are paused." : "Accepting new submissions.";
+  $("pause-button").textContent = message ? "Update message" : "Pause submissions";
+  $("pause-button").disabled = pauseSaving;
+  $("resume-button").disabled = pauseSaving || !message;
+  if (message) $("upload-button").disabled = true;
+}
+
+async function setPause(message) {
+  if (pauseSaving || !config.is_admin) return;
+  if (message !== null && !message.trim()) return notice("Enter a message for the teams before pausing submissions.");
+  const mine = session;
+  pauseSaving = true;
+  clearTimeout(pollTimer);
+  generation++;  // discard config/list responses from before this update
+  renderPause();
+  try {
+    const state = await api("submission-pause", {method: "PUT", headers: {"Content-Type": "application/json"},
+                                                 body: JSON.stringify({message: message === null ? null : message.trim()})});
+    if (mine !== session) return;
+    config.pause_message = state.pause_message;
+    notice(state.pause_message ? "Submission pause saved." : "Submissions resumed.", "info");
+  } catch (error) {
+    if (mine !== session) return;
+    if (error.status === 401) return showSignIn("The token is no longer valid.");
+    notice(`Cannot update submission access: ${error.message}`);
+  } finally {
+    if (mine === session) {
+      pauseSaving = false;
+      renderPause();
+      refresh();
+    }
+  }
 }
 
 // --- the list of submissions -----------------------------------------------------------------------------------
@@ -255,17 +323,21 @@ function schedule(ms) {
 }
 
 async function refresh() {
+  if (token === null || pauseSaving) return;
   clearTimeout(pollTimer);
   const mine = ++generation;
   let rows;
   try {
+    const next = await api("config");
+    if (mine !== generation) return;
+    renderConfiguration(next);
     rows = await api("submissions");
     if (!Array.isArray(rows)) throw new ApiError(200, "the server sent an unreadable answer");
   } catch (error) {
     if (mine !== generation) return;
     if (error.status === 401) return showSignIn("The token is no longer valid.");
     const connection = $("connection");
-    connection.textContent = `Cannot update the list: ${error.message}. Trying again in ${Math.round(retryMs / 1000)} s.`;
+    connection.textContent = `Cannot refresh: ${error.message}. Trying again in ${Math.round(retryMs / 1000)} s.`;
     connection.hidden = false;
     schedule(retryMs);
     retryMs = Math.min(retryMs * 2, MAX_RETRY_MS);
@@ -277,8 +349,8 @@ async function refresh() {
   renderList(rows);
   $("updated").textContent = `updated ${new Date().toLocaleTimeString()}`;
   const pending = rows.find((row) => row && (row.status === "queued" || row.status === "running"));
-  renderUploadState(pending);
-  if (pending) schedule(POLL_MS);
+  if (!config.is_admin) renderUploadState(pending);
+  schedule(POLL_MS);
   const current = shown && rows.find((row) => row && row.id === shown.id);
   if (current && current.status !== shown.status) showDetails(current.id, false);
 }
@@ -295,7 +367,8 @@ function renderList(rows) {
     button.setAttribute("aria-label", `Details of ${row.label || row.id}`);
     button.addEventListener("click", () => showDetails(row.id, true));
     const episodes = isNumber(overall.episodes) ? `${overall.completed}/${overall.episodes}` : DASH;
-    body.append(tableRow([time(row.created), row.label || DASH, status, decimal(overall.rpe_translation_rmse_median),
+    body.append(tableRow([time(row.created), ...(config.is_admin ? [row.team_name || DASH, row.is_participant ? "Participant" : "Test"] : []),
+                          row.label || DASH, status, decimal(overall.rpe_translation_rmse_median),
                           fuel(overall.fuel_per_frame_median), episodes, button]));
   }
   $("empty").hidden = body.rows.length > 0;
@@ -304,7 +377,7 @@ function renderList(rows) {
 // --- submitting ------------------------------------------------------------------------------------------------
 
 function renderUploadState(pending) {
-  $("upload-button").disabled = uploading || Boolean(pending);
+  $("upload-button").disabled = uploading || Boolean(pending) || Boolean(config.pause_message);
   const hint = $("upload-hint");
   if (pending) {
     hint.textContent = `"${pending.label || pending.id}" is ${pending.status}: submit the next one once it has finished.`;
@@ -319,6 +392,7 @@ function renderUploadState(pending) {
 
 async function submit(event) {
   event.preventDefault();
+  if (config.pause_message) return notice(config.pause_message);
   const file = $("file").files[0];
   if (!file) return;
   const limit = get(config, "max_upload_mib");
@@ -370,15 +444,17 @@ const EPISODE_COLUMNS = [
 ];
 
 async function showDetails(id, scroll) {
+  const mine = session;
   let submission = finished.get(id);
   if (!submission) {
     try {
       submission = await api(`submissions/${encodeURIComponent(id)}`);
     } catch (error) {
+      if (mine !== session) return;
       if (error.status === 401) return showSignIn("The token is no longer valid.");
       return notice(`Cannot show the submission: ${error.message}`);
     }
-    if (token === null) return;
+    if (mine !== session || token === null) return;
     if (submission.status === "done" || submission.status === "failed") finished.set(id, submission);
   }
   shown = {id, status: submission.status};
@@ -390,7 +466,9 @@ function renderDetails(submission) {
   $("details-title").textContent = submission.label || submission.id || "Submission";
   const facts = $("details-facts");
   facts.replaceChildren();
-  for (const [label, value] of [["Id", submission.id], ["File", `${submission.filename || DASH} (${size(submission.bytes)})`],
+  const account = config.is_admin ? [["Team", submission.team_name], ["Account", submission.is_participant ? "Participant" : "Test"]] : [];
+  for (const [label, value] of [["Id", submission.id], ...account,
+                                ["File", `${submission.filename || DASH} (${size(submission.bytes)})`],
                                 ["SHA-256", submission.sha256], ["Status", submission.status], ["Error", submission.error],
                                 ["Submitted", time(submission.created)], ["Started", time(submission.started)],
                                 ["Finished", time(submission.finished)]]) {
@@ -435,6 +513,7 @@ function renderRules(rules) {
   list.replaceChildren();
   const flat = Object.entries(rules || {}).flatMap(([key, value]) => (value && typeof value === "object" ? Object.entries(value) : [[key, value]]));
   for (const [key, value] of flat) {
+    if (key === "is_admin" || key === "pause_message") continue;
     const [label, format] = RULES[key] || [key, String];
     list.append(node("dt", label), node("dd", isNumber(value) ? format(value) : String(value)));
   }
@@ -455,6 +534,11 @@ $("token-form").addEventListener("submit", (event) => {
   signIn($("token").value, $("remember").checked);
 });
 $("upload-form").addEventListener("submit", submit);
+$("pause-form").addEventListener("submit", (event) => {
+  event.preventDefault();
+  setPause($("pause-message").value);
+});
+$("resume-button").addEventListener("click", () => setPause(null));
 $("refresh").addEventListener("click", () => {
   retryMs = POLL_MS;
   refresh();

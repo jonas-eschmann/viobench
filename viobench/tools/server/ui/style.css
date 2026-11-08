@@ -56,7 +56,8 @@ form {
 
 form button, form progress, form .inline, form .hint { grid-column: 2; justify-self: start; }
 form progress { width: 100%; }
-input:not([type]), input[type=text] { width: 100%; padding: 0.35rem 0.45rem; font: inherit; }
+input:not([type]), input[type=text], textarea { width: 100%; padding: 0.35rem 0.45rem; font: inherit; }
+textarea { resize: vertical; }
 #token { font-family: ui-monospace, monospace; }  /* tokens mix l, 1, I, O and 0 */
 
 button {
@@ -71,7 +72,8 @@ button {
 
 button:disabled { opacity: 0.5; cursor: not-allowed; }
 
-#notice, #connection { padding: 0.6rem 0.8rem; border: 1px solid; border-radius: 4px; overflow-wrap: anywhere; }
+#notice, #connection, #pause-banner { padding: 0.6rem 0.8rem; border: 1px solid; border-radius: 4px; overflow-wrap: anywhere; }
+#pause-banner { white-space: pre-wrap; }
 .error { color: var(--bad); border-color: var(--bad); }
 .info { border-color: var(--line); background: var(--panel); }
 .hint { color: var(--muted); margin: 0.25rem 0; }
@@ -82,7 +84,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
 th, td { padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
 th { color: var(--muted); font-weight: 600; }
-#submissions td:nth-child(2), #submissions td:nth-child(3) { white-space: normal; min-width: 8rem; overflow-wrap: anywhere; }
+/* Team, label and status text wrap in both the team and admin tables. */
+#submissions td:nth-child(2), #submissions td:nth-last-child(6), #submissions td:nth-last-child(5) { white-space: normal; min-width: 8rem; overflow-wrap: anywhere; }
 
 .status.done { color: var(--ok); }
 .status.failed { color: var(--bad); }
