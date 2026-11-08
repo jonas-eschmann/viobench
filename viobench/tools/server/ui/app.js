@@ -486,6 +486,17 @@ function svgNode(tag, attributes, text) {
   return element;
 }
 
+function logTicks(min, max) {
+  const low = Math.log10(min), high = Math.log10(max);
+  const stride = Math.max(1, Math.ceil((high - low) / 6));
+  const ticks = [min];
+  for (let exponent = Math.ceil(low / stride) * stride; exponent < high; exponent += stride) {
+    const position = (exponent - low) / (high - low);
+    if (position > 0.08 && position < 0.92) ticks.push(10 ** exponent); // leave room for endpoint labels
+  }
+  return [...ticks, max];
+}
+
 function renderComparison(comparison) {
   const container = $("comparison-charts");
   container.replaceChildren();
@@ -505,42 +516,64 @@ function renderComparison(comparison) {
       container.append(node("p", "No comparable results for this dataset yet.", "hint"));
       continue;
     }
-    const maxX = Math.max(...points.map((point) => point.fuel_per_frame_max / 1e6)) * 1.1 || 1;
-    const maxY = Math.max(...points.map((point) => point.sim3_ate_rmse_median)) * 1.1 || 1;
-    const x = (point) => 76 + point.fuel_per_frame_max / 1e6 / maxX * 580;
-    const y = (point) => 280 - point.sim3_ate_rmse_median / maxY * 256;
-    const chart = svgNode("svg", {viewBox: "0 0 680 340", class: "comparison-chart", role: "group",
-                                  "aria-label": `${dataset.name}: Sim(3) ATE versus maximum fuel per frame. Lower is better.`});
-    chart.append(svgNode("title", {}, `${dataset.name}: your submissions and baselines`));
-    for (let tick = 0; tick <= 4; tick++) {
-      const px = 76 + tick / 4 * 580, py = 280 - tick / 4 * 256;
-      chart.append(svgNode("line", {x1: px, y1: 24, x2: px, y2: 280, class: "comparison-grid"}),
-                   svgNode("line", {x1: 76, y1: py, x2: 656, y2: py, class: "comparison-grid"}),
-                   svgNode("text", {x: px, y: 300, "text-anchor": "middle"}, decimal(maxX * tick / 4)),
-                   svgNode("text", {x: 65, y: py + 4, "text-anchor": "end"}, decimal(maxY * tick / 4)));
-    }
-    chart.append(svgNode("text", {x: 366, y: 330, "text-anchor": "middle"}, "Maximum fuel/frame (millions)"),
-                 svgNode("text", {x: 18, y: 152, transform: "rotate(-90 18 152)", "text-anchor": "middle"}, "Median Sim(3) ATE (m)"));
+    const minX = comparison.fuel_floor, maxX = comparison.fuel_reference, minY = comparison.error_floor;
+    const maxY = Math.max(minY * 1.2, dataset.error_reference || 0, ...points.map((point) => point.sim3_ate_rmse_median * 1.1));
+    const x = (used) => 76 + Math.log(Math.max(minX, used) / minX) / Math.log(maxX / minX) * 580;
+    const y = (error) => 280 - Math.log(Math.max(minY, error) / minY) / Math.log(maxY / minY) * 256;
     const frontierIds = new Set(dataset.frontier);
-    const frontier = points.filter((point) => point.team_type === "baseline" && frontierIds.has(point.id))
-      .sort((a, b) => a.fuel_per_frame_max - b.fuel_per_frame_max || a.sim3_ate_rmse_median - b.sim3_ate_rmse_median);
-    if (frontier.length > 1) {
-      const steps = [`${x(frontier[0])},${y(frontier[0])}`];
-      for (let index = 1; index < frontier.length; index++) {
-        steps.push(`${x(frontier[index])},${y(frontier[index - 1])}`, `${x(frontier[index])},${y(frontier[index])}`);
+    const baselineIds = new Set(dataset.baseline_frontier);
+    // The envelope begins at its ceiling and drops only when a submission improves it.
+    // Include the final horizontal segment through the fixed fuel reference.
+    const steps = (ids, ceiling) => {
+      const coordinates = [[minX, ceiling]];
+      const ordered = points.filter((point) => ids.has(point.id) && point.fuel_per_frame_max <= maxX)
+        .map((point) => [Math.max(minX, point.fuel_per_frame_max), Math.max(minY, point.sim3_ate_rmse_median)])
+        .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+      for (const [used, error] of ordered) {
+        if (error >= ceiling) continue;
+        coordinates.push([used, ceiling], [used, error]);
+        ceiling = error;
       }
-      chart.append(svgNode("polyline", {points: steps.join(" "), class: "comparison-frontier"}));
+      coordinates.push([maxX, ceiling]);
+      return coordinates;
+    };
+    const svgPoints = (coordinates) => coordinates.map(([used, error]) => `${x(used)},${y(error)}`).join(" ");
+    const chart = svgNode("svg", {viewBox: "0 0 680 340", class: "comparison-chart", role: "group",
+                                  "aria-label": `${dataset.name}: Sim(3) ATE versus maximum fuel per frame, both on logarithmic scales. Lower is better.`});
+    chart.append(svgNode("title", {}, `${dataset.name}: your submissions and baselines`));
+    for (const tick of logTicks(minX, maxX)) {
+      const px = x(tick);
+      chart.append(svgNode("line", {x1: px, y1: 24, x2: px, y2: 280, class: "comparison-grid"}),
+                   svgNode("text", {x: px, y: 300, "text-anchor": "middle"}, fuel(tick)));
+    }
+    for (const tick of logTicks(minY, maxY)) {
+      const py = y(tick);
+      chart.append(svgNode("line", {x1: 76, y1: py, x2: 656, y2: py, class: "comparison-grid"}),
+                   svgNode("text", {x: 65, y: py + 4, "text-anchor": "end"}, decimal(tick)));
+    }
+    chart.append(svgNode("text", {x: 366, y: 330, "text-anchor": "middle"}, "Maximum fuel/frame (log scale)"),
+                 svgNode("text", {x: 18, y: 152, transform: "rotate(-90 18 152)", "text-anchor": "middle"}, "Median Sim(3) ATE (m, log scale)"));
+    if (dataset.claimed_area > 0) {
+      const boundary = steps(baselineIds, dataset.error_reference)
+        .concat(steps(frontierIds, dataset.error_reference).reverse());
+      chart.append(svgNode("polygon", {points: svgPoints(boundary), class: "comparison-area"}));
+    }
+    for (const [ids, className] of [[frontierIds, "comparison-frontier"], [baselineIds, "comparison-frontier baseline"]]) {
+      if (points.some((point) => ids.has(point.id) && point.fuel_per_frame_max <= maxX)) {
+        chart.append(svgNode("polyline", {points: svgPoints(steps(ids, maxY)), class: className}));
+      }
     }
     const rows = [];
     for (const point of points) {
       const name = point.label || point.id;
-      const description = `${point.team_name}: ${name}; maximum fuel/frame ${point.fuel_per_frame_max}; median Sim(3) ATE ${point.sim3_ate_rmse_median} m`;
+      const onFrontier = frontierIds.has(point.id);
+      const description = `${point.team_name}: ${name}; maximum fuel/frame ${point.fuel_per_frame_max}; median Sim(3) ATE ${point.sim3_ate_rmse_median} m${onFrontier ? "; on Pareto frontier" : ""}`;
       const canOpen = point.own || config.team_type === "admin";
-      const mark = svgNode("g", {class: `comparison-point ${point.own ? "own" : "baseline"}`,
+      const mark = svgNode("g", {class: `comparison-point ${point.own ? "own" : "baseline"}${onFrontier ? " frontier" : ""}`,
                                  role: canOpen ? "button" : "img", tabindex: 0, "aria-label": description});
       mark.append(svgNode("title", {}, description), point.team_type === "baseline" ?
-                  svgNode("rect", {x: x(point) - 5, y: y(point) - 5, width: 10, height: 10}) :
-                  svgNode("circle", {cx: x(point), cy: y(point), r: 5}));
+                  svgNode("rect", {x: x(point.fuel_per_frame_max) - 5, y: y(point.sim3_ate_rmse_median) - 5, width: 10, height: 10}) :
+                  svgNode("circle", {cx: x(point.fuel_per_frame_max), cy: y(point.sim3_ate_rmse_median), r: 5}));
       let button = "";
       if (canOpen) {
         mark.addEventListener("click", () => showDetails(point.id, true));
@@ -555,12 +588,21 @@ function renderComparison(comparison) {
         button.setAttribute("aria-label", `Details of ${point.team_name}: ${name}`);
         button.addEventListener("click", () => showDetails(point.id, true));
       }
-      chart.append(mark);
+      if (point.fuel_per_frame_max <= maxX) chart.append(mark);
       rows.push([point.team_name, name, point.own ? `Yours (${point.team_type})` : "Baseline",
                  point.fuel_per_frame_max, point.sim3_ate_rmse_median, button]);
     }
     container.append(chart);
-    if (!frontier.length) container.append(node("p", "No baseline reference is available for this dataset yet.", "hint"));
+    if (dataset.claimed_area === null) {
+      container.append(node("p", "Claimed area is unavailable until baseline results are available for this dataset.", "hint"));
+    } else {
+      const fraction = dataset.claimed_area / (Math.log(maxX / minX) * Math.log(dataset.error_reference / minY));
+      container.append(node("p", `Claimed area: ${decimal(fraction * 100)}% of the log–log reference rectangle. ` +
+        `Reference: ${fuel(minX)}–${fuel(maxX)} fuel/frame and ${decimal(minY)}–${decimal(dataset.error_reference)} m Sim(3) ATE.`, "hint"));
+    }
+    if (points.some((point) => point.fuel_per_frame_max > maxX)) {
+      container.append(node("p", "Submissions beyond the fuel axis are listed in Exact values below.", "hint"));
+    }
     const values = node("details", null, "comparison-values");
     values.append(node("summary", "Exact values"), table(["Team", "Submission", "Account", "Max fuel/frame", "Sim(3) ATE (m)", ""], rows));
     container.append(values);

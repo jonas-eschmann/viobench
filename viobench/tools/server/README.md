@@ -56,9 +56,9 @@ team's name and account type in the list and details. Admin accounts cannot uplo
 Change an existing team's type using its token from `teams list`:
 
 ```bash
-python -m viobench.tools.server.teams update "$TOKEN" --type participant
-python -m viobench.tools.server.teams update "$TOKEN" --type admin
-python -m viobench.tools.server.teams update "$TOKEN" --type test  # also revokes admin/baseline status
+python -m viobench.tools.server.teams update --type participant -- "$TOKEN"
+python -m viobench.tools.server.teams update --type admin -- "$TOKEN"
+python -m viobench.tools.server.teams update --type test -- "$TOKEN"  # also revokes admin/baseline status
 ```
 
 Updates keep the token, submissions and quota setting. API permissions change immediately;
@@ -77,8 +77,18 @@ other teams' plots. Baseline accounts have no admin permissions and use the same
 
 Each dataset's plot compares median episode Sim(3)-aligned ATE (metres) with the submission's maximum fuel per frame
 across the current evaluation set. Baselines are squares, the viewer's other submissions are circles, and the dashed
-line marks the baseline Pareto frontier (lower is better on both axes). Linear axes include zero-valued scores.
-The comparison table provides the same values and names. Baseline details, files, and historical jobs remain private.
+line marks the baseline Pareto frontier. The solid frontier combines baselines with the viewer's submissions;
+shading shows the additional area they cover beyond the baselines (lower is better on both axes).
+Both axes and the area calculation use logarithms, giving equal proportional improvements equal weight. For the
+plot, frontiers and area only, fuel is clamped to at least `1` per frame and ATE to `0.001 m`; labels and reported
+metrics keep their raw values. The fuel reference is `X = 1.2 × step_fuel`; each dataset's error reference is
+`Y = 1.2 ×` its worst eligible baseline ATE after clamping. Thus all-zero baseline errors give `Y = 0.0012 m`,
+and fuel improvements can still earn area. Nonbaseline uploads do not change these references.
+The claimed area is the combined dominated area minus baseline dominated area in natural-log coordinates.
+Its percentage is `100 × claimed area / (ln(X / 1) × ln(Y / 0.001))`, unavailable until a baseline exists.
+The fuel interval from `step_fuel` to `1.2 × step_fuel` still contributes `ln(1.2)` width, with less relative
+weight than on linear axes. The comparison table provides raw values and names. Baseline details, files, and
+historical jobs remain private.
 
 Only submissions with reports for every selected episode and finite scores appear. Guest errors still produce
 scores: the failed and remaining frames use zero position/twist and identity rotation, and alignment includes all
@@ -101,7 +111,7 @@ Submission responses include the submitting account's `team_name` and `team_type
 | `GET /submissions` | the team's submissions (all submissions for admins), newest first, with current-set `status`, `progress` and `overall` |
 | `GET /submissions/<id>` | current-set `results` (`summary`, `episodes`, `partial`) plus all scheduled `jobs`, including episodes outside the current set; admins can access any submission |
 | `GET /config` | the rules below, `team_name`, `team_type`, `pause_message` (null when accepting uploads), and current `evaluation_hashes` |
-| `GET /comparison` | current `evaluation_hashes` and per-dataset points for the viewer's submissions and shared baselines, with baseline frontier ids; no other teams' private submissions |
+| `GET /comparison` | current `evaluation_hashes` and per-dataset points for the viewer's submissions and shared baselines, baseline and combined frontiers, and improvement area; no other teams' private submissions |
 | `PUT /submission-pause` | admin only: JSON `{"message": "reason"}` pauses or updates the message; `{"message": null}` resumes; returns `pause_message` |
 | `GET /evaluations` | admin only: current `hashes` and named `presets` |
 | `PUT /evaluations` | admin only: `{"hashes": ["<sha1>", "..."], "backfill": true}` saves the set and optionally schedules missing jobs for all submissions; returns selection and `scheduled` count |

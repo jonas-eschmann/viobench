@@ -240,7 +240,7 @@ def test_cli_updates_roles_and_access_without_changing_the_account(api, monkeypa
 
     for kind in ["participant", "admin", "baseline", "test"]:
         admin = kind == "admin"
-        monkeypatch.setattr(sys, "argv", ["teams", "update", token, "--type", kind])
+        monkeypatch.setattr(sys, "argv", ["teams", "update", "--type", kind, "--", token])
         teams.main()
         assert store.teams() == [unchanged_team, (token, "team", True, kind)]
         assert client.get("/config", headers=headers).json()["team_type"] == kind
@@ -266,13 +266,13 @@ def test_invalid_role_updates_leave_accounts_unchanged(api, monkeypatch, capsys)
         with pytest.raises(ValueError) as error:
             store.update_team(selected, team_type=kind)
         assert selected not in str(error.value)
-        monkeypatch.setattr(sys, "argv", ["teams", "update", selected, "--type", kind])
+        monkeypatch.setattr(sys, "argv", ["teams", "update", "--type", kind, "--", selected])
         with pytest.raises(SystemExit) as error:
             teams.main()
         assert error.value.code == 2
         assert selected not in capsys.readouterr().err
         assert store.teams() == before
-    monkeypatch.setattr(sys, "argv", ["teams", "update", token])
+    monkeypatch.setattr(sys, "argv", ["teams", "update", "--", token])
     with pytest.raises(SystemExit) as error:
         teams.main()
     assert error.value.code == 2 and "--type" in capsys.readouterr().err

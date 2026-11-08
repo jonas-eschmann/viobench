@@ -78,7 +78,8 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
   <section>
     <h2>Comparison with baselines</h2>
     <p class="hint">Current-set results: maximum fuel per frame across all episodes, and median Sim(3) ATE per dataset. Lower is better on both axes. Only submissions with all reports appear.</p>
-    <p class="comparison-legend"><span class="own-key">● Your submissions</span> <span>■ Baselines</span> <span>┄ Baseline frontier</span></p>
+    <p class="comparison-legend"><span class="own-key">● Your submissions</span> <span>■ Baselines</span> <span>┄ Baseline frontier</span> <span class="own-key">━ Pareto frontier (baselines + yours)</span></p>
+    <p class="hint">Shading shows your extra area beyond the baselines. Both axes and the area use logarithmic scales, rewarding proportional improvements. Values below 1 fuel/frame or 1 mm ATE are clamped for the plot and area; Exact values keeps the raw scores. The upper reference uses 1.2× the fuel limit and 1.2× the worst baseline ATE after clamping.</p>
     <div id="comparison-charts"></div>
   </section>
 

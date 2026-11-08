@@ -71,8 +71,15 @@ upload; additional evaluations of an existing submission do not count as uploads
 
 The comparison plots show your submissions alongside shared baselines. Lower **Sim(3)-aligned ATE** and lower
 **maximum fuel per frame** are better. Each dataset uses the median ATE over its episodes; maximum fuel spans the
-whole selected set. The dashed line connects the nondominated baselines. Points appear once every selected episode
-has a scored report, and update when the instructors change the set and fill in the missing evaluations.
+whole selected set. The dashed frontier uses baselines; the solid frontier combines baselines and your submissions.
+Shading marks your improvement beyond the baselines in logarithmic coordinates, so equal proportional improvements
+have equal weight. The plot, frontiers and area score use floors of `1` fuel/frame and `0.001 m` ATE; reported metrics
+and labels stay unchanged. The reference bounds are `1.2 × step_fuel` and `1.2 ×` the worst eligible baseline ATE
+after applying the floor (`0.0012 m` when all baseline errors are zero). Improvement is the shaded area as a percentage
+of this log-space rectangle, unavailable without a baseline. Nonbaseline uploads do not change the references.
+The fuel interval above `step_fuel` still earns area, but has less relative weight than on linear axes.
+Points appear once every selected episode has a scored report, and update when the instructors change the set and
+fill in the missing evaluations.
 
 After a solution error, the failed and remaining frames are scored with zero position, identity rotation, and zero
 twist. Sim(3) alignment and ATE include every frame. Fuel counts actual attempted steps, including a failing step;

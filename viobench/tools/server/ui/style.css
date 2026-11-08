@@ -103,10 +103,13 @@ th { color: var(--muted); font-weight: 600; }
 .comparison-chart { display: block; width: 100%; max-width: 48rem; height: auto; overflow: visible; }
 .comparison-chart text { fill: var(--muted); font: 13px system-ui, sans-serif; }
 .comparison-grid { stroke: var(--line); stroke-width: 1; }
-.comparison-frontier { fill: none; stroke: var(--muted); stroke-width: 2; stroke-dasharray: 6 4; }
+.comparison-frontier { fill: none; stroke: var(--ok); stroke-width: 2; }
+.comparison-frontier.baseline { stroke: var(--muted); stroke-dasharray: 6 4; }
+.comparison-area { fill: var(--ok); fill-opacity: 0.18; }
 .comparison-point { stroke: var(--bg); stroke-width: 1.5; }
 .comparison-point.own { fill: var(--ok); }
 .comparison-point.baseline { fill: var(--muted); }
+.comparison-point.frontier { stroke: var(--fg); stroke-width: 2.5; }
 .comparison-point[role=button] { cursor: pointer; }
 .comparison-point[role=button]:hover, .comparison-point:focus { stroke: var(--fg); stroke-width: 3; outline: none; }
 .comparison-values { margin: 0.5rem 0 1rem; }
