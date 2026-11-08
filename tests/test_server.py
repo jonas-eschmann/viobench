@@ -152,23 +152,26 @@ def test_api_requires_a_valid_token(api, authorization, method, path):
     assert response.status_code == 401 and response.headers["www-authenticate"] == "Bearer"
 
 
-def test_existing_database_is_upgraded_without_losing_data(tmp_path):
-    # The original schema has neither account flag.
+@pytest.mark.parametrize("has_unlimited", [False, True])
+def test_existing_database_is_upgraded_without_losing_data(tmp_path, has_unlimited):
+    # The pre-merge schema has no account flags; later databases may already grant unlimited quotas.
     with sqlite3.connect(tmp_path / "submissions.sqlite") as connection:
         connection.executescript("""
-            CREATE TABLE teams (token TEXT PRIMARY KEY, name TEXT NOT NULL, created REAL NOT NULL,
-                                unlimited INTEGER NOT NULL DEFAULT 0);
+            CREATE TABLE teams (token TEXT PRIMARY KEY, name TEXT NOT NULL, created REAL NOT NULL);
             CREATE TABLE submissions (
                 id TEXT PRIMARY KEY, token TEXT NOT NULL REFERENCES teams(token), label TEXT,
                 filename TEXT NOT NULL, sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, created REAL NOT NULL,
                 status TEXT NOT NULL, started REAL, finished REAL, results TEXT, error TEXT);
-            INSERT INTO teams VALUES ('existing-token', 'admin', 1, 1);
+            INSERT INTO teams VALUES ('existing-token', 'admin', 1);
             INSERT INTO submissions (id, token, label, filename, sha256, bytes, created, status, error)
                 VALUES ('existing-id', 'existing-token', 'v1', 'x.wasm', 'hash', 8, 2, 'failed', 'old error');
         """)
+        if has_unlimited:
+            connection.execute("ALTER TABLE teams ADD COLUMN unlimited INTEGER NOT NULL DEFAULT 0")
+            connection.execute("UPDATE teams SET unlimited = 1 WHERE token = 'existing-token'")
     for _ in range(2):  # Restarting the app/worker must not repeat the migration or alter existing accounts.
         store = Store(tmp_path)
-        assert store.teams() == [("existing-token", "admin", True, False, False)]
+        assert store.teams() == [("existing-token", "admin", has_unlimited, False, False)]
         assert store.is_team("existing-token") and not store.is_admin("existing-token")
         [submission] = store.submissions("existing-token")
         assert submission["id"] == "existing-id" and submission["error"] == "old error"

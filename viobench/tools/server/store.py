@@ -78,7 +78,7 @@ class Store:
             connection.executescript(SCHEMA)
             connection.execute("BEGIN IMMEDIATE")  # app, worker and CLI may start together
             columns = {row["name"] for row in connection.execute("PRAGMA table_info(teams)")}
-            for column in ("is_admin", "is_participant"):
+            for column in ("unlimited", "is_admin", "is_participant"):
                 if column not in columns:
                     connection.execute(f"ALTER TABLE teams ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0")
         self.config = load_config()
