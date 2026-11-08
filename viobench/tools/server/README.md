@@ -1,7 +1,7 @@
 # Submission server
 
 The app queues uploads in SQLite and shows each team its own submissions; admins can view all submissions.
-Each submission has one job per requested episode. One worker evaluates these jobs one at a time, downloading
+Each submission has one job per requested episode. One worker supervises evaluation subprocesses, downloading
 uncached archives as needed. Both processes use `VIOBENCH_SERVER_DIR` (default `./server-data`).
 
 This per-episode schema requires a fresh database; older submission databases are not migrated. For an existing
@@ -23,7 +23,11 @@ sets; signing in with a set without a matching preset shows **Custom current set
 The dropdown is a local edit form initialized at sign-in. Polling updates the saved-set label without changing
 your selection, even when another admin changes the saved set. Reload the page to load new presets.
 
-The worker runs jobs in queue order. Each evaluator reads its archive through conta (`CONTA_CACHE`, default
+The worker's `--jobs N` option controls concurrent evaluations (default `1`), each in its own subprocess supervised
+by a thread; for example, `python -m viobench.tools.server.worker --jobs 2`. Run exactly one worker process/container;
+do not scale worker replicas. Jobs are claimed in queue order but can finish out of order. SIGINT or SIGTERM stops
+the evaluation subprocesses; interrupted running jobs are requeued at the next worker startup.
+Each evaluator reads its archive through conta (`CONTA_CACHE`, default
 `~/.cache/conta`), downloading it if absent. A download failure fails that job with a sanitized public error;
 details stay in the private log. Saving or scheduling again does not rerun existing jobs, including failed ones.
 
@@ -109,7 +113,8 @@ samples from their finished jobs; they do not average per-episode percentiles. J
 the other statistics are diagnostics. Initialization fuel is reported separately per episode.
 
 Deployment: [`compose.yaml`](compose.yaml) (usage in its header) runs the app behind a Cloudflare tunnel (no open port;
-Cloudflare terminates TLS) and the worker unprivileged with a memory limit. The worker has network access and a writable
+Cloudflare terminates TLS) and the worker unprivileged. Set `WORKER_JOBS=2` for two concurrent evaluations (default `1`).
+The worker's memory limit (`WORKER_MEMORY`, default `8g`) is shared across all evaluations. The worker has network access and a writable
 `conta-cache` volume for archive downloads. Wasmtime sandboxes the guest, while each evaluation subprocess has a time
 limit and capped logs. New selections and scheduled jobs need no service restart.
 Keep the `server-data` volume private (the sqlite holds the tokens) and back it up. Behind a
