@@ -70,3 +70,14 @@ def test_errors_carry_a_detail_the_ui_shows(api):
     store.finish(first["id"], error="no episode completed")
     [listed] = client.get("/submissions").json()
     assert listed["status"] == "failed" and listed["overall"] is None
+
+
+def test_unlimited_team_has_no_daily_quota(api):
+    client, store = api
+    unlimited = {"Authorization": f"Bearer {store.add_team('debug', unlimited=True)}"}
+    for headers in ({}, unlimited):
+        for _ in range(store.config.daily_quota):
+            store.finish(client.post("/submissions", files={"file": ("x.wasm", MODULE)}, headers=headers).json()["id"], results=results(0.1))
+    assert client.post("/submissions", files={"file": ("x.wasm", MODULE)}).status_code == 429
+    assert client.post("/submissions", files={"file": ("x.wasm", MODULE)}, headers=unlimited).status_code == 201
+    assert [unlimited for _, _, unlimited in store.teams()] == [False, True]

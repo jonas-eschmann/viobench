@@ -22,7 +22,8 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS teams (
     token TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    created REAL NOT NULL
+    created REAL NOT NULL,
+    unlimited INTEGER NOT NULL DEFAULT 0  -- 1: no daily quota, e.g. the instructors' debug team
 );
 CREATE TABLE IF NOT EXISTS submissions (
     id TEXT PRIMARY KEY,
@@ -70,17 +71,17 @@ class Store:
 
     # --- teams ----------------------------------------------------------------------------------------------
 
-    def add_team(self, name):
-        """Creates a team; returns its token."""
+    def add_team(self, name, unlimited=False):
+        """Creates a team, without a daily quota if `unlimited`; returns its token."""
         token = secrets.token_urlsafe(TOKEN_BYTES)
         with self._connect() as connection:
-            connection.execute("INSERT INTO teams (token, name, created) VALUES (?, ?, ?)", (token, name, time.time()))
+            connection.execute("INSERT INTO teams (token, name, created, unlimited) VALUES (?, ?, ?, ?)", (token, name, time.time(), unlimited))
         return token
 
     def teams(self):
-        """[(token, name)] in the order they were created."""
+        """[(token, name, unlimited)] in the order they were created."""
         with self._connect() as connection:
-            return [tuple(row) for row in connection.execute("SELECT token, name FROM teams ORDER BY created")]
+            return [(row["token"], row["name"], bool(row["unlimited"])) for row in connection.execute("SELECT token, name, unlimited FROM teams ORDER BY created")]
 
     def is_team(self, token):
         with self._connect() as connection:
@@ -91,7 +92,7 @@ class Store:
     def add(self, token, label, filename, data):
         """Queues a submission and returns its id. Refused while the team has one queued or running, or once today's
         quota is used up: config.daily_quota submissions, where up to config.daily_failed_quota failed ones do not count
-        (further failures count like any other submission).
+        (further failures count like any other submission). An unlimited team has no daily quota.
 
         One transaction: concurrent uploads cannot both pass these checks, and the worker cannot claim the row before
         the file is written."""
@@ -103,10 +104,11 @@ class Store:
             pending = connection.execute("SELECT id, status FROM submissions WHERE token = ? AND status IN ('queued', 'running')", (token,)).fetchone()
             if pending is not None:
                 raise Refused(f"submission {pending['id']} is still {pending['status']}; submit again once it has finished")
+            unlimited = connection.execute("SELECT unlimited FROM teams WHERE token = ?", (token,)).fetchone()["unlimited"]
             today = connection.execute("SELECT COUNT(*) AS n, COALESCE(SUM(status = 'failed'), 0) AS failed FROM submissions "
                                        "WHERE token = ? AND created >= ?", (token, day_start(now, config.quota_time_zone))).fetchone()
             counted = today["n"] - today["failed"] + max(0, today["failed"] - config.daily_failed_quota)
-            if counted >= config.daily_quota:
+            if counted >= config.daily_quota and not unlimited:
                 raise Refused(f"today's quota of {config.daily_quota} submission(s) is used up (up to {config.daily_failed_quota} "
                               f"failed one(s) do not count); it resets at midnight ({config.quota_time_zone})")
             connection.execute(
