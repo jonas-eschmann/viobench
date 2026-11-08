@@ -69,7 +69,7 @@ Submission responses include the submitting account's `team_name` and `is_partic
 | `POST /submissions` | multipart `file` (and `label`) → 201 |
 | `GET /submissions` | the team's submissions (all submissions for admins), newest first: id, label, sha256, times (UTC), `status` (`queued`, `running`, `done`, `failed`), `error`, `overall` (headline medians once done) |
 | `GET /submissions/<id>` | one of them, with `results` (metrics only) once done; admins can access any submission |
-| `GET /config` | the rules below, `is_admin` for the authenticated account, and `pause_message` (null when accepting submissions) |
+| `GET /config` | the rules below, `team_name` and `is_admin` for the authenticated account, and `pause_message` (null when accepting submissions) |
 | `PUT /submission-pause` | admin only: JSON `{"message": "reason"}` pauses or updates the message; `{"message": null}` resumes; returns `pause_message` |
 
 Rules: [`viobench/tools/config.json`](../config.json), checked in; every key is required, and its `limits` are what

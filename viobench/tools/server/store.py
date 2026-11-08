@@ -125,6 +125,11 @@ class Store:
         with self._connect() as connection:
             return connection.execute("SELECT 1 FROM teams WHERE token = ?", (token,)).fetchone() is not None
 
+    def team_name(self, token):
+        with self._connect() as connection:
+            row = connection.execute("SELECT name FROM teams WHERE token = ?", (token,)).fetchone()
+        return row["name"] if row else None
+
     def is_admin(self, token):
         with self._connect() as connection:
             row = connection.execute("SELECT is_admin FROM teams WHERE token = ?", (token,)).fetchone()

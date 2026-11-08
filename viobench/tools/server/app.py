@@ -3,7 +3,7 @@
     POST /submissions        multipart: file (the .wasm), label (optional)  -> 201 and the new submission
     GET  /submissions        the team's submissions (all for admins), newest first, with overall summaries once evaluated
     GET  /submissions/{id}   one of them, with its results once evaluated
-    GET  /config             the rules (`server.config`), admin status and submission pause message
+    GET  /config             the rules (`server.config`), team name, admin status and submission pause message
     PUT  /submission-pause   admin: {"message": "reason"} to pause, {"message": null} to resume
     GET  /, /app.js, /style.css   the web UI (ui/): a page on top of the routes above
 
@@ -116,7 +116,8 @@ def submission(submission_id: str, authorization: str | None = Header(default=No
 @app.get("/config")
 def configuration(authorization: str | None = Header(default=None)):
     token = authenticate(authorization)
-    return {**get_store().config.as_dict(), "is_admin": get_store().is_admin(token), "pause_message": get_store().pause_message()}
+    return {**get_store().config.as_dict(), "team_name": get_store().team_name(token),
+            "is_admin": get_store().is_admin(token), "pause_message": get_store().pause_message()}
 
 
 @app.put("/submission-pause")

@@ -94,13 +94,13 @@ def test_admin_can_read_all_submissions_without_exposing_tokens(api):
     other = {"Authorization": f"Bearer {other_token}"}
     admin_token = store.add_team("instructors", is_admin=True)
     admin = {"Authorization": f"Bearer {admin_token}"}
+    for headers, name, is_admin in [({}, "team", False), (other, "admin", False), (admin, "instructors", True)]:
+        config = client.get("/config", headers=headers).json()
+        assert config["team_name"] == name and config["is_admin"] is is_admin  # Even before any submissions exist.
     first = client.post("/submissions", files={"file": ("one.wasm", MODULE)}).json()["id"]
     store.finish(first, results=results(0.1))
     second = client.post("/submissions", files={"file": ("two.wasm", MODULE)}, headers=other).json()["id"]
 
-    assert client.get("/config").json()["is_admin"] is False
-    assert client.get("/config", headers=other).json()["is_admin"] is False
-    assert client.get("/config", headers=admin).json()["is_admin"] is True
     for headers, own, foreign, name, participant in [({}, first, second, "team", False), (other, second, first, "admin", True)]:
         [row] = client.get("/submissions", headers=headers).json()
         assert row["id"] == own and row["team_name"] == name and row["is_participant"] is participant

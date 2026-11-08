@@ -217,8 +217,8 @@ function showSignIn(message, kind = "error") {
   shown = null;
   finished.clear();
   $("submissions").tBodies[0].replaceChildren();
-  for (const id of ["details-title", "details-facts", "details-results", "details-json", "updated", "rules"]) $(id).replaceChildren();
-  for (const id of ["team", "sign-out", "details", "connection", "pause-controls", "pause-banner"]) $(id).hidden = true;
+  for (const id of ["details-title", "details-facts", "details-results", "details-json", "updated", "rules", "team-name"]) $(id).replaceChildren();
+  for (const id of ["team", "account", "details", "connection", "pause-controls", "pause-banner"]) $(id).hidden = true;
   $("sign-in").hidden = false;
   notice(message, kind);
   $("token").focus();
@@ -248,7 +248,7 @@ async function signIn(value, remember) {
   $("token").value = "";
   $("sign-in").hidden = true;
   $("team").hidden = false;
-  $("sign-out").hidden = false;
+  $("account").hidden = false;
   $("pause-message").value = config.pause_message || "";
   renderConfiguration(config);
   notice("");
@@ -265,6 +265,7 @@ function renderConfiguration(next) {
   }
   config = next;
   const admin = config.is_admin === true;
+  $("team-name").textContent = `Signed in as ${config.team_name}`;
   $("upload-section").hidden = admin;
   $("pause-controls").hidden = !admin;
   $("team-column").hidden = !admin;
@@ -513,7 +514,7 @@ function renderRules(rules) {
   list.replaceChildren();
   const flat = Object.entries(rules || {}).flatMap(([key, value]) => (value && typeof value === "object" ? Object.entries(value) : [[key, value]]));
   for (const [key, value] of flat) {
-    if (key === "is_admin" || key === "pause_message") continue;
+    if (key === "is_admin" || key === "pause_message" || key === "team_name") continue;
     const [label, format] = RULES[key] || [key, String];
     list.append(node("dt", label), node("dd", isNumber(value) ? format(value) : String(value)));
   }
