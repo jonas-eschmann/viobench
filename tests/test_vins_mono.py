@@ -87,7 +87,7 @@ def test_metric_tracking_with_camera_imu_offset(vins_mono_path, engine, tmp_path
     # first-camera coordinate frame and metric scale. A stationary output fails.
     tail = np.asarray(times) >= 10
     metrics = evaluate_trajectory(np.asarray(truth)[tail], np.asarray(estimates)[tail], np.asarray(times)[tail])
-    assert metrics.held == 0, metrics
+    assert metrics.filled_frames == 0, metrics
     assert metrics.ate_rmse < 0.5, metrics
     assert metrics.rpe_translation_rmse < 0.25, metrics
     assert metrics.rotation_rmse < 0.15, metrics
@@ -113,7 +113,7 @@ def test_noisy_tracking_after_hovering_turn(vins_mono_path, engine, tmp_path, se
     # aligning the trajectory would hide a late origin, gravity tilt or scale drift.
     # These bounds reject both a stationary output and the previous noisy startup.
     metrics = evaluate_trajectory(truth, estimates, times)
-    assert metrics.held == 0, metrics
+    assert metrics.filled_frames == 0, metrics
     assert metrics.rpe_translation_rmse < 0.15, metrics
     assert metrics.ate_rmse < 0.6, metrics
     assert metrics.final_drift < 0.6, metrics

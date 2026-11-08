@@ -1,6 +1,6 @@
 """`viobench score`: the metrics of an estimate against an episode. An estimate is two files side by side: estimate.tum
 (TUM format: t x y z qx qy qz qw, loadable with evo) and twist.txt (t vx vy vz wx wy wz); frames without a usable
-state (NaN rows, gaps in either file) repeat the previous pose, like the frames after a failure in `viobench evaluate`."""
+state (NaN rows, gaps in either file) use origin, identity rotation and zero twist, as after a failure in `viobench evaluate`."""
 from pathlib import Path
 
 import numpy as np
@@ -53,7 +53,7 @@ def score(episode_dir, pose_path, log=print):
     episode = read_episode(episode_dir, frames="none")
     estimates = load_estimates(pose_path, episode.frame_times)
     metrics = evaluate_trajectory(episode.ground_truth_state(), estimates, episode.frame_times)
-    log(f"{episode.dataset}/{episode.key}: RPE {metrics.rpe_translation_rmse:.3f} m/1 s  ATE {metrics.ate_rmse:.3f} m  "
+    log(f"{episode.dataset}/{episode.key}: Sim(3) ATE {metrics.sim3_ate_rmse:.3f} m  RPE {metrics.rpe_translation_rmse:.3f} m/1 s  ATE {metrics.ate_rmse:.3f} m  "
         f"rot {np.degrees(metrics.rotation_rmse):.1f} deg  vel {metrics.velocity_rmse:.3f} m/s  "
-        f"ang vel {np.degrees(metrics.angular_velocity_rmse):.1f} deg/s  held {metrics.held}  sim3 scale {metrics.sim3_scale:.3f}")
+        f"ang vel {np.degrees(metrics.angular_velocity_rmse):.1f} deg/s  filled {metrics.filled_frames}  sim3 scale {metrics.sim3_scale:.3f}")
     return metrics

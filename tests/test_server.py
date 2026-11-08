@@ -33,7 +33,7 @@ def api(tmp_path, monkeypatch):
 def results(rpe):
     return {"hash": "a" * 40, "dataset": "val", "completed": True, "frames": 1, "frames_attempted": 1,
             "duration_s": 1, "fuel_per_frame_median": 4.1e6, "wall_per_frame_median_ms": 1,
-            "metrics": {"rpe_translation_rmse": rpe, "rpe_rotation_rmse": 0, "ate_rmse": 0, "rotation_rmse": 0,
+            "metrics": {"sim3_ate_rmse": 0.2, "rpe_translation_rmse": rpe, "rpe_rotation_rmse": 0, "ate_rmse": 0, "rotation_rmse": 0,
                         "velocity_rmse": 0, "angular_velocity_rmse": 0, "drift_per_metre": float("inf")}}
 
 
@@ -98,7 +98,7 @@ def test_unlimited_team_has_no_daily_quota(api):
             assert client.post("/submissions", files={"file": ("x.wasm", MODULE)}, headers=headers).status_code == 201
     assert client.post("/submissions", files={"file": ("x.wasm", MODULE)}).status_code == 429
     assert client.post("/submissions", files={"file": ("x.wasm", MODULE)}, headers=unlimited).status_code == 201
-    assert [unlimited for _, _, unlimited, _, _ in store.teams()] == [False, True]
+    assert [unlimited for _, _, unlimited, _ in store.teams()] == [False, True]
 
 
 @pytest.mark.parametrize("running", [False, True])
@@ -123,39 +123,41 @@ def test_admin_can_read_all_submissions_without_exposing_tokens(api):
     client, store = api
     team_token = client.headers["Authorization"].removeprefix("Bearer ")
     # Neither the account name nor an unlimited quota grants admin access.
-    other_token = store.add_team("admin", unlimited=True, is_participant=True)
+    other_token = store.add_team("admin", unlimited=True, team_type="participant")
     other = {"Authorization": f"Bearer {other_token}"}
-    admin_token = store.add_team("instructors", is_admin=True)
+    admin_token = store.add_team("instructors", team_type="admin")
     admin = {"Authorization": f"Bearer {admin_token}"}
-    for headers, name, is_admin in [({}, "team", False), (other, "admin", False), (admin, "instructors", True)]:
+    for headers, name, kind in [({}, "team", "test"), (other, "admin", "participant"), (admin, "instructors", "admin")]:
         config = client.get("/config", headers=headers).json()
-        assert config["team_name"] == name and config["is_admin"] is is_admin  # Even before any submissions exist.
+        assert config["team_name"] == name and config["team_type"] == kind  # Even before any submissions exist.
+        assert "is_admin" not in config and "is_participant" not in config
     first = client.post("/submissions", files={"file": ("one.wasm", MODULE)}).json()["id"]
     finish_submission(store, first, results=results(0.1))
     second = client.post("/submissions", files={"file": ("two.wasm", MODULE)}, headers=other).json()["id"]
 
-    for headers, own, foreign, name, participant in [({}, first, second, "team", False), (other, second, first, "admin", True)]:
+    for headers, own, foreign, name, kind in [({}, first, second, "team", "test"), (other, second, first, "admin", "participant")]:
         [row] = client.get("/submissions", headers=headers).json()
-        assert row["id"] == own and row["team_name"] == name and row["is_participant"] is participant
+        assert row["id"] == own and row["team_name"] == name and row["team_type"] == kind
         detail = client.get(f"/submissions/{own}", headers=headers)
         assert detail.status_code == 200
-        assert detail.json()["team_name"] == name and detail.json()["is_participant"] is participant
+        assert detail.json()["team_name"] == name and detail.json()["team_type"] == kind
         assert client.get(f"/submissions/{foreign}", headers=headers).status_code == 404
 
     listed = client.get("/submissions", headers=admin)
     assert [(row["id"], row["team_name"]) for row in listed.json()] == [(second, "admin"), (first, "team")]
-    assert listed.json()[0]["is_participant"] is True and listed.json()[1]["is_participant"] is False
+    assert listed.json()[0]["team_type"] == "participant" and listed.json()[1]["team_type"] == "test"
     assert listed.json()[1]["overall"]["rpe_translation_rmse_median"] == 0.1
     details = [client.get(f"/submissions/{submission_id}", headers=admin) for submission_id in (first, second)]
     assert all(response.status_code == 200 for response in details)
     assert [response.json()["team_name"] for response in details] == ["team", "admin"]
-    assert details[0].json()["is_participant"] is False and details[1].json()["is_participant"] is True
+    assert details[0].json()["team_type"] == "test" and details[1].json()["team_type"] == "participant"
     assert details[0].json()["results"]["summary"]["overall"]["rpe_translation_rmse_median"] == 0.1
     assert client.get("/submissions/missing", headers=admin).status_code == 404
     for response in [listed, *details, client.get("/config", headers=admin)]:
         for secret in (team_token, other_token, admin_token):
             assert secret not in response.text
     assert store.is_admin("unknown") is False
+    assert store.team_type("unknown") is None
     assert store.submissions("unknown") == []
     assert store.get("unknown", first) is None
 
@@ -163,7 +165,7 @@ def test_admin_can_read_all_submissions_without_exposing_tokens(api):
 @pytest.mark.parametrize("unlimited", [False, True])
 def test_admin_cannot_upload(api, unlimited):
     client, store = api
-    headers = {"Authorization": f"Bearer {store.add_team('admin', unlimited=unlimited, is_admin=True)}"}
+    headers = {"Authorization": f"Bearer {store.add_team('admin', unlimited=unlimited, team_type="admin")}"}
     response = client.post("/submissions", files={"file": ("x.wasm", MODULE)}, headers=headers)
     assert response.status_code == 403
     assert client.get("/submissions", headers=headers).json() == []
@@ -171,7 +173,7 @@ def test_admin_cannot_upload(api, unlimited):
 
 
 @pytest.mark.parametrize("authorization", [None, "Bearer wrong"])
-@pytest.mark.parametrize("method,path", [("GET", "/config"), ("GET", "/submissions"),
+@pytest.mark.parametrize("method,path", [("GET", "/config"), ("GET", "/comparison"), ("GET", "/submissions"),
                                          ("GET", "/submissions/missing"), ("POST", "/submissions"),
                                          ("PUT", "/submission-pause"), ("GET", "/evaluations"),
                                          ("PUT", "/evaluations"), ("POST", "/evaluations/schedule")])
@@ -188,20 +190,21 @@ def test_api_requires_a_valid_token(api, authorization, method, path):
     assert response.status_code == 401 and response.headers["www-authenticate"] == "Bearer"
 
 
-@pytest.mark.parametrize("flags,kind,unlimited,is_admin,is_participant", [
-    ([], "test", False, False, False),
-    (["--admin"], "admin", False, True, False),
-    (["--participant"], "participant", False, False, True),
-    (["--participant", "--unlimited"], "participant", True, False, True),
+@pytest.mark.parametrize("flags,kind,unlimited", [
+    ([], "test", False),
+    (["--type", "admin"], "admin", False),
+    (["--type", "participant"], "participant", False),
+    (["--type", "baseline", "--unlimited"], "baseline", True),
 ])
-def test_cli_creates_and_lists_account_types(api, monkeypatch, capsys, flags, kind, unlimited, is_admin, is_participant):
+def test_cli_creates_and_lists_account_types(api, monkeypatch, capsys, flags, kind, unlimited):
     _, store = api
     monkeypatch.setattr(teams, "Store", lambda: store)
     monkeypatch.setattr(sys, "argv", ["teams", "add", *flags, "account"])
     teams.main()
     token, name = capsys.readouterr().out.split()
-    assert name == "account" and store.is_admin(token) is is_admin
-    assert store.teams()[-1] == (token, "account", unlimited, is_admin, is_participant)
+    assert name == "account" and store.is_admin(token) is (kind == "admin")
+    assert store.team_type(token) == kind
+    assert store.teams()[-1] == (token, "account", unlimited, kind)
     monkeypatch.setattr(sys, "argv", ["teams", "list"])
     teams.main()
     [listed] = [line for line in capsys.readouterr().out.splitlines() if line.startswith(token)]
@@ -209,17 +212,17 @@ def test_cli_creates_and_lists_account_types(api, monkeypatch, capsys, flags, ki
     assert ("(unlimited)" in listed) is unlimited
 
 
-def test_admin_and_participant_are_mutually_exclusive(api, monkeypatch, capsys):
+def test_invalid_account_type_is_rejected(api, monkeypatch, capsys):
     _, store = api
     before = store.teams()
     with pytest.raises(ValueError):
-        store.add_team("invalid", is_admin=True, is_participant=True)
+        store.add_team("invalid", team_type="unknown")
     monkeypatch.setattr(teams, "Store", lambda: store)
-    monkeypatch.setattr(sys, "argv", ["teams", "add", "--admin", "--participant", "invalid"])
+    monkeypatch.setattr(sys, "argv", ["teams", "add", "--type", "unknown", "invalid"])
     with pytest.raises(SystemExit) as error:
         teams.main()
     assert error.value.code == 2
-    assert "--admin" in capsys.readouterr().err
+    assert "--type" in capsys.readouterr().err
     assert store.teams() == before
 
 
@@ -235,17 +238,13 @@ def test_cli_updates_roles_and_access_without_changing_the_account(api, monkeypa
     unchanged_team = store.teams()[0]
     monkeypatch.setattr(teams, "Store", lambda: store)
 
-    for flags, admin, participant in [
-        (["--participant"], False, True),
-        (["--admin", "--no-participant"], True, False),
-        (["--participant", "--no-admin"], False, True),
-        (["--no-participant"], False, False),
-    ]:
-        monkeypatch.setattr(sys, "argv", ["teams", "update", token, *flags])
+    for kind in ["participant", "admin", "baseline", "test"]:
+        admin = kind == "admin"
+        monkeypatch.setattr(sys, "argv", ["teams", "update", token, "--type", kind])
         teams.main()
-        assert store.teams() == [unchanged_team, (token, "team", True, admin, participant)]
-        assert client.get("/config", headers=headers).json()["is_admin"] is admin
-        assert client.get(f"/submissions/{own}", headers=headers).json() == {**original, "is_participant": participant}
+        assert store.teams() == [unchanged_team, (token, "team", True, kind)]
+        assert client.get("/config", headers=headers).json()["team_type"] == kind
+        assert client.get(f"/submissions/{own}", headers=headers).json() == {**original, "team_type": kind}
         visible = {row["id"] for row in client.get("/submissions", headers=headers).json()}
         assert visible == ({own, foreign} if admin else {own})
         assert client.get(f"/submissions/{foreign}", headers=headers).status_code == (200 if admin else 404)
@@ -257,28 +256,32 @@ def test_cli_updates_roles_and_access_without_changing_the_account(api, monkeypa
 
 def test_invalid_role_updates_leave_accounts_unchanged(api, monkeypatch, capsys):
     _, store = api
-    token = store.add_team("participant", is_participant=True)
+    token = store.add_team("participant", team_type="participant")
     before = store.teams()
     monkeypatch.setattr(teams, "Store", lambda: store)
-    for selected, options, flags in [
-        ("unknown-token", {"is_admin": True}, ["--admin"]),
-        (token, {}, []),
-        (token, {"is_admin": True}, ["--admin"]),  # Omitted participant flag must retain True.
+    for selected, kind in [
+        ("unknown-token", "admin"),
+        (token, "unknown"),
     ]:
         with pytest.raises(ValueError) as error:
-            store.update_team(selected, **options)
+            store.update_team(selected, team_type=kind)
         assert selected not in str(error.value)
-        monkeypatch.setattr(sys, "argv", ["teams", "update", selected, *flags])
+        monkeypatch.setattr(sys, "argv", ["teams", "update", selected, "--type", kind])
         with pytest.raises(SystemExit) as error:
             teams.main()
         assert error.value.code == 2
         assert selected not in capsys.readouterr().err
         assert store.teams() == before
+    monkeypatch.setattr(sys, "argv", ["teams", "update", token])
+    with pytest.raises(SystemExit) as error:
+        teams.main()
+    assert error.value.code == 2 and "--type" in capsys.readouterr().err
+    assert store.teams() == before
 
 
 def test_pause_control_requires_admin_and_a_valid_message(api):
     client, store = api
-    admin = {"Authorization": f"Bearer {store.add_team('admin', is_admin=True)}"}
+    admin = {"Authorization": f"Bearer {store.add_team('admin', team_type="admin")}"}
     assert client.get("/config").json()["pause_message"] is None
     assert client.put("/submission-pause", json={"message": "Maintenance"}).status_code == 403
     assert store.pause_message() is None
@@ -293,7 +296,7 @@ def test_pause_control_requires_admin_and_a_valid_message(api):
 
 def test_pause_persists_and_blocks_uploads_until_resumed(api, monkeypatch):
     client, store = api
-    admin = {"Authorization": f"Bearer {store.add_team('admin', is_admin=True)}"}
+    admin = {"Authorization": f"Bearer {store.add_team('admin', team_type="admin")}"}
     unlimited = {"Authorization": f"Bearer {store.add_team('debug', unlimited=True)}"}
     queued_token = store.add_team("already queued")
     queued_headers = {"Authorization": f"Bearer {queued_token}"}
@@ -352,7 +355,7 @@ def test_evaluation_controls_require_admin(api):
 
 def test_admin_selects_custom_hashes_and_schedules_missing_jobs(api):
     client, store = api
-    admin = {"Authorization": f"Bearer {store.add_team('instructors', is_admin=True)}"}
+    admin = {"Authorization": f"Bearer {store.add_team('instructors', team_type="admin")}"}
     submission = client.post("/submissions", files={"file": ("x.wasm", MODULE)}).json()["id"]
     catalog = client.get("/evaluations", headers=admin).json()
     assert set(catalog) == {"hashes", "presets"}
@@ -384,7 +387,7 @@ def test_admin_selects_custom_hashes_and_schedules_missing_jobs(api):
     ({"hashes": ["a" * 40], "backfill": "false"}, 422), ({"preset": "public"}, 422)])
 def test_invalid_evaluation_selection_does_not_change_state(api, body, status):
     client, store = api
-    admin = {"Authorization": f"Bearer {store.add_team('instructors', is_admin=True)}"}
+    admin = {"Authorization": f"Bearer {store.add_team('instructors', team_type="admin")}"}
     before = store.evaluations()
     assert client.put("/evaluations", json=body, headers=admin).status_code == status
     assert store.evaluations() == before

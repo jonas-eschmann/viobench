@@ -231,7 +231,7 @@ function showSignIn(message, kind = "error") {
   shown = null;
   $("submissions").tBodies[0].replaceChildren();
   for (const id of ["details-title", "details-facts", "details-results", "details-jobs", "details-progress", "details-json", "updated", "rules",
-                    "team-name", "evaluation-preset", "evaluation-status", "evaluation-summary"]) $(id).replaceChildren();
+                    "team-name", "evaluation-preset", "evaluation-status", "evaluation-summary", "comparison-charts"]) $(id).replaceChildren();
   for (const id of ["team", "account", "details", "connection", "pause-controls", "pause-banner", "evaluation-controls", "schedule-form"]) $(id).hidden = true;
   $("sign-in").hidden = false;
   notice(message, kind);
@@ -270,7 +270,7 @@ async function signIn(value, remember) {
 }
 
 function renderConfiguration(next) {
-  if (config && config.is_admin !== next.is_admin) {
+  if (config && config.team_type !== next.team_type) {
     session++;  // discard details requested with the previous permissions
     shown = null;
     evaluationPresets = null;
@@ -278,13 +278,15 @@ function renderConfiguration(next) {
     detailPending = false;
     $("submissions").tBodies[0].replaceChildren();
     $("details").hidden = true;
+    $("comparison-charts").replaceChildren();
   } else if (config && JSON.stringify(config.evaluation_hashes) !== JSON.stringify(next.evaluation_hashes)) {
     detailGeneration++;
     detailPending = false;
     $("details").hidden = true;
+    $("comparison-charts").replaceChildren();
   }
   config = next;
-  const admin = config.is_admin === true;
+  const admin = config.team_type === "admin";
   $("team-name").textContent = `Signed in as ${config.team_name}`;
   $("upload-section").hidden = admin;
   $("pause-controls").hidden = !admin;
@@ -309,7 +311,7 @@ function renderPause() {
 }
 
 async function setPause(message) {
-  if (adminSaving || !config.is_admin) return;
+  if (adminSaving || config.team_type !== "admin") return;
   if (message !== null && !message.trim()) return notice("Enter a message for the teams before pausing submissions.");
   const mine = session;
   adminSaving = true;
@@ -370,7 +372,7 @@ function renderEvaluations(state) {
 }
 
 async function updateEvaluations(path, method, body, savedSet = false) {
-  if (adminSaving || !config.is_admin) return;
+  if (adminSaving || config.team_type !== "admin") return;
   const mine = session;
   adminSaving = true;
   clearTimeout(pollTimer);
@@ -424,12 +426,12 @@ async function refresh() {
   if (token === null || adminSaving) return;
   clearTimeout(pollTimer);
   const mine = ++generation;
-  let rows, evaluations;
+  let rows, evaluations, comparison;
   try {
     const next = await api("config");
     if (mine !== generation) return;
     renderConfiguration(next);
-    [rows, evaluations] = await Promise.all([api("submissions"), config.is_admin ? api("evaluations") : null]);
+    [rows, evaluations, comparison] = await Promise.all([api("submissions"), config.team_type === "admin" ? api("evaluations") : null, api("comparison")]);
     if (!Array.isArray(rows)) throw new ApiError(200, "the server sent an unreadable answer");
   } catch (error) {
     if (mine !== generation) return;
@@ -446,8 +448,9 @@ async function refresh() {
   $("connection").hidden = true;
   if (evaluations) renderEvaluations(evaluations);
   renderList(rows);
+  renderComparison(comparison);
   $("updated").textContent = `updated ${new Date().toLocaleTimeString()}`;
-  if (!config.is_admin) renderUploadState();
+  if (config.team_type !== "admin") renderUploadState();
   schedule(POLL_MS);
   if (shown && !detailPending) showDetails(shown.id, false);
 }
@@ -467,11 +470,101 @@ function renderList(rows) {
     const episodes = row.progress ? `${row.progress.finished}/${row.progress.total} finished` : DASH;
     const progress = node("span", episodes);
     progress.title = progressText(row.progress);
-    body.append(tableRow([time(row.created), ...(config.is_admin ? [row.team_name || DASH, row.is_participant ? "Participant" : "Test"] : []),
-                          row.label || DASH, status, decimal(overall.rpe_translation_rmse_median),
-                          fuel(overall.fuel_per_frame_median), progress, button]));
+    body.append(tableRow([time(row.created), ...(config.team_type === "admin" ? [row.team_name || DASH, row.team_type] : []),
+                          row.label || DASH, status, decimal(overall.sim3_ate_rmse_median),
+                          fuel(overall.fuel_per_frame_max), progress, button]));
   }
   $("empty").hidden = body.rows.length > 0;
+}
+
+// --- current-set comparison with baselines ---------------------------------------------------------------------
+
+function svgNode(tag, attributes, text) {
+  const element = document.createElementNS("http://www.w3.org/2000/svg", tag);
+  for (const [name, value] of Object.entries(attributes || {})) element.setAttribute(name, String(value));
+  if (text !== undefined) element.textContent = text;
+  return element;
+}
+
+function renderComparison(comparison) {
+  const container = $("comparison-charts");
+  container.replaceChildren();
+  if (JSON.stringify(comparison.evaluation_hashes) !== JSON.stringify(config.evaluation_hashes)) {
+    container.append(node("p", "The evaluation set changed. Comparison will update on the next refresh.", "hint"));
+    return;
+  }
+  if (!comparison.datasets.length) {
+    container.append(node("p", "No comparable results for the current set yet.", "hint"));
+    return;
+  }
+  for (const dataset of comparison.datasets) {
+    container.append(node("h3", dataset.name));
+    const points = dataset.points.filter((point) => isNumber(point.fuel_per_frame_max) && point.fuel_per_frame_max >= 0 &&
+                                                    isNumber(point.sim3_ate_rmse_median) && point.sim3_ate_rmse_median >= 0);
+    if (!points.length) {
+      container.append(node("p", "No comparable results for this dataset yet.", "hint"));
+      continue;
+    }
+    const maxX = Math.max(...points.map((point) => point.fuel_per_frame_max / 1e6)) * 1.1 || 1;
+    const maxY = Math.max(...points.map((point) => point.sim3_ate_rmse_median)) * 1.1 || 1;
+    const x = (point) => 76 + point.fuel_per_frame_max / 1e6 / maxX * 580;
+    const y = (point) => 280 - point.sim3_ate_rmse_median / maxY * 256;
+    const chart = svgNode("svg", {viewBox: "0 0 680 340", class: "comparison-chart", role: "group",
+                                  "aria-label": `${dataset.name}: Sim(3) ATE versus maximum fuel per frame. Lower is better.`});
+    chart.append(svgNode("title", {}, `${dataset.name}: your submissions and baselines`));
+    for (let tick = 0; tick <= 4; tick++) {
+      const px = 76 + tick / 4 * 580, py = 280 - tick / 4 * 256;
+      chart.append(svgNode("line", {x1: px, y1: 24, x2: px, y2: 280, class: "comparison-grid"}),
+                   svgNode("line", {x1: 76, y1: py, x2: 656, y2: py, class: "comparison-grid"}),
+                   svgNode("text", {x: px, y: 300, "text-anchor": "middle"}, decimal(maxX * tick / 4)),
+                   svgNode("text", {x: 65, y: py + 4, "text-anchor": "end"}, decimal(maxY * tick / 4)));
+    }
+    chart.append(svgNode("text", {x: 366, y: 330, "text-anchor": "middle"}, "Maximum fuel/frame (millions)"),
+                 svgNode("text", {x: 18, y: 152, transform: "rotate(-90 18 152)", "text-anchor": "middle"}, "Median Sim(3) ATE (m)"));
+    const frontierIds = new Set(dataset.frontier);
+    const frontier = points.filter((point) => point.team_type === "baseline" && frontierIds.has(point.id))
+      .sort((a, b) => a.fuel_per_frame_max - b.fuel_per_frame_max || a.sim3_ate_rmse_median - b.sim3_ate_rmse_median);
+    if (frontier.length > 1) {
+      const steps = [`${x(frontier[0])},${y(frontier[0])}`];
+      for (let index = 1; index < frontier.length; index++) {
+        steps.push(`${x(frontier[index])},${y(frontier[index - 1])}`, `${x(frontier[index])},${y(frontier[index])}`);
+      }
+      chart.append(svgNode("polyline", {points: steps.join(" "), class: "comparison-frontier"}));
+    }
+    const rows = [];
+    for (const point of points) {
+      const name = point.label || point.id;
+      const description = `${point.team_name}: ${name}; maximum fuel/frame ${point.fuel_per_frame_max}; median Sim(3) ATE ${point.sim3_ate_rmse_median} m`;
+      const canOpen = point.own || config.team_type === "admin";
+      const mark = svgNode("g", {class: `comparison-point ${point.own ? "own" : "baseline"}`,
+                                 role: canOpen ? "button" : "img", tabindex: 0, "aria-label": description});
+      mark.append(svgNode("title", {}, description), point.team_type === "baseline" ?
+                  svgNode("rect", {x: x(point) - 5, y: y(point) - 5, width: 10, height: 10}) :
+                  svgNode("circle", {cx: x(point), cy: y(point), r: 5}));
+      let button = "";
+      if (canOpen) {
+        mark.addEventListener("click", () => showDetails(point.id, true));
+        mark.addEventListener("keydown", (event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            showDetails(point.id, true);
+          }
+        });
+        button = node("button", "Details");
+        button.type = "button";
+        button.setAttribute("aria-label", `Details of ${point.team_name}: ${name}`);
+        button.addEventListener("click", () => showDetails(point.id, true));
+      }
+      chart.append(mark);
+      rows.push([point.team_name, name, point.own ? `Yours (${point.team_type})` : "Baseline",
+                 point.fuel_per_frame_max, point.sim3_ate_rmse_median, button]);
+    }
+    container.append(chart);
+    if (!frontier.length) container.append(node("p", "No baseline reference is available for this dataset yet.", "hint"));
+    const values = node("details", null, "comparison-values");
+    values.append(node("summary", "Exact values"), table(["Team", "Submission", "Account", "Max fuel/frame", "Sim(3) ATE (m)", ""], rows));
+    container.append(values);
+  }
 }
 
 // --- submitting ------------------------------------------------------------------------------------------------
@@ -520,11 +613,11 @@ async function submit(event) {
 
 const SUMMARY_COLUMNS = [
   ["Episodes", (s) => (isNumber(s.episodes) ? `${s.completed}/${s.episodes}` : DASH)],
-  ["RPE (m)", (s) => decimal(s.rpe_translation_rmse_median)],
+  ["Sim(3) ATE (m)", (s) => decimal(s.sim3_ate_rmse_median)],
   ["RPE (rad)", (s) => decimal(s.rpe_rotation_rmse_median)],
   ["ATE (m)", (s) => decimal(s.ate_rmse_median)],
   ["Velocity (m/s)", (s) => decimal(s.velocity_rmse_median)],
-  ["Fuel/frame", (s) => fuel(s.fuel_per_frame_median)],
+  ["Max fuel/frame", (s) => fuel(s.fuel_per_frame_max)],
   ["Fuel/frame p95", (s) => fuel(s.fuel_per_frame_p95)],
   ["Wall/frame (ms)", (s) => decimal(s.wall_per_frame_median_ms)],
 ];
@@ -533,11 +626,12 @@ const EPISODE_COLUMNS = [
   ["Episode", (e) => episodeHash(e.hash)],
   ["Frames", (e) => e.frames],
   ["Completed", (e) => (e.completed === true ? "yes" : e.completed === false ? "no" : DASH)],
-  ["RPE (m)", (e) => decimal(get(e, "metrics", "rpe_translation_rmse"))],
+  ["Filled frames", (e) => get(e, "metrics", "filled_frames") ?? DASH],
+  ["Sim(3) ATE (m)", (e) => decimal(get(e, "metrics", "sim3_ate_rmse"))],
   ["RPE (rad)", (e) => decimal(get(e, "metrics", "rpe_rotation_rmse"))],
   ["ATE (m)", (e) => decimal(get(e, "metrics", "ate_rmse"))],
   ["Drift/m", (e) => decimal(get(e, "metrics", "drift_per_metre"))],
-  ["Fuel/frame", (e) => fuel(e.fuel_per_frame_median)],
+  ["Max fuel/frame", (e) => fuel(e.fuel_per_frame_max)],
   ["Fuel/frame p95", (e) => fuel(e.fuel_per_frame_p95)],
 ];
 
@@ -565,7 +659,7 @@ function renderDetails(submission) {
   $("details-title").textContent = submission.label || submission.id || "Submission";
   const facts = $("details-facts");
   facts.replaceChildren();
-  const account = config.is_admin ? [["Team", submission.team_name], ["Account", submission.is_participant ? "Participant" : "Test"]] : [];
+  const account = config.team_type === "admin" ? [["Team", submission.team_name], ["Account", submission.team_type]] : [];
   for (const [label, value] of [["Id", submission.id], ...account,
                                 ["File", `${submission.filename || DASH} (${size(submission.bytes)})`],
                                 ["SHA-256", submission.sha256], ["Status", submission.status], ["Error", submission.error],
@@ -575,7 +669,7 @@ function renderDetails(submission) {
   const results = $("details-results");
   results.replaceChildren();
   $("details-progress").textContent = `Current set: ${progressText(submission.progress)}.`;
-  $("schedule-form").hidden = !config.is_admin;
+  $("schedule-form").hidden = config.team_type !== "admin";
   if (get(submission, "results", "partial")) {
     results.append(node("p", "Partial results for the current set. Summary numbers will update as more episodes finish.", "hint"));
   }
@@ -593,10 +687,10 @@ function renderDetails(submission) {
   }
   const jobs = $("details-jobs");
   jobs.replaceChildren();
-  jobs.append(table(["Episode", "Status", "Current set", "RPE (m)", "Error"],
+  jobs.append(table(["Episode", "Status", "Current set", "Sim(3) ATE (m)", "Max fuel/frame", "Error"],
                     submission.jobs.map((job) => [episodeHash(job.episode_hash), node("span", job.status, `status ${job.status}`),
                       job.selected ? "yes" : "no",
-                      decimal(get(job, "result", "metrics", "rpe_translation_rmse")), job.error || DASH])));
+                      decimal(get(job, "result", "metrics", "sim3_ate_rmse")), fuel(get(job, "result", "fuel_per_frame_max")), job.error || DASH])));
   $("details-json").textContent = JSON.stringify(submission, null, 2);
   $("details").hidden = false;
 }
@@ -619,7 +713,7 @@ const RULES = {
 function renderRules(rules) {
   const list = $("rules");
   list.replaceChildren();
-  const flat = Object.entries(rules || {}).filter(([key]) => !["is_admin", "pause_message", "team_name", "evaluation_hashes"].includes(key))
+  const flat = Object.entries(rules || {}).filter(([key]) => !["team_type", "pause_message", "team_name", "evaluation_hashes"].includes(key))
     .flatMap(([key, value]) => (value && typeof value === "object" ? Object.entries(value) : [[key, value]]));
   for (const [key, value] of flat) {
     const [label, format] = RULES[key] || [key, String];

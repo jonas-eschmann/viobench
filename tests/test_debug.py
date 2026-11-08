@@ -30,7 +30,7 @@ def test_direct_run_matches_the_sandbox(engine, runtime_path, tmp_path):
     solution = direct.PythonSolution(EXAMPLES / "python" / "dead_reckoning")
     assert solution.resolution == (320, 240)
     [(_, estimates, metrics)] = direct.run(solution, [dataset], output_dir=tmp_path / "direct", log=lambda *a: None)
-    assert estimates.shape == (30, 13) and metrics.held == 0
+    assert estimates.shape == (30, 13) and metrics.filled_frames == 0
     np.testing.assert_array_equal(estimates[0], [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0])
     assert np.abs(estimates[-1, 7:]).max() > 0  # dead reckoning reports its twist once it has calibrated
     written = load_estimates(tmp_path / "direct" / digest / "estimate.tum", episode.frame_times)
@@ -82,7 +82,7 @@ def test_direct_cli(tmp_path, capsys):
     episode = synthetic_episode(n_frames=4, width=640, height=480)
     digest = archive_hash(write_episode(episode, tmp_path / "set" / f"{episode.name}.zip"))
     assert cli(["debug", str(EXAMPLES / "python" / "minimal"), str(tmp_path / "set"), "-o", str(tmp_path / "out")]) == 0
-    assert f"set/{digest}: RPE" in capsys.readouterr().out
+    assert f"set/{digest}: Sim(3) ATE" in capsys.readouterr().out
     assert (tmp_path / "out" / digest / "estimate.tum").is_file()
     assert (tmp_path / "out" / digest / "twist.txt").is_file()
     from tests.test_video import read_video
@@ -104,17 +104,17 @@ def test_feed_and_score(tmp_path, capsys):
     np.testing.assert_allclose(imu, episode.delivered_imu())
     gt = np.fromfile(feed / "gt.f64").reshape(6, 7)
     np.testing.assert_allclose(gt, episode.ground_truth_relative())
-    # a perfect estimate scores zero; a frame missing from the files repeats the previous pose (identity for the first)
+    # a perfect estimate scores zero; a frame missing from the files uses origin, identity rotation and zero twist
     tum = tmp_path / "perfect.tum"
     np.savetxt(tum, np.column_stack([episode.frame_times, gt]), fmt="%.12g")
     np.savetxt(tmp_path / "twist.txt", np.column_stack([episode.frame_times, episode.ground_truth_twist()]), fmt="%.12g")
     metrics = score(tmp_path / "set" / f"{episode.name}.zip", tum)
-    assert metrics.ate_rmse < 1e-9 and metrics.velocity_rmse < 1e-6 and metrics.held == 0
+    assert metrics.ate_rmse < 1e-9 and metrics.velocity_rmse < 1e-6 and metrics.filled_frames == 0
     assert "ATE 0.000" in capsys.readouterr().out
     rows = np.column_stack([episode.frame_times, gt])[1:]  # first frame missing
     np.savetxt(tum, rows, fmt="%.12g")
     assert np.isnan(load_estimates(tum, episode.frame_times)[0, :7]).all()
-    assert score(tmp_path / "set" / f"{episode.name}.zip", tum, log=lambda *a: None).held == 1
+    assert score(tmp_path / "set" / f"{episode.name}.zip", tum, log=lambda *a: None).filled_frames == 1
     assert cli(["score", str(tmp_path / "set" / f"{episode.name}.zip"), str(tum)]) == 0
 
 
@@ -139,7 +139,7 @@ def test_native_host_debug_build(tmp_path):
     estimates = load_estimates(tum, episode.frame_times)
     np.testing.assert_allclose(estimates, np.tile([0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0], (5, 1)))
     metrics = score(tmp_path / "set" / f"{episode.name}.zip", tum, log=lambda *a: None)
-    assert metrics.held == 0
+    assert metrics.filled_frames == 0
 
 
 def test_debug_never_asks_for_an_episode_beyond_max_episodes():

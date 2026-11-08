@@ -4,12 +4,13 @@ The app queues uploads in SQLite and shows each team its own submissions; admins
 Each submission has one job per requested episode. One worker supervises evaluation subprocesses, downloading
 uncached archives as needed. Both processes use `VIOBENCH_SERVER_DIR` (default `./server-data`).
 
-This per-episode schema requires a fresh database; older submission databases are not migrated. For an existing
-installation, use an empty server-data directory or a new Compose server-data volume, retaining the old data separately.
+This schema requires a fresh database; older submission databases are not migrated. Use an empty server-data
+directory or a new Compose server-data volume, retaining the old data separately. Run fresh evaluations for the
+zero-prediction scoring rule; results computed with the previous held-pose rule are not converted.
 
 ```bash
 pip install -e ".[server]"
-python -m viobench.tools.server.teams add --participant "team a" "team b"  # prints a token per team; `teams list` repeats them
+python -m viobench.tools.server.teams add --type participant "team a" "team b"  # prints tokens; `teams list` repeats them
 python -m viobench.tools.server.worker &                        # exactly one worker
 uvicorn viobench.tools.server.app:app --host 0.0.0.0 --port 8000
 ```
@@ -31,49 +32,67 @@ Each evaluator reads its archive through conta (`CONTA_CACHE`, default
 `~/.cache/conta`), downloading it if absent. A download failure fails that job with a sanitized public error;
 details stay in the private log. Saving or scheduling again does not rerun existing jobs, including failed ones.
 
-A team is its token: every API request sends `Authorization: Bearer <token>` and sees only that team's submissions.
+A team is its token: every API request sends `Authorization: Bearer <token>`. Submission lists and details are
+restricted to their owner and admins; comparison plots also show shared baseline scores.
 Teams can also open the server's root in a browser: a page ([`ui/`](ui/), no dependencies) that signs in with the token
 and uses the API below.
 
-Use `teams add --participant` for real participants. Accounts created without `--participant` or `--admin` are test
-accounts; for example, `python -m viobench.tools.server.teams add --unlimited debug` creates a test account without a
-daily quota. Participant status is a label for distinguishing submissions and does not change upload permissions.
+Accounts have one type: `test` (the default), `participant`, `baseline`, or `admin`. Use `teams add --type participant`
+for real participants. `--unlimited` independently removes the daily quota; for example,
+`python -m viobench.tools.server.teams add --unlimited debug` creates an unlimited test account.
 
 Create an admin account with the same token system:
 
 ```bash
-python -m viobench.tools.server.teams add --admin admin
+python -m viobench.tools.server.teams add --type admin admin
 # With Docker Compose, from the viobench repository root:
-docker compose -f viobench/tools/server/compose.yaml exec app python -m viobench.tools.server.teams add --admin admin
+docker compose -f viobench/tools/server/compose.yaml exec app python -m viobench.tools.server.teams add --type admin admin
 ```
 
 Use the printed token in the same sign-in form. Admins see all submissions and their results, with the submitting
-team's name and Participant or Test classification in the list and details. Admin accounts cannot upload
-(`POST /submissions` returns 403); use a participant or test account for submissions. `teams list` marks each account
-as `(participant)`, `(test)` or `(admin)`, with `(unlimited)` separately where applicable. `--admin` and `--participant`
-are mutually exclusive; `--unlimited` is independent. Naming a team "admin" alone does not grant admin access.
+team's name and account type in the list and details. Admin accounts cannot upload (`POST /submissions` returns 403).
+`teams list` shows each account's type and quota exemption. Naming a team "admin" alone does not grant admin access.
 
-Change an existing team's flags using its token from `teams list`:
+Change an existing team's type using its token from `teams list`:
 
 ```bash
-python -m viobench.tools.server.teams update "$TOKEN" --participant
-python -m viobench.tools.server.teams update "$TOKEN" --no-participant
-python -m viobench.tools.server.teams update "$TOKEN" --admin --no-participant
-python -m viobench.tools.server.teams update "$TOKEN" --no-admin
+python -m viobench.tools.server.teams update "$TOKEN" --type participant
+python -m viobench.tools.server.teams update "$TOKEN" --type admin
+python -m viobench.tools.server.teams update "$TOKEN" --type test  # also revokes admin/baseline status
 ```
 
-Omitted flags keep their values. Switching an admin to a participant uses `--no-admin --participant`; the two flags
-cannot both be true. Updates keep the token, submissions and quota setting. API permissions change immediately;
+Updates keep the token, submissions and quota setting. API permissions change immediately;
 the browser's account view updates on its next refresh. With Compose, run the same command through `exec app` as above.
+
+Create a baseline uploader and sign in with its token to upload labeled reference solutions:
+
+```bash
+python -m viobench.tools.server.teams add --type baseline --unlimited "Baselines"
+```
+
+Every eligible upload from a baseline account appears in the comparison plots of all signed-in teams. Use the
+submission label for the method and configuration, such as `OpenVINS, 320px`; labels need not be unique. Changing an
+existing account to baseline publishes its previous eligible submissions too; changing it away removes them from
+other teams' plots. Baseline accounts have no admin permissions and use the same upload pause and job queue.
+
+Each dataset's plot compares median episode Sim(3)-aligned ATE (metres) with the submission's maximum fuel per frame
+across the current evaluation set. Baselines are squares, the viewer's other submissions are circles, and the dashed
+line marks the baseline Pareto frontier (lower is better on both axes). Linear axes include zero-valued scores.
+The comparison table provides the same values and names. Baseline details, files, and historical jobs remain private.
+
+Only submissions with reports for every selected episode and finite scores appear. Guest errors still produce
+scores: the failed and remaining frames use zero position/twist and identity rotation, and alignment includes all
+frames. Infrastructure failures without a report remain unavailable. Selecting additional episodes hides points
+until the existing fill-missing workflow supplies those results. Comparison data refreshes every 15 seconds.
 
 Admins can pause new submissions from **Submission access** by entering a message (up to 1000 characters), update
 that message while paused, or resume submissions. All teams see the saved message and their upload button is disabled.
 Visible browser tabs refresh every 15 seconds, including while idle. Paused uploads return 503 with the message;
-participant, test and unlimited accounts are all blocked. Queued/running evaluations continue, and submissions and
+participant, test, baseline and unlimited accounts are all blocked. Queued/running evaluations continue, and submissions and
 results remain readable. The pause survives server restarts until an admin resumes submissions; it does not stop
 admin scheduling or existing evaluation jobs.
 
-Submission responses include the submitting account's `team_name` and `is_participant` for both teams and admins.
+Submission responses include the submitting account's `team_name` and `team_type` for both teams and admins.
 
 | endpoint | |
 |---|---|
@@ -81,7 +100,8 @@ Submission responses include the submitting account's `team_name` and `is_partic
 | `POST /submissions` | multipart `file` (and `label`) → 201 |
 | `GET /submissions` | the team's submissions (all submissions for admins), newest first, with current-set `status`, `progress` and `overall` |
 | `GET /submissions/<id>` | current-set `results` (`summary`, `episodes`, `partial`) plus all scheduled `jobs`, including episodes outside the current set; admins can access any submission |
-| `GET /config` | the rules below, `team_name`, `is_admin`, `pause_message` (null when accepting uploads), and current `evaluation_hashes` |
+| `GET /config` | the rules below, `team_name`, `team_type`, `pause_message` (null when accepting uploads), and current `evaluation_hashes` |
+| `GET /comparison` | current `evaluation_hashes` and per-dataset points for the viewer's submissions and shared baselines, with baseline frontier ids; no other teams' private submissions |
 | `PUT /submission-pause` | admin only: JSON `{"message": "reason"}` pauses or updates the message; `{"message": null}` resumes; returns `pause_message` |
 | `GET /evaluations` | admin only: current `hashes` and named `presets` |
 | `PUT /evaluations` | admin only: `{"hashes": ["<sha1>", "..."], "backfill": true}` saves the set and optionally schedules missing jobs for all submissions; returns selection and `scheduled` count |

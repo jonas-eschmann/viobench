@@ -6,7 +6,7 @@ import cv2
 import numpy as np
 
 from .. import abi
-from .metrics import hold_last_state, valid_states
+from .metrics import fill_missing_states, valid_states
 
 # OpenCV drawing colours are BGR; episode images are RGB.
 TRUTH = (105, 225, 125)
@@ -66,7 +66,7 @@ def write_video(episode, estimates, path):
         if estimates.shape != (episode.num_frames, abi.STATE_VALUES):
             raise ValueError("video needs one estimated state per frame")
         usable = valid_states(estimates)
-        estimates = hold_last_state(estimates)[:, :3]
+        estimates = fill_missing_states(estimates)[:, :3]
     truth = episode.ground_truth_relative()[:, :3]
     maps = [_Minimap(truth, estimates, axes) for axes in ((0, 2), (1, 2))]
     fps = float(episode.config["episode"]["frame_rate_hz"])
@@ -92,7 +92,7 @@ def write_video(episode, estimates, path):
                 _text(canvas, "Ground truth", (648, 55), TRUTH, scale=0.4)
                 if estimates is not None:
                     error = np.linalg.norm(estimates[index] - truth[index])
-                    label = "Position error" if usable[index] else "Error (pose held)"
+                    label = "Position error" if usable[index] else "Error (origin filled)"
                     _text(canvas, f"{label}: {error:.2f} m", (648, 36), scale=0.4)
                     _text(canvas, "Estimate", (758, 55), ESTIMATE, scale=0.4)
                 maps[0].draw(canvas, index, 640, HEADER_HEIGHT)

@@ -40,7 +40,8 @@ def test_evaluate_report(engine, runtime_path, solution_dir, tmp_path):
     report = evaluate(wasm, [dataset], output_dir=tmp_path / "report", engine=engine, log=lambda *a: None)
     assert report["summary"]["overall"]["episodes"] == 1 and report["summary"]["overall"]["completed"] == 1
     episode_report = report["episodes"][0]
-    assert episode_report["metrics"]["ate_rmse"] < 1e-9 and episode_report["metrics"]["held"] == 0
+    assert episode_report["metrics"]["ate_rmse"] < 1e-9 and episode_report["metrics"]["filled_frames"] == 0
+    assert report["summary"]["overall"]["sim3_ate_rmse_median"] < 1e-9
     assert episode_report["metrics"]["velocity_rmse"] < 1e-6 and episode_report["metrics"]["angular_velocity_rmse"] < 1e-6
     assert episode_report["fuel_per_frame_median"] > 0
     assert (tmp_path / "report" / "report.json").is_file()
@@ -78,12 +79,14 @@ class Solution:
     assert fuel.shape == (3,) and fuel.sum() == episode_report["fuel_total"]  # Includes the failed third attempt.
     estimate = np.loadtxt(tmp_path / "report" / "logs" / digest / "estimate.tum")
     assert list(estimate[:2, 1]) == [1, 2] and np.isnan(estimate[2:, 1:]).all()
-    held = np.tile([0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0], (6, 1))
-    held[:, 0] = [1, 2, 2, 2, 2, 2]  # the frames from the failure on repeat the last pose, standing still
-    held[:2, 7] = 0.5
+    filled = np.tile([0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0], (6, 1))
+    filled[:2, 0] = [1, 2]  # Failed and remaining frames use origin/identity, rather than the previous pose.
+    filled[:2, 7] = 0.5
     stored = read_episode(tmp_path / "set" / f"{episode.name}.zip", frames="none")  # the ground truth the runner scored against
-    expected = evaluate_trajectory(stored.ground_truth_state(), held, stored.frame_times)
-    assert episode_report["metrics"]["held"] == 4 and episode_report["metrics"]["ate_rmse"] == expected.ate_rmse
+    expected = evaluate_trajectory(stored.ground_truth_state(), filled, stored.frame_times)
+    assert episode_report["metrics"]["filled_frames"] == 4 and episode_report["metrics"]["ate_rmse"] == expected.ate_rmse
+    assert episode_report["metrics"]["sim3_ate_rmse"] == pytest.approx(expected.sim3_ate_rmse)
+    assert report["summary"]["overall"]["sim3_ate_rmse_median"] == pytest.approx(expected.sim3_ate_rmse)
 
 
 def test_evaluate_delivers_rgb_from_gray_and_rgb_sets(engine, runtime_path, solution_dir, tmp_path):

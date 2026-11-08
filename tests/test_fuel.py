@@ -7,7 +7,7 @@ import wasmtime
 
 from viobench import Limits, abi
 from viobench.tools.cli import main
-from viobench.tools.runner.leaderboard import markdown_table, rows
+from viobench.tools.runner.leaderboard import markdown_table, pareto_front, rows
 from viobench.tools.runner.run import evaluate
 from viobench.tools.server.worker import public_episode
 from tests.test_datasets import synthetic_episode
@@ -74,7 +74,9 @@ def test_peak_fuel_across_frames_episodes_and_datasets(engine, tmp_path, monkeyp
     saved = json.loads((tmp_path / "report-metered" / "report.json").read_text())
     table = rows([("metered", saved)])
     assert len(table) == 2 and all(row["fuel_per_frame"] == maximum for row in table)
+    assert all(row["sim3_ate_m"] == summary["datasets"][row["dataset"]]["sim3_ate_rmse_median"] for row in table)
     assert "max fuel/frame (all datasets)" in markdown_table(table)
+    assert "Sim(3) ATE [m]" in markdown_table(table)
     assert all("fuel/frame max" in message for message in messages[:-1])
     public = public_episode(saved["episodes"][0])
     assert public["fuel_per_frame_max"] == maximum
@@ -91,6 +93,9 @@ def test_diagnostics_pool_frames_from_unequal_episodes(engine, tmp_path, monkeyp
     costs = [episode["fuel_per_frame_max"] for episode in report["episodes"]]
     pooled = np.repeat(costs, [24, 48, 24])
     overall, mixed = report["summary"]["overall"], report["summary"]["datasets"]["mixed"]
+    scores = [episode["metrics"]["sim3_ate_rmse"] for episode in report["episodes"]]
+    assert overall["sim3_ate_rmse_median"] == pytest.approx(np.median(scores))
+    assert mixed["sim3_ate_rmse_median"] == pytest.approx(np.median(scores[:2]))
     for summary, samples in ((overall, pooled), (mixed, pooled[:72])):
         assert summary["frames_attempted"] == len(samples)
         assert summary["fuel_total"] == sum(samples)
@@ -112,6 +117,9 @@ def test_no_attempted_frames_has_zero_fuel_statistics(engine, tmp_path, monkeypa
     report = evaluate(metered_module(tmp_path, init_status=-1), [workload("broken", "init", [1] * 24)],
                       engine=engine, log=lambda *a: None)
     assert report["episodes"][0]["failure"].startswith("init failed")
+    assert report["episodes"][0]["metrics"]["filled_frames"] == 24
+    assert np.isfinite(report["summary"]["overall"]["sim3_ate_rmse_median"])
+    assert rows([("init failure", report)])[0]["fuel_per_frame"] == 0
     for summary in (report["episodes"][0], report["summary"]["overall"], report["summary"]["datasets"]["broken"]):
         assert summary["frames_attempted"] == summary["fuel_total"] == 0
         for statistic in ("max", "mean", "median", "p95", "p99"):
@@ -139,7 +147,7 @@ def test_failed_frame_contributes_to_peak_fuel(failure, limit, reason, failed_fr
     assert failed["fuel_total"] == failed_frame * cheap["fuel_per_frame_max"] + maximum
     assert failed["fuel_per_frame_mean"] == pytest.approx(failed["fuel_total"] / (failed_frame + 1))
     assert failed["frames_attempted"] == failed_frame + 1
-    assert failed["metrics"]["held"] == 24 - failed_frame
+    assert failed["metrics"]["filled_frames"] == 24 - failed_frame
     overall = report["summary"]["overall"]
     assert overall["fuel_per_frame_max"] == maximum
     assert overall["frames_attempted"] == 24 + failed_frame + 1
@@ -149,6 +157,12 @@ def test_failed_frame_contributes_to_peak_fuel(failure, limit, reason, failed_fr
     assert overall["fuel_per_frame_p99"] == pytest.approx(np.percentile(attempted_costs, 99))
     if limit == 1_000:
         assert maximum == limit
+
+
+def test_pareto_front_keeps_equal_points_and_ignores_non_finite_metrics():
+    points = [(10, 3), (10, 3), (10, 4), (20, 3), (20, 2), (0, 5), (float("nan"), 0), (30, float("inf"))]
+    assert pareto_front(points) == [5, 0, 1, 4]
+    assert pareto_front([(0, 0), (1, 0), (0, 1)]) == [0]
 
 
 @pytest.mark.parametrize("overall", [{"fuel_per_frame_median": 10}, {"fuel_per_frame_max": 20}])

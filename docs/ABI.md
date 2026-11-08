@@ -38,8 +38,9 @@ during `init`: copy what you keep.
 ## Status
 
 `init` and `step` return `0` on success; anything else is an error (write the reason to stderr). An error, a value in
-`out` that is not finite, an all-zero quaternion or a trap ends the episode as failed; its remaining frames hold the
-last pose with zero twist. Until you have an estimate, return identity and zero twist.
+`out` that is not finite, an all-zero quaternion or a trap ends the episode as failed. The failed frame and all remaining
+frames are scored at position `[0, 0, 0]`, identity quaternion `[0, 0, 0, 1]`, and zero twist. They remain in the complete
+trajectory used for Sim(3) alignment and ATE. Until you have an estimate, return identity and zero twist.
 
 Traps: `unreachable`, out-of-bounds access, stack overflow, out of fuel, the wall-clock deadline, `proc_exit`. An
 allocation beyond the memory cap fails instead of trapping (Python: `MemoryError`).

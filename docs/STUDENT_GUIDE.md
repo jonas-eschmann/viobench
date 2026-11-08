@@ -69,6 +69,15 @@ Results and progress use the current set and update as episodes finish. The serv
 midnight Pacific time. Failed evaluations do not refund uploads. Queued or running evaluations do not block another
 upload; additional evaluations of an existing submission do not count as uploads.
 
+The comparison plots show your submissions alongside shared baselines. Lower **Sim(3)-aligned ATE** and lower
+**maximum fuel per frame** are better. Each dataset uses the median ATE over its episodes; maximum fuel spans the
+whole selected set. The dashed line connects the nondominated baselines. Points appear once every selected episode
+has a scored report, and update when the instructors change the set and fill in the missing evaluations.
+
+After a solution error, the failed and remaining frames are scored with zero position, identity rotation, and zero
+twist. Sim(3) alignment and ATE include every frame. Fuel counts actual attempted steps, including a failing step;
+the fallback predictions do not add fuel. Other teams' submissions and baseline submission details remain private.
+
 ## Tips
 
 - Python loops over pixels are expensive; OpenCV calls are cheap.

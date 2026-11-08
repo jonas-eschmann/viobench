@@ -211,7 +211,7 @@ def test_tracking_after_turning_in_place(openvins_path, engine, tmp_path, blank_
         estimates.append(np.r_[result.pose, result.twist])
         truth.append(expected)
     metrics = evaluate_trajectory(truth, estimates, times)
-    assert metrics.held == 0, metrics
+    assert metrics.filled_frames == 0, metrics
     # Initialization alone is insufficient: bias drift used to destroy the trajectory after
     # the rotation-only interval. These bounds also reject an always-stationary solution.
     # A complete one-second image dropout must survive window marginalization

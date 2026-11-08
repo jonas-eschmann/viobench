@@ -29,17 +29,17 @@ def jobs(store, token, submission_id):
     return {job["episode_hash"]: job for job in store.get(token, submission_id)["jobs"]}
 
 
-def succeed(store, submission_id, job, fuel=(1, 3), rpe=0.1, dataset="val"):
+def succeed(store, submission_id, job, fuel=(1, 3), rpe=0.1, dataset="val", sim3=0.2, completed=True):
     """Persist the same numeric result and fuel artifact that the isolated worker commits."""
     samples = np.asarray(fuel, dtype=np.float64)
     directory = store.report_dir(submission_id, job["episode_hash"]) / "logs" / job["episode_hash"]
     directory.mkdir(parents=True, exist_ok=True)
     np.save(directory / "fuel.npy", samples, allow_pickle=False)
     result = {
-        "hash": job["episode_hash"], "dataset": dataset, "completed": True,
+        "hash": job["episode_hash"], "dataset": dataset, "completed": completed,
         "frames": len(samples), "duration_s": 1.0, "fuel_init": 0, "wall_init_s": 0.1,
         "wall_per_frame_median_ms": 1.0, "wall_per_frame_p95_ms": 2.0,
-        "metrics": {"rpe_translation_rmse": rpe, "rpe_rotation_rmse": 0.1, "rotation_rmse": 0.1, "ate_rmse": 0.2,
+        "metrics": {"sim3_ate_rmse": sim3, "rpe_translation_rmse": rpe, "rpe_rotation_rmse": 0.1, "rotation_rmse": 0.1, "ate_rmse": 0.2,
                     "velocity_rmse": 0.3, "angular_velocity_rmse": 0.4},
         **fuel_statistics(samples),
     }

@@ -1,6 +1,6 @@
 """SQLite accounts, current evaluation selection, and one job per submission/episode.
 
-A team is its token: submissions belong to a token. Participants are marked separately from test accounts;
+A team is its token: submissions belong to a token. Baseline accounts share comparison scores;
 admin accounts can see every team's submissions and pause new uploads."""
 import hashlib
 import json
@@ -13,22 +13,21 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .config import load as load_config
-from .evaluations import default_hashes, normalize_hashes, presets, results_for
+from .evaluations import comparison_for, default_hashes, normalize_hashes, presets, results_for
 
 DEFAULT_DIR = Path(os.environ.get("VIOBENCH_SERVER_DIR", "server-data"))
 TOKEN_BYTES = 24  # a token is 32 base64url characters
 ID_BYTES = 8  # a submission id is 16 hex digits, random: it says nothing about how many submissions exist
 MAX_PAUSE_MESSAGE = 1000
+TEAM_TYPES = ("test", "participant", "baseline", "admin")
 COLUMNS = ("submissions.id, label, filename, sha256, bytes, submissions.created, "
-           "teams.name AS team_name, teams.is_participant")  # API fields; never include tokens
+           "teams.name AS team_name, teams.type AS team_type")  # API fields; never include tokens
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS teams (
     token TEXT PRIMARY KEY, name TEXT NOT NULL, created REAL NOT NULL,
     unlimited INTEGER NOT NULL DEFAULT 0,
-    is_admin INTEGER NOT NULL DEFAULT 0,
-    is_participant INTEGER NOT NULL DEFAULT 0,
-    CHECK (NOT (is_admin AND is_participant))
+    type TEXT NOT NULL DEFAULT 'test' CHECK (type IN ('test', 'participant', 'baseline', 'admin'))
 );
 CREATE TABLE IF NOT EXISTS submissions (
     id TEXT PRIMARY KEY, token TEXT NOT NULL REFERENCES teams(token), label TEXT,
@@ -86,36 +85,29 @@ class Store:
 
     # --- teams ----------------------------------------------------------------------------------------------
 
-    def add_team(self, name, unlimited=False, is_admin=False, is_participant=False):
-        """Creates a test account, participant or admin; returns its token. `unlimited` affects quotas only."""
-        if is_admin and is_participant:
-            raise ValueError("admin accounts cannot be participants")
+    def add_team(self, name, team_type="test", unlimited=False):
+        """Create an account and return its token. `unlimited` affects quotas only."""
+        if team_type not in TEAM_TYPES:
+            raise ValueError(f"account type must be one of: {', '.join(TEAM_TYPES)}")
         token = secrets.token_urlsafe(TOKEN_BYTES)
         with self._connect() as connection:
-            connection.execute("INSERT INTO teams (token, name, created, unlimited, is_admin, is_participant) VALUES (?, ?, ?, ?, ?, ?)",
-                               (token, name, time.time(), unlimited, is_admin, is_participant))
+            connection.execute("INSERT INTO teams (token, name, created, unlimited, type) VALUES (?, ?, ?, ?, ?)",
+                               (token, name, time.time(), unlimited, team_type))
         return token
 
-    def update_team(self, token, *, is_admin=None, is_participant=None):
-        """Changes the specified account flags; None leaves a flag unchanged. Keeps the token and submissions."""
-        if is_admin is None and is_participant is None:
-            raise ValueError("specify --admin/--no-admin or --participant/--no-participant")
+    def update_team(self, token, *, team_type):
+        """Change the account type, keeping its token, quota setting and submissions."""
+        if team_type not in TEAM_TYPES:
+            raise ValueError(f"account type must be one of: {', '.join(TEAM_TYPES)}")
         with self._connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            team = connection.execute("SELECT is_admin, is_participant FROM teams WHERE token = ?", (token,)).fetchone()
-            if team is None:
+            if not connection.execute("UPDATE teams SET type = ? WHERE token = ?", (team_type, token)).rowcount:
                 raise ValueError("no such team")
-            is_admin = team["is_admin"] if is_admin is None else is_admin
-            is_participant = team["is_participant"] if is_participant is None else is_participant
-            if is_admin and is_participant:
-                raise ValueError("admin accounts cannot be participants; clear the other flag in the same command")
-            connection.execute("UPDATE teams SET is_admin = ?, is_participant = ? WHERE token = ?", (is_admin, is_participant, token))
 
     def teams(self):
-        """[(token, name, unlimited, is_admin, is_participant)] in the order they were created."""
+        """[(token, name, unlimited, team_type)] in the order they were created."""
         with self._connect() as connection:
-            return [(row["token"], row["name"], bool(row["unlimited"]), bool(row["is_admin"]), bool(row["is_participant"]))
-                    for row in connection.execute("SELECT token, name, unlimited, is_admin, is_participant FROM teams ORDER BY created")]
+            return [(row["token"], row["name"], bool(row["unlimited"]), row["type"])
+                    for row in connection.execute("SELECT token, name, unlimited, type FROM teams ORDER BY created")]
 
     def is_team(self, token):
         with self._connect() as connection:
@@ -126,10 +118,13 @@ class Store:
             row = connection.execute("SELECT name FROM teams WHERE token = ?", (token,)).fetchone()
         return row["name"] if row else None
 
-    def is_admin(self, token):
+    def team_type(self, token):
         with self._connect() as connection:
-            row = connection.execute("SELECT is_admin FROM teams WHERE token = ?", (token,)).fetchone()
-        return bool(row and row["is_admin"])
+            row = connection.execute("SELECT type FROM teams WHERE token = ?", (token,)).fetchone()
+        return row["type"] if row else None
+
+    def is_admin(self, token):
+        return self.team_type(token) == "admin"
 
     # --- submission availability ---------------------------------------------------------------------------
 
@@ -216,15 +211,20 @@ class Store:
 
     # --- visibility, progress and metrics for the current selection -----------------------------------------
 
-    def _view(self, connection, row, hashes, details):
-        submission = dict(row)
+    @staticmethod
+    def _jobs(connection, submission_id, hashes):
         jobs = {}
         for job_row in connection.execute("SELECT id, episode_hash, status, created, started, finished, result, error "
-                                          "FROM evaluation_jobs WHERE submission_id = ? ORDER BY id", (row["id"],)):
+                                          "FROM evaluation_jobs WHERE submission_id = ? ORDER BY id", (submission_id,)):
             job = dict(job_row)
             job["result"] = json.loads(job["result"]) if job["result"] else None
             job["selected"] = job["episode_hash"] in hashes
             jobs[job["episode_hash"]] = job
+        return jobs
+
+    def _view(self, connection, row, hashes, details):
+        submission = dict(row)
+        jobs = self._jobs(connection, row["id"], hashes)
         selected = [jobs[digest] for digest in hashes if digest in jobs]
         terminal = [job for job in selected if job["status"] in ("done", "failed")]
         completed = sum(bool(job["result"] and job["result"]["completed"]) for job in terminal)
@@ -258,6 +258,18 @@ class Store:
             rows = connection.execute(f"SELECT {COLUMNS} FROM submissions JOIN teams USING (token) "
                                       "WHERE submissions.token = ? OR ? ORDER BY submissions.created DESC", (token, is_admin)).fetchall()
             return [self._view(connection, row, hashes, details=False) for row in rows]
+
+    def comparison(self, token):
+        """Own and baseline scores from one snapshot, including for admin viewers."""
+        with self._connect() as connection:
+            connection.execute("BEGIN")
+            hashes = self._evaluation_hashes(connection)
+            rows = connection.execute(
+                "SELECT submissions.id, label, teams.name AS team_name, teams.type AS team_type, "
+                "submissions.token = ? AS own FROM submissions JOIN teams USING (token) "
+                "WHERE submissions.token = ? OR teams.type = 'baseline' ORDER BY submissions.created, submissions.id",
+                (token, token)).fetchall()
+            return comparison_for(self, hashes, [(dict(row), self._jobs(connection, row["id"], hashes)) for row in rows])
 
     # --- single worker -----------------------------------------------------------------------------
 

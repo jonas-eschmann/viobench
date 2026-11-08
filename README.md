@@ -2,7 +2,7 @@
 
 Estimate a flying camera's pose relative to its first frame, and its twist, from camera frames and IMU data. A submission is one
 WebAssembly module; the evaluator meters its compute deterministically (Wasmtime fuel) and places it on an
-accuracy-vs-compute curve.
+accuracy-vs-compute curve: Sim(3)-aligned trajectory error versus maximum fuel per frame.
 
 | | |
 |---|---|

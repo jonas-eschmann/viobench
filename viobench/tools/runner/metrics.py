@@ -2,12 +2,11 @@
 
 States are (N, 13) arrays [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz], one row per frame: the pose T_c0_ck
 (scalar-last quaternion), then the twist of camera k in camera-k axes. A row without a usable state (NaN/inf, as
-recorded for the frames after an episode failed, or a zero quaternion) repeats the previous pose and stands still
-(zero twist), identity before the first, so every metric runs over the complete trajectory.
+recorded from the first failed step onward, or a zero quaternion) is replaced by the origin, identity rotation and
+zero twist, so every metric runs over the complete trajectory.
 
-The headline is the translational RPE over one-second windows: local, so it does not accumulate drift, and averaged
-over every window of an episode. Because the task fixes the reference frame (frame 0), ATE is computed *without*
-alignment; a Sim(3)-aligned ATE is reported as a diagnostic that separates scale/gravity errors from structural ones.
+The headline is position RMSE after one Sim(3) alignment of the complete estimated trajectory to ground truth.
+Unaligned ATE, one-second relative pose error (RPE), rotation and twist errors are also reported as diagnostics.
 """
 from dataclasses import asdict, dataclass
 
@@ -25,14 +24,11 @@ def valid_states(states):
     return np.all(np.isfinite(states), axis=1) & np.any(states[:, 3:7] != 0, axis=1)
 
 
-def hold_last_state(states):
-    """Rows that are not usable states repeat the previous usable pose with zero twist (identity before the first)."""
-    states = np.asarray(states, dtype=float)
-    valid = valid_states(states)
-    source = np.maximum.accumulate(np.where(valid, np.arange(len(states)), -1))
-    held = np.vstack([IDENTITY_STATE, states])[source + 1]
-    held[~valid, abi.POSE_VALUES:] = 0  # a held pose stands still
-    return held
+def fill_missing_states(states):
+    """Replace unusable rows with origin, identity rotation and zero twist without changing the raw estimates."""
+    filled = np.array(states, dtype=float, copy=True)
+    filled[~valid_states(filled)] = IDENTITY_STATE
+    return filled
 
 
 def umeyama_sim3(source, target):
@@ -40,6 +36,9 @@ def umeyama_sim3(source, target):
     source = np.asarray(source, dtype=float)
     target = np.asarray(target, dtype=float)
     mean_source, mean_target = source.mean(0), target.mean(0)
+    if np.all(source == source[0]):
+        # Rotation and scale are undetermined for a constant prediction; align that point to the target centroid.
+        return 1.0, np.eye(3), mean_target - source[0]
     centred_source, centred_target = source - mean_source, target - mean_target
     covariance = centred_target.T @ centred_source / len(source)
     U, D, Vt = np.linalg.svd(covariance)
@@ -56,8 +55,8 @@ def umeyama_sim3(source, target):
 @dataclass
 class TrajectoryMetrics:
     frames: int
-    held: int  # diagnostic: frames without a usable pose (they repeat the previous one)
-    rpe_translation_rmse: float  # m over windows of delta_seconds: the headline
+    filled_frames: int  # diagnostic: frames replaced by origin, identity rotation and zero twist
+    rpe_translation_rmse: float  # m over windows of delta_seconds
     rpe_rotation_rmse: float  # rad over windows of delta_seconds
     rpe_pairs: int  # windows (frame pairs delta_seconds apart)
     ate_rmse: float  # m, no alignment
@@ -66,7 +65,7 @@ class TrajectoryMetrics:
     velocity_rmse: float  # m/s, velocity of the camera centre in camera-k axes
     angular_velocity_rmse: float  # rad/s, in camera-k axes
     sim3_scale: float  # diagnostic: scale factor that best aligns the estimate to ground truth
-    sim3_ate_rmse: float  # m, after Sim(3) alignment
+    sim3_ate_rmse: float  # headline: m, after Sim(3) alignment of the complete trajectory
     distance_travelled: float  # m, ground truth
     final_drift: float  # m, position error at the last frame
     drift_per_metre: float  # final_drift / distance_travelled
@@ -76,14 +75,14 @@ class TrajectoryMetrics:
 
 
 def evaluate_trajectory(ground_truth, estimate, timestamps, delta_seconds=1.0):
-    """ground_truth, estimate: (N, 13) states relative to frame 0; estimate rows without a usable state repeat the previous pose."""
+    """Score complete (N, 13) trajectories, filling unusable estimates with origin, identity rotation and zero twist."""
     ground_truth = np.asarray(ground_truth, dtype=float)
     estimate = np.asarray(estimate, dtype=float)
     timestamps = np.asarray(timestamps, dtype=float)
     n = len(ground_truth)
     assert ground_truth.shape == estimate.shape == (n, abi.STATE_VALUES) and timestamps.shape == (n,)
-    held = int(n - valid_states(estimate).sum())
-    estimate = hold_last_state(estimate)
+    filled_frames = int(n - valid_states(estimate).sum())
+    estimate = fill_missing_states(estimate)
     T_gt = poses_to_matrices(ground_truth)
     T_est = poses_to_matrices(estimate)
     steps = np.linalg.norm(np.diff(ground_truth[:, :3], axis=0), axis=1)
@@ -119,7 +118,7 @@ def evaluate_trajectory(ground_truth, estimate, timestamps, delta_seconds=1.0):
     final_drift = float(position_error[-1])
     return TrajectoryMetrics(
         frames=n,
-        held=held,
+        filled_frames=filled_frames,
         rpe_translation_rmse=float(np.sqrt(np.mean(rpe_translation ** 2))) if len(rpe_translation) else float("nan"),
         rpe_rotation_rmse=float(np.sqrt(np.mean(rpe_rotation ** 2))) if len(rpe_rotation) else float("nan"),
         rpe_pairs=int(len(rpe_translation)),

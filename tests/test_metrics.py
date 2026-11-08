@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from viobench.tools.geometry import invert, matrices_to_poses, matrix_to_quaternion, poses_to_matrices, quaternion_to_matrix, rotation_vectors
-from viobench.tools.runner.metrics import evaluate_trajectory, hold_last_state, umeyama_sim3
+from viobench.tools.runner.metrics import IDENTITY_STATE, evaluate_trajectory, fill_missing_states, umeyama_sim3
 
 
 def random_poses(rng, n):
@@ -42,28 +42,58 @@ def test_perfect_estimate_has_zero_error():
     assert m.ate_rmse == pytest.approx(0, abs=1e-12) and m.rotation_rmse == pytest.approx(0, abs=1e-7)
     assert m.velocity_rmse == 0 and m.angular_velocity_rmse == 0
     assert m.rpe_translation_rmse == pytest.approx(0, abs=1e-12) and m.rpe_pairs == 20
-    assert m.held == 0 and m.sim3_scale == pytest.approx(1.0)
+    assert m.filled_frames == 0 and m.sim3_scale == pytest.approx(1.0)
 
 
-def test_constant_offset_and_held_frames():
+def test_constant_offset_and_origin_filled_frames():
     rng = np.random.default_rng(2)
     gt = random_states(rng, 30)
     t = np.arange(30) * 0.05
     est = gt.copy()
     est[:, 0] += 0.5  # half a metre off everywhere
     m = evaluate_trajectory(gt, est, t)
-    assert m.held == 0 and m.ate_rmse == pytest.approx(0.5) and m.final_drift == pytest.approx(0.5)
+    assert m.filled_frames == 0 and m.ate_rmse == pytest.approx(0.5) and m.final_drift == pytest.approx(0.5)
     est[0] = np.nan  # no state yet: identity, standing still
-    est[5] = np.nan  # a failed step: repeats the pose of frame 4, standing still
+    est[5] = np.nan  # a failed step: origin/identity, even after a valid nonzero prediction
     est[6, 3:7] = 0  # a zero quaternion is no state either
     est[7, 12] = np.inf  # nor is a twist that is not finite
-    held = hold_last_state(est)
-    np.testing.assert_array_equal(held[0], [0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0])
-    np.testing.assert_array_equal(held[5:8, :7], [est[4, :7]] * 3)
-    np.testing.assert_array_equal(held[5:8, 7:], np.zeros((3, 6)))
-    np.testing.assert_array_equal(np.delete(held, [0, 5, 6, 7], axis=0), np.delete(est, [0, 5, 6, 7], axis=0))
+    filled = fill_missing_states(est)
+    np.testing.assert_array_equal(filled[[0, 5, 6, 7]], np.tile(IDENTITY_STATE, (4, 1)))
+    np.testing.assert_array_equal(np.delete(filled, [0, 5, 6, 7], axis=0), np.delete(est, [0, 5, 6, 7], axis=0))
+    assert np.isnan(est[5]).all()  # Scoring does not overwrite the exported diagnostic trace.
     m = evaluate_trajectory(gt, est, t)
-    assert m.held == 4 and m.ate_rmse == pytest.approx(evaluate_trajectory(gt, held, t).ate_rmse) and m.ate_rmse > 0.5
+    assert m.filled_frames == 4 and m.ate_rmse == pytest.approx(evaluate_trajectory(gt, filled, t).ate_rmse) and m.ate_rmse > 0.5
+
+
+def test_sim3_scores_the_missing_suffix_instead_of_only_the_successful_prefix():
+    gt = np.tile(IDENTITY_STATE, (6, 1))
+    gt[:, 0] = np.arange(6)
+    estimate = gt.copy()
+    estimate[3:] = np.nan
+    metrics = evaluate_trajectory(gt, estimate, np.arange(6))
+    assert metrics.filled_frames == 3
+    assert metrics.sim3_ate_rmse == pytest.approx(np.sqrt(55 / 21))
+    assert evaluate_trajectory(gt[:3], estimate[:3], np.arange(3)).sim3_ate_rmse == pytest.approx(0, abs=1e-12)
+
+
+@pytest.mark.parametrize("position", [[0, 0, 0], [0.1, 0.2, 0.3]])
+def test_constant_prediction_has_deterministic_centroid_alignment(position):
+    source = np.tile(position, (25, 1))
+    target = np.random.default_rng(7).normal(size=(25, 3))
+    scale, rotation, translation = umeyama_sim3(source, target)
+    assert scale == 1
+    np.testing.assert_array_equal(rotation, np.eye(3))
+    np.testing.assert_allclose(translation, target.mean(0) - position)
+
+
+@pytest.mark.parametrize("moving", [False, True])
+def test_all_missing_predictions_have_finite_sim3_score(moving):
+    gt = np.tile(IDENTITY_STATE, (5, 1))
+    gt[:, 0] = np.arange(5) if moving else 3
+    metrics = evaluate_trajectory(gt, np.full((5, 13), np.nan), np.arange(5))
+    assert metrics.filled_frames == 5 and metrics.sim3_scale == 1
+    assert metrics.sim3_ate_rmse == pytest.approx(np.sqrt(2) if moving else 0)
+    assert metrics.rotation_rmse == metrics.velocity_rmse == metrics.angular_velocity_rmse == 0
 
 
 def test_scaled_estimate_is_fixed_by_sim3():

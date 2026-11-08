@@ -59,7 +59,7 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
       <button id="evaluation-save" type="submit">Save</button>
       <button id="evaluation-fill" type="button">Fill missing for current set</button>
     </form>
-    <p class="hint">New uploads use the saved set. Filling missing evaluations includes participant and test submissions and keeps existing results.</p>
+    <p class="hint">New uploads use the saved set. Filling missing evaluations includes all submissions and keeps existing results.</p>
   </section>
 
   <section id="upload-section">
@@ -76,6 +76,13 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
   </section>
 
   <section>
+    <h2>Comparison with baselines</h2>
+    <p class="hint">Current-set results: maximum fuel per frame across all episodes, and median Sim(3) ATE per dataset. Lower is better on both axes. Only submissions with all reports appear.</p>
+    <p class="comparison-legend"><span class="own-key">● Your submissions</span> <span>■ Baselines</span> <span>┄ Baseline frontier</span></p>
+    <div id="comparison-charts"></div>
+  </section>
+
+  <section>
     <div class="heading">
       <h2 id="submissions-title">Submissions</h2>
       <button id="refresh" type="button">Refresh</button>
@@ -84,7 +91,7 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
     <p id="evaluation-summary" class="hint"></p>
     <div class="scroll">
       <table id="submissions">
-        <thead><tr><th>Submitted</th><th id="team-column" hidden>Team</th><th id="account-column" hidden>Account</th><th>Label</th><th>Status</th><th>RPE (m)</th><th>Fuel/frame</th><th>Episodes</th><th></th></tr></thead>
+        <thead><tr><th>Submitted</th><th id="team-column" hidden>Team</th><th id="account-column" hidden>Account</th><th>Label</th><th>Status</th><th>Sim(3) ATE (m)</th><th>Max fuel/frame</th><th>Episodes</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>

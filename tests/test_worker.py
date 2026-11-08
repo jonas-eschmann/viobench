@@ -329,7 +329,7 @@ def test_worker_resolves_cold_cache_and_continues_after_missing_episode(tmp_path
     store = Store(tmp_path / "server")
     monkeypatch.setattr(server, "_store", store)
     client = TestClient(server.app)
-    client.headers["Authorization"] = f"Bearer {store.add_team('team', is_participant=True)}"
+    client.headers["Authorization"] = f"Bearer {store.add_team('team', team_type='participant')}"
     wasm = metered_module(tmp_path)
     created = client.post("/submissions", files={"file": ("native.wasm", wasm.read_bytes())})
     assert created.status_code == 201 and created.json()["status"] == "queued"

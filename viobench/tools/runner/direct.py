@@ -131,8 +131,8 @@ def run(solution, dataset, output_dir=None, max_episodes=None, log=print):
             from .video import write_video
 
             log(f"video: {write_video(episode, estimates, directory / 'trajectory.mp4')}")
-        log(f"{episode.dataset}/{episode.key}: RPE {metrics.rpe_translation_rmse:.3f} m/1 s  ATE {metrics.ate_rmse:.3f} m  "
-            f"rot {np.degrees(metrics.rotation_rmse):.1f} deg  vel {metrics.velocity_rmse:.3f} m/s  held {metrics.held}  "
+        log(f"{episode.dataset}/{episode.key}: Sim(3) ATE {metrics.sim3_ate_rmse:.3f} m  RPE {metrics.rpe_translation_rmse:.3f} m/1 s  ATE {metrics.ate_rmse:.3f} m  "
+            f"rot {np.degrees(metrics.rotation_rmse):.1f} deg  vel {metrics.velocity_rmse:.3f} m/s  filled {metrics.filled_frames}  "
             f"{np.median(seconds) * 1e3:.1f} ms/frame (host, no fuel)")
         results.append((episode, estimates, metrics))
     if not results:

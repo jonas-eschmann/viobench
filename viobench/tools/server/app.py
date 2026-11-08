@@ -3,14 +3,16 @@
     POST /submissions        multipart: file (the .wasm), label (optional)  -> 201 and the new submission
     GET  /submissions        the team's submissions (all for admins), newest first, with overall summaries once evaluated
     GET  /submissions/{id}   one of them, with its results once evaluated
-    GET  /config             the rules (`server.config`), team name, admin status and submission pause message
+    GET  /config             the rules (`server.config`), team name/type and submission pause message
+    GET  /comparison         own and baseline scores for the current evaluation selection
     PUT  /submission-pause   admin: {"message": "reason"} to pause, {"message": null} to resume
     GET/PUT /evaluations    admin: current hashes and presets; save a selection with optional backfill
     POST /evaluations/schedule  admin: schedule missing jobs for all/one submission and current/explicit hashes
     GET  /, /app.js, /style.css   the web UI (ui/): a page on top of the routes above
 
-Every API request carries "Authorization: Bearer <token>" (tokens: `python -m viobench.tools.server.teams`) and sees
-only its own team's submissions, or all submissions for admins; the UI's files are public.
+Every API request carries "Authorization: Bearer <token>" (tokens: `python -m viobench.tools.server.teams`). Submission
+lists and details show the team's own submissions, or all submissions for admins; comparisons also show baseline scores.
+The UI's files are public.
 VIOBENCH_SERVER_DIR: uploads, reports and sqlite (default ./server-data); the rules are
 the checked-in viobench/tools/config.json.
 The evaluation itself is done by `viobench.tools.server.worker`, which polls the queue.
@@ -58,7 +60,6 @@ def authenticate(authorization):
 
 def public(row):
     """API timestamps are UTC; non-finite metrics are JSON null."""
-    row["is_participant"] = bool(row["is_participant"])
     for item in [row, *row.get("jobs", [])]:
         for key in ("created", "started", "finished"):
             if item.get(key) is not None:
@@ -121,8 +122,13 @@ def submission(submission_id: str, authorization: str | None = Header(default=No
 def configuration(authorization: str | None = Header(default=None)):
     token = authenticate(authorization)
     return {**get_store().config.as_dict(), "team_name": get_store().team_name(token),
-            "is_admin": get_store().is_admin(token), "pause_message": get_store().pause_message(),
+            "team_type": get_store().team_type(token), "pause_message": get_store().pause_message(),
             "evaluation_hashes": get_store().evaluation_hashes()}
+
+
+@app.get("/comparison")
+def comparison(authorization: str | None = Header(default=None)):
+    return get_store().comparison(authenticate(authorization))
 
 
 def require_admin(authorization):

@@ -25,9 +25,9 @@ class EpisodeReport:
     hash: str | None  # the sha1 of the episode's archive, its identity (Episode.hash); None for one without an archive
     dataset: str
     frames: int
-    frames_attempted: int  # includes a failing step, excludes frames held after the failure
+    frames_attempted: int  # includes a failing step, excludes unattempted frames after the failure
     duration_s: float  # first to last frame; episodes of one set share it, sets may differ
-    completed: bool  # all frames were fed; otherwise the episode failed and the remaining frames repeat the last pose
+    completed: bool  # all frames were fed; otherwise missing states are scored as origin/identity with zero twist
     failure: str | None  # why it ended early: init failed, a step failed or returned an unusable state, a trap
     fuel_init: int
     fuel_per_frame_max: int
@@ -120,7 +120,8 @@ def summarize(reports, frame_fuels):
             "episodes": len(group),
             "completed": len(completed),
             "duration_s_median": float(np.median([r.duration_s for r in group])),
-            "rpe_translation_rmse_median": float(np.nanmedian([r.metrics["rpe_translation_rmse"] for r in group])),  # the headline
+            "sim3_ate_rmse_median": float(np.median([r.metrics["sim3_ate_rmse"] for r in group])),  # the headline
+            "rpe_translation_rmse_median": float(np.nanmedian([r.metrics["rpe_translation_rmse"] for r in group])),
             "rpe_rotation_rmse_median": float(np.nanmedian([r.metrics["rpe_rotation_rmse"] for r in group])),
             "ate_rmse_median": float(np.median([r.metrics["ate_rmse"] for r in group])),
             "rotation_rmse_median": float(np.median([r.metrics["rotation_rmse"] for r in group])),
@@ -172,8 +173,8 @@ def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_
         write_estimates(log_dir, episode.frame_times, estimates)
         np.save(log_dir / "fuel.npy", fuel, allow_pickle=False)  # private samples for exact aggregation of episode jobs
         m = report.metrics
-        log(f"{episode.dataset}/{episode.key}: {'ok' if report.completed else 'FAILED'} RPE {m['rpe_translation_rmse']:.3f} m/1 s  ATE {m['ate_rmse']:.3f} m  "
-            f"rot {np.degrees(m['rotation_rmse']):.1f} deg  vel {m['velocity_rmse']:.3f} m/s  held {m['held']}  fuel/frame max {report.fuel_per_frame_max:,.0f} (p95 {report.fuel_per_frame_p95:,.0f})  "
+        log(f"{episode.dataset}/{episode.key}: {'ok' if report.completed else 'FAILED'} Sim(3) ATE {m['sim3_ate_rmse']:.3f} m  RPE {m['rpe_translation_rmse']:.3f} m/1 s  ATE {m['ate_rmse']:.3f} m  "
+            f"rot {np.degrees(m['rotation_rmse']):.1f} deg  vel {m['velocity_rmse']:.3f} m/s  filled {m['filled_frames']}  fuel/frame max {report.fuel_per_frame_max:,.0f} (p95 {report.fuel_per_frame_p95:,.0f})  "
             f"wall/frame {report.wall_per_frame_median_ms:.1f} ms" + (f"  [{report.failure}]" if report.failure else ""))
         if save_video:
             from .video import write_video

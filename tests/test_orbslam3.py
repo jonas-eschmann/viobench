@@ -155,7 +155,7 @@ def test_metric_tracking_with_camera_imu_offset(orbslam3_path, engine, tmp_path)
     # Discard startup for accuracy, but retain the original first-frame origin.
     tail = np.asarray(times) >= 10
     metrics = evaluate_trajectory(np.asarray(truth)[tail], np.asarray(estimates)[tail], np.asarray(times)[tail])
-    assert metrics.held == 0, metrics
+    assert metrics.filled_frames == 0, metrics
     assert metrics.ate_rmse < 0.5, metrics
     assert metrics.rpe_translation_rmse < 0.25, metrics
     assert metrics.rotation_rmse < 0.15, metrics
