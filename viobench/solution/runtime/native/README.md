@@ -15,7 +15,10 @@ The same CMake call configured with the host compiler builds `build-host/debug` 
   reactor never exits.
 - **Other libraries**: cross-build them with the workspace's `build/toolchain/wasi-sdk` (fetch their sources in
   `toolchain/download_dependencies.sh` if you like) and link them in your `CMakeLists.txt`.
-- **OpenCV**: the Python runtime build leaves static libraries and headers in `build/runtime/opencv-build`. Compile
+- **OpenCV**: call `viobench_find_opencv(core imgproc features2d video calib3d)` after including
+  `viobench_reactor.cmake`. For wasm, it automatically builds missing libraries with the workspace's Python runtime
+  recipe (10–15 minutes once) and reuses `build/runtime/opencv-build`; host builds use the installed OpenCV.
+  Set `VIOBENCH_OPENCV_DIR` to reuse another complete wasm OpenCV build. Compile
   with `-fwasm-exceptions -mllvm -wasm-use-legacy-eh=false`; link with `-fwasm-exceptions -lc++ -lc++abi -lunwind`.
   `viobench/solution/examples/native/openvins` does this and ports a larger C++ project (OpenVINS, Ceres, Eigen).
 - **Rust**: `crate-type = ["cdylib"]`, target `wasm32-wasip1`, `#[no_mangle] pub extern "C" fn step(t: f64, frame:

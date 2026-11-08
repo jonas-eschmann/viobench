@@ -13,21 +13,13 @@ from .. import abi
 from ..abi import AbiError
 from ..abi.module import runtime_descriptor
 from .engine import Engine
+from .logs import capped_output, tail
 from .metrics import valid_states
 
 IMU_CAPACITY_ROWS = 1024  # initial IMU buffer; grows on demand
 UNWRITTEN = np.full(abi.STATE_VALUES, np.nan)  # `out` before every step: whatever the step does not write is unusable
 STDOUT_FILE = "stdout.txt"  # in the log directory
 STDERR_FILE = "stderr.txt"
-
-
-def tail(path, lines=40):
-    """The last lines of a log file ("" while it does not exist)."""
-    try:
-        text = Path(path).read_text(errors="replace")
-    except FileNotFoundError:
-        return ""
-    return "\n".join(text.splitlines()[-lines:])
 
 
 CHALLENGE_LIMITS = json.loads((Path(__file__).parents[1] / "config.json").read_text())["limits"]  # the server's too
@@ -126,8 +118,8 @@ class Sandbox:
             wasi.inherit_stdout()
             wasi.inherit_stderr()
         else:
-            wasi.stdout_file = str(self.stdout_path)
-            wasi.stderr_file = str(self.stderr_path)
+            wasi.stdout_custom = capped_output(self.stdout_path)
+            wasi.stderr_custom = capped_output(self.stderr_path)
         self.store.set_wasi(wasi)
         linker = wasmtime.Linker(self.engine.wasmtime)
         linker.define_wasi()

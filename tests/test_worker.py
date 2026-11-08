@@ -1,6 +1,9 @@
-"""The evaluation worker without a real evaluation: subprocess.run stands in for `viobench evaluate`."""
+"""The evaluation worker without datasets, including its subprocess output and timeout limits."""
 import json
+import os
 import subprocess
+import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -33,14 +36,49 @@ def test_the_server_evaluates_the_public_set():
 
 
 def fake_evaluate(monkeypatch, report, commands=None):
-    """subprocess.run as `viobench evaluate` that writes report."""
-    def run(command, **options):
+    """An evaluation subprocess that writes report."""
+    def run(command, log_path, timeout):
         if commands is not None:
             commands.append(command)
         (Path(command[command.index("-o") + 1]) / "report.json").write_text(json.dumps(report))
         return subprocess.CompletedProcess(command, 0)
 
-    monkeypatch.setattr(worker.subprocess, "run", run)
+    monkeypatch.setattr(worker, "run_evaluation", run)
+
+
+def test_worker_output_is_capped_and_drained(tmp_path):
+    output = tmp_path / "worker.txt"
+    command = [sys.executable, "-c", "import os; os.write(1, b'prefix\\n'); "
+               "[(os.write(1, b'x' * 65536), os.write(2, b'y' * 65536)) for _ in range(32)]"]
+    completed = worker.run_evaluation(command, output, timeout=10)
+    assert completed.returncode == 0
+    assert output.stat().st_size == worker.MAX_LOG_BYTES
+    assert output.read_bytes().startswith(b"prefix\n")
+
+
+@pytest.mark.parametrize("body", ["time.sleep(30)", "os.close(1); os.close(2); time.sleep(30)", "while True: os.write(1, b'x' * 65536)"])
+def test_worker_times_out_and_reaps_children(tmp_path, body):
+    pid_path = tmp_path / "pid"
+    command = [sys.executable, "-c", f"import os, sys, time; open(sys.argv[1], 'w').write(str(os.getpid()))\n{body}", str(pid_path)]
+    start = time.monotonic()
+    with pytest.raises(subprocess.TimeoutExpired):
+        worker.run_evaluation(command, tmp_path / "worker.txt", timeout=0.5)
+    assert time.monotonic() - start < 5
+    with pytest.raises(ChildProcessError):
+        os.waitpid(int(pid_path.read_text()), os.WNOHANG)
+
+
+def test_worker_marks_timed_out_submission_failed(queued, monkeypatch):
+    store, token, submission_id, submission = queued
+
+    def timeout(command, log_path, timeout):
+        raise subprocess.TimeoutExpired(command, timeout)
+
+    monkeypatch.setattr(worker, "run_evaluation", timeout)
+    worker.evaluate_submission(store, submission, REFERENCES, log=lambda *a: None)
+    row = store.get(token, submission_id)
+    assert row["status"] == "failed"
+    assert row["error"] == f"evaluation exceeded {store.config.evaluation_timeout_seconds:.0f} s"
 
 
 @pytest.mark.parametrize("completed", [1, 0])

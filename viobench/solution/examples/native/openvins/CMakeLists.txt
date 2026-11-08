@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.20)
 project(openvins C CXX)
 # OpenVINS (github.com/rpng/open_vins, GPL-3.0) as a viobench solution: solution.cpp drives ov_msckf::VioManager (MSCKF, KLT
 # tracking, static and dynamic initialization with Ceres). The sources are fetched at configure time (pinned, SHA256-checked).
-# wasm (the submission): viobench/solution/runtime/python/build.sh (once, for OpenCV), then viobench/solution/runtime/native/build.sh <this directory>
+# wasm (the submission): viobench bundle <this directory> -o openvins.wasm (builds missing wasm OpenCV automatically)
 # host debug build:      cmake -S . -B build-host && cmake --build build-host && build-host/debug <feed dir>   (needs OpenCV on the host)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -11,6 +11,11 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 set(VIOBENCH_NATIVE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../runtime/native" CACHE PATH "directory with viobench_abi.h and viobench_reactor.cmake")
 include(${VIOBENCH_NATIVE_DIR}/viobench_reactor.cmake)
+viobench_find_opencv(core imgproc features2d video calib3d)
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+    # everything (Ceres included) links against the OpenCV of the Python runtime build, which uses wasm exceptions
+    add_compile_options(-msimd128 -fwasm-exceptions "SHELL:-mllvm -wasm-use-legacy-eh=false")
+endif()
 
 # fetch(<name> <url> <sha256> <top-level directory> [PATCH <file>] [PATHS <paths in the archive>...]): download the archive into
 # build/downloads, unpack it (only PATHS, if given) into build/src/<name> and apply the patch; once per archive and patch
@@ -67,19 +72,6 @@ fetch(ceres https://github.com/ceres-solver/ceres-solver/archive/refs/tags/2.1.0
 fetch(open_vins https://github.com/rpng/open_vins/archive/refs/tags/v2.7.tar.gz
       0135af4acd8dc099c8b50fc51c9faf53fe69462d0e6bad9e986ad4090af02df8 open_vins-2.7 PATCH ${CMAKE_CURRENT_SOURCE_DIR}/patches/open_vins.patch
       PATHS ov_core/src ov_init/src ov_msckf/src LICENSE)
-
-if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
-    # everything (Ceres included) links against the OpenCV of the Python runtime build, which uses wasm exceptions
-    add_compile_options(-msimd128 -fwasm-exceptions "SHELL:-mllvm -wasm-use-legacy-eh=false")
-    get_filename_component(VIOBENCH_WORKSPACE ${VIOBENCH_NATIVE_DIR}/../.. ABSOLUTE)
-    set(VIOBENCH_OPENCV_DIR ${VIOBENCH_WORKSPACE}/build/runtime/opencv-build CACHE PATH "OpenCV built for wasm32-wasip1 by viobench build-runtime")
-    if(NOT EXISTS ${VIOBENCH_OPENCV_DIR}/OpenCVConfig.cmake)
-        message(FATAL_ERROR "no wasm OpenCV in ${VIOBENCH_OPENCV_DIR}: run viobench build-runtime first")
-    endif()
-    find_package(OpenCV REQUIRED COMPONENTS core imgproc features2d video calib3d PATHS ${VIOBENCH_OPENCV_DIR} NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-else()
-    find_package(OpenCV REQUIRED COMPONENTS core imgproc features2d video calib3d)
-endif()
 
 # Eigen is header-only; Ceres finds it through this config
 file(WRITE ${CMAKE_BINARY_DIR}/eigen3/Eigen3Config.cmake "

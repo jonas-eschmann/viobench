@@ -8,15 +8,15 @@ flow, epipolar rejection and spatially distributed Shi-Tomasi features.
 Build the example directly from the viobench repository root:
 
 ```bash
-viobench build-runtime                     # once: supplies the wasm OpenCV libraries
 viobench bundle viobench/solution/examples/native/vins_mono -o vins_mono.wasm
 viobench check vins_mono.wasm
 viobench evaluate vins_mono.wasm /path/to/episode -o vins_mono-results
 ```
 
 The first CMake configure downloads VINS-Mono at commit `90dabb5ec79946ae42fd2e1e91d4e69aabe1e25d`,
-Ceres 2.1.0 and Eigen 3.4.1. Archives are pinned by SHA256. OpenCV comes from the workspace's runtime build;
-`viobench build-runtime` builds that complete runtime even though this native example only links its OpenCV libraries.
+Ceres 2.1.0 and Eigen 3.4.1. Archives are pinned by SHA256. Bundling automatically builds missing wasm OpenCV
+libraries using the workspace's Python runtime recipe (10–15 minutes once), then reuses them on later builds.
+That recipe builds the complete runtime even though this native example only links its OpenCV libraries.
 
 | File | Purpose |
 |---|---|

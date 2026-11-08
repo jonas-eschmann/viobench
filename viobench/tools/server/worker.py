@@ -12,16 +12,19 @@ Runs each evaluation in a subprocess (own process = own memory, killed on timeou
 user in a container without network: the guest is sandboxed by wasmtime, but the evaluation host process is not.
 
 Students get metrics only: nothing the guest wrote (stdout, stderr, failure messages) leaves the server, since it could
-carry the hidden episodes out. The full report and logs stay in the report directory for the instructors.
+carry the hidden episodes out. The report and capped logs stay in the report directory for the instructors.
 """
 import argparse
 import json
+import os
+import selectors
 import subprocess
 import sys
 import time
 
 from ... import episodes
 from ..datasets.sources import argument, reference_hash, resolve
+from ..runner.logs import MAX_LOG_BYTES
 from .store import Store
 
 EPISODES = episodes.public  # what every submission is evaluated on: conta references (viobench.episodes)
@@ -55,6 +58,32 @@ def prepare(references):
         sys.exit(f"worker: cannot provide the evaluation episodes\n{error}")
 
 
+def run_evaluation(command, log_path, timeout):
+    """Keep a bounded output prefix while draining the child, with a deadline even when it is silent."""
+    with open(log_path, "wb", buffering=0) as output, subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0) as process:
+        deadline = time.monotonic() + timeout
+        remaining = MAX_LOG_BYTES
+        try:
+            with selectors.DefaultSelector() as selector:
+                selector.register(process.stdout, selectors.EVENT_READ)
+                while True:
+                    time_left = deadline - time.monotonic()
+                    if time_left <= 0 or not selector.select(time_left):
+                        raise subprocess.TimeoutExpired(command, timeout)
+                    data = os.read(process.stdout.fileno(), 65536)
+                    if not data:
+                        break
+                    if remaining:
+                        kept = data[:remaining]
+                        output.write(kept)
+                        remaining -= len(kept)
+                return subprocess.CompletedProcess(command, process.wait(timeout=max(0, deadline - time.monotonic())))
+        finally:
+            if process.poll() is None:
+                process.kill()
+            process.wait()
+
+
 def evaluate_submission(store, submission, references, log=print):
     wasm = store.upload_path(submission["id"])
     report_dir = store.report_dir(submission["id"])
@@ -62,12 +91,11 @@ def evaluate_submission(store, submission, references, log=print):
     config = store.config
     command = [sys.executable, "-m", "viobench", "evaluate", str(wasm), *map(argument, references), "-o", str(report_dir)]  # limits: config.json
     log(f"submission {submission['id']} by {submission['name']}: {' '.join(command)}")
-    with open(report_dir / "worker.txt", "w") as output:
-        try:
-            completed = subprocess.run(command, stdout=output, stderr=subprocess.STDOUT, timeout=config.evaluation_timeout_seconds, check=False)
-        except subprocess.TimeoutExpired:
-            store.finish(submission["id"], error=f"evaluation exceeded {config.evaluation_timeout_seconds:.0f} s")
-            return
+    try:
+        completed = run_evaluation(command, report_dir / "worker.txt", config.evaluation_timeout_seconds)
+    except subprocess.TimeoutExpired:
+        store.finish(submission["id"], error=f"evaluation exceeded {config.evaluation_timeout_seconds:.0f} s")
+        return
     report_path = report_dir / "report.json"
     if not report_path.is_file():
         store.finish(submission["id"], error=f"evaluate exited with {completed.returncode} without a report")  # its output: worker.txt

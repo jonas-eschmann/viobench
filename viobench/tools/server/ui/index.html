@@ -25,7 +25,7 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
 
 <section id="sign-in" hidden>
   <form id="token-form">
-    <label for="token">Team token</label>
+    <label for="token">Team or admin token</label>
     <input id="token" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" required>
     <label class="inline"><input id="remember" type="checkbox"> Remember on this device</label>
     <button type="submit">Sign in</button>
@@ -33,7 +33,20 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
 </section>
 
 <main id="team" hidden>
-  <section>
+  <p id="pause-banner" class="info" role="status" hidden></p>
+
+  <section id="pause-controls" hidden>
+    <h2>Submission access</h2>
+    <p id="pause-status" class="hint"></p>
+    <form id="pause-form">
+      <label for="pause-message">Message to teams</label>
+      <textarea id="pause-message" rows="3" maxlength="1000" required></textarea>
+      <button id="pause-button" type="submit">Pause submissions</button>
+      <button id="resume-button" type="button" disabled>Resume submissions</button>
+    </form>
+  </section>
+
+  <section id="upload-section">
     <h2>Submit</h2>
     <form id="upload-form">
       <label for="file">Solution (.wasm)</label>
@@ -48,13 +61,13 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
 
   <section>
     <div class="heading">
-      <h2>Submissions</h2>
+      <h2 id="submissions-title">Submissions</h2>
       <button id="refresh" type="button">Refresh</button>
       <span id="updated" class="hint"></span>
     </div>
     <div class="scroll">
       <table id="submissions">
-        <thead><tr><th>Submitted</th><th>Label</th><th>Status</th><th>RPE (m)</th><th>Fuel/frame</th><th>Episodes</th><th></th></tr></thead>
+        <thead><tr><th>Submitted</th><th id="team-column" hidden>Team</th><th id="account-column" hidden>Account</th><th>Label</th><th>Status</th><th>RPE (m)</th><th>Fuel/frame</th><th>Episodes</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>

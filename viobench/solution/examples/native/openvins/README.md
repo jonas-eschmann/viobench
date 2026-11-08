@@ -5,11 +5,13 @@ startup and fixed-lag visual-inertial optimization. Two OpenVINS frontends initi
 their robust consensus reports the camera pose and twist relative to the first frame.
 
 ```bash
-viobench/solution/runtime/python/build.sh                                            # once: the wasm OpenCV it links against
 viobench bundle viobench/solution/examples/native/openvins -o openvins.wasm
 viobench check openvins.wasm
 viobench evaluate openvins.wasm /path/to/sim-ProcTHOR-Train-1-00000-00 -o openvins-results
 ```
+
+Bundling automatically builds missing wasm OpenCV libraries using the workspace's Python runtime recipe
+(10–15 minutes once), then reuses them on later builds. The native module only links OpenCV.
 
 The first configure downloads OpenVINS 2.7, Ceres 2.1.0 and Eigen 3.4.1 (pinned by SHA256, 150 MB, cached in
 `build/downloads`); the build takes about 2.5 minutes, 25 s with `CMAKE_BUILD_PARALLEL_LEVEL=8`.

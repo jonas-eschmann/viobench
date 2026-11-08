@@ -7,6 +7,11 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 set(VIOBENCH_NATIVE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../runtime/native" CACHE PATH "viobench native runtime directory")
 include(${VIOBENCH_NATIVE_DIR}/viobench_reactor.cmake)
+viobench_find_opencv(core imgproc features2d video calib3d)
+if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
+    # everything (Ceres included) links against the OpenCV of the Python runtime build, which uses wasm exceptions
+    add_compile_options(-msimd128 -fwasm-exceptions "SHELL:-mllvm -wasm-use-legacy-eh=false")
+endif()
 
 # fetch(<name> <url> <sha256> <top-level directory> [PATCH <file>] [PATHS <paths in the archive>...]): download the archive into
 # build/downloads, unpack it (only PATHS, if given) into build/src/<name> and apply the patch; once per archive and patch
@@ -64,19 +69,6 @@ fetch(ceres https://github.com/ceres-solver/ceres-solver/archive/refs/tags/2.1.0
 fetch(vins_mono https://github.com/HKUST-Aerial-Robotics/VINS-Mono/archive/90dabb5ec79946ae42fd2e1e91d4e69aabe1e25d.tar.gz
       f0810285af9caeecc2b74a6b388d87c46165d664d80d5b5222f0738541c0f544 VINS-Mono-90dabb5ec79946ae42fd2e1e91d4e69aabe1e25d
       PATCH ${CMAKE_CURRENT_SOURCE_DIR}/patches/vins_mono.patch PATHS vins_estimator/src LICENCE)
-
-if(CMAKE_SYSTEM_NAME STREQUAL "WASI")
-    # everything (Ceres included) links against the OpenCV of the Python runtime build, which uses wasm exceptions
-    add_compile_options(-msimd128 -fwasm-exceptions "SHELL:-mllvm -wasm-use-legacy-eh=false")
-    get_filename_component(VIOBENCH_WORKSPACE ${VIOBENCH_NATIVE_DIR}/../.. ABSOLUTE)
-    set(VIOBENCH_OPENCV_DIR ${VIOBENCH_WORKSPACE}/build/runtime/opencv-build CACHE PATH "OpenCV built for wasm32-wasip1 by viobench build-runtime")
-    if(NOT EXISTS ${VIOBENCH_OPENCV_DIR}/OpenCVConfig.cmake)
-        message(FATAL_ERROR "no wasm OpenCV in ${VIOBENCH_OPENCV_DIR}: run viobench build-runtime first")
-    endif()
-    find_package(OpenCV REQUIRED COMPONENTS core imgproc features2d video calib3d PATHS ${VIOBENCH_OPENCV_DIR} NO_DEFAULT_PATH NO_CMAKE_FIND_ROOT_PATH)
-else()
-    find_package(OpenCV REQUIRED COMPONENTS core imgproc features2d video calib3d)
-endif()
 
 # Eigen is header-only; Ceres finds it through this config
 file(WRITE ${CMAKE_BINARY_DIR}/eigen3/Eigen3Config.cmake "

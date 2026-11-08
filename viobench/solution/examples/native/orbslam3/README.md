@@ -10,12 +10,14 @@ This example disables loop closure, map merging, the viewer and atlas persistenc
 Build the example directly from the `viobench` source repository root:
 
 ```bash
-viobench/solution/runtime/python/build.sh     # once: builds the wasm OpenCV libraries
 viobench bundle viobench/solution/examples/native/orbslam3 -o orbslam3.wasm
 viobench check orbslam3.wasm
 viobench evaluate orbslam3.wasm /path/to/episode -o orbslam3-results
 pytest tests/test_orbslam3.py
 ```
+
+Bundling automatically builds missing wasm OpenCV libraries using the workspace's Python runtime recipe
+(10–15 minutes once), then reuses them on later builds. The native module only links OpenCV.
 
 The first configure downloads a pinned ORB-SLAM3 source archive and Eigen, verified by SHA256. The upstream
 archive is large (about 572 MiB, including its examples and vocabulary); downloads and extracted sources stay

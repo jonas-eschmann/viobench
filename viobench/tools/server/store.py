@@ -1,6 +1,7 @@
 """SQLite store shared by the web app, the worker and `teams`: the team tokens and the submission queue.
 
-A team is its token: submissions belong to a token, and the name next to it is only a note for the instructors."""
+A team is its token: submissions belong to a token. Participants are marked separately from test accounts;
+admin accounts can see every team's submissions and pause new uploads."""
 import hashlib
 import json
 import os
@@ -16,14 +17,18 @@ from .config import load as load_config
 DEFAULT_DIR = Path(os.environ.get("VIOBENCH_SERVER_DIR", "server-data"))
 TOKEN_BYTES = 24  # a token is 32 base64url characters
 ID_BYTES = 8  # a submission id is 16 hex digits, random: it says nothing about how many submissions exist
-COLUMNS = "id, label, filename, sha256, bytes, created, started, finished, status, error"  # what a team sees of a submission
+MAX_PAUSE_MESSAGE = 1000
+COLUMNS = ("id, label, filename, sha256, bytes, submissions.created, started, finished, status, error, "
+           "results, teams.name AS team_name, teams.is_participant")  # API fields; never include tokens
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS teams (
     token TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     created REAL NOT NULL,
-    unlimited INTEGER NOT NULL DEFAULT 0  -- 1: no daily quota, e.g. the instructors' debug team
+    unlimited INTEGER NOT NULL DEFAULT 0,  -- 1: no daily quota, e.g. the instructors' debug team
+    is_admin INTEGER NOT NULL DEFAULT 0,   -- 1: view every team's submissions and control new uploads
+    is_participant INTEGER NOT NULL DEFAULT 0  -- 1: a regular participant, rather than a test or admin account
 );
 CREATE TABLE IF NOT EXISTS submissions (
     id TEXT PRIMARY KEY,
@@ -40,11 +45,20 @@ CREATE TABLE IF NOT EXISTS submissions (
     error TEXT
 );
 CREATE INDEX IF NOT EXISTS submissions_token ON submissions(token, created);
+CREATE TABLE IF NOT EXISTS submission_control (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    pause_message TEXT  -- NULL: accepting submissions; otherwise the message shown to teams
+);
+INSERT OR IGNORE INTO submission_control (id, pause_message) VALUES (1, NULL);
 """
 
 
 class Refused(Exception):
     """The rules do not admit an upload right now; the message says why."""
+
+
+class Paused(Refused):
+    """New submissions are paused by an admin."""
 
 
 def day_start(now, time_zone):
@@ -62,6 +76,11 @@ class Store:
         self.path = self.directory / "submissions.sqlite"
         with self._connect() as connection:
             connection.executescript(SCHEMA)
+            connection.execute("BEGIN IMMEDIATE")  # app, worker and CLI may start together
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(teams)")}
+            for column in ("is_admin", "is_participant"):
+                if column not in columns:
+                    connection.execute(f"ALTER TABLE teams ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0")
         self.config = load_config()
 
     def _connect(self):
@@ -71,26 +90,66 @@ class Store:
 
     # --- teams ----------------------------------------------------------------------------------------------
 
-    def add_team(self, name, unlimited=False):
-        """Creates a team, without a daily quota if `unlimited`; returns its token."""
+    def add_team(self, name, unlimited=False, is_admin=False, is_participant=False):
+        """Creates a test account, participant or admin; returns its token. `unlimited` affects quotas only."""
+        if is_admin and is_participant:
+            raise ValueError("admin accounts cannot be participants")
         token = secrets.token_urlsafe(TOKEN_BYTES)
         with self._connect() as connection:
-            connection.execute("INSERT INTO teams (token, name, created, unlimited) VALUES (?, ?, ?, ?)", (token, name, time.time(), unlimited))
+            connection.execute("INSERT INTO teams (token, name, created, unlimited, is_admin, is_participant) VALUES (?, ?, ?, ?, ?, ?)",
+                               (token, name, time.time(), unlimited, is_admin, is_participant))
         return token
 
-    def teams(self):
-        """[(token, name, unlimited)] in the order they were created."""
+    def update_team(self, token, *, is_admin=None, is_participant=None):
+        """Changes the specified account flags; None leaves a flag unchanged. Keeps the token and submissions."""
+        if is_admin is None and is_participant is None:
+            raise ValueError("specify --admin/--no-admin or --participant/--no-participant")
         with self._connect() as connection:
-            return [(row["token"], row["name"], bool(row["unlimited"])) for row in connection.execute("SELECT token, name, unlimited FROM teams ORDER BY created")]
+            connection.execute("BEGIN IMMEDIATE")
+            team = connection.execute("SELECT is_admin, is_participant FROM teams WHERE token = ?", (token,)).fetchone()
+            if team is None:
+                raise ValueError("no such team")
+            is_admin = team["is_admin"] if is_admin is None else is_admin
+            is_participant = team["is_participant"] if is_participant is None else is_participant
+            if is_admin and is_participant:
+                raise ValueError("admin accounts cannot be participants; clear the other flag in the same command")
+            connection.execute("UPDATE teams SET is_admin = ?, is_participant = ? WHERE token = ?", (is_admin, is_participant, token))
+
+    def teams(self):
+        """[(token, name, unlimited, is_admin, is_participant)] in the order they were created."""
+        with self._connect() as connection:
+            return [(row["token"], row["name"], bool(row["unlimited"]), bool(row["is_admin"]), bool(row["is_participant"]))
+                    for row in connection.execute("SELECT token, name, unlimited, is_admin, is_participant FROM teams ORDER BY created")]
 
     def is_team(self, token):
         with self._connect() as connection:
             return connection.execute("SELECT 1 FROM teams WHERE token = ?", (token,)).fetchone() is not None
 
-    # --- submissions, as a team sees them --------------------------------------------------------------------
+    def is_admin(self, token):
+        with self._connect() as connection:
+            row = connection.execute("SELECT is_admin FROM teams WHERE token = ?", (token,)).fetchone()
+        return bool(row and row["is_admin"])
+
+    # --- submission availability ---------------------------------------------------------------------------
+
+    def pause_message(self):
+        with self._connect() as connection:
+            return connection.execute("SELECT pause_message FROM submission_control WHERE id = 1").fetchone()["pause_message"]
+
+    def set_pause_message(self, message):
+        """Pause with a message, or resume with None; returns the saved message."""
+        if message is not None:
+            message = message.strip()
+            if not message or len(message) > MAX_PAUSE_MESSAGE:
+                raise ValueError(f"pause message must contain 1 to {MAX_PAUSE_MESSAGE} characters")
+        with self._connect() as connection:
+            connection.execute("UPDATE submission_control SET pause_message = ? WHERE id = 1", (message,))
+        return message
+
+    # --- submissions, as a team or admin sees them -----------------------------------------------------------
 
     def add(self, token, label, filename, data):
-        """Queues a submission and returns its id. Refused while the team has one queued or running, or once today's
+        """Queues a submission and returns its id. Refused while paused, while the team has one queued or running, or once today's
         quota is used up: config.daily_quota submissions, where up to config.daily_failed_quota failed ones do not count
         (further failures count like any other submission). An unlimited team has no daily quota.
 
@@ -101,6 +160,9 @@ class Store:
         config = self.config
         with self._connect() as connection:  # leaving it with an exception rolls back
             connection.execute("BEGIN IMMEDIATE")
+            message = connection.execute("SELECT pause_message FROM submission_control WHERE id = 1").fetchone()["pause_message"]
+            if message is not None:
+                raise Paused(message)
             pending = connection.execute("SELECT id, status FROM submissions WHERE token = ? AND status IN ('queued', 'running')", (token,)).fetchone()
             if pending is not None:
                 raise Refused(f"submission {pending['id']} is still {pending['status']}; submit again once it has finished")
@@ -119,15 +181,20 @@ class Store:
         return submission_id
 
     def get(self, token, submission_id):
-        """One of the team's submissions with its results; None when there is none (or it is another team's)."""
+        """A visible submission with results and team metadata, or None. Admins can see any team's submission."""
+        is_admin = self.is_admin(token)
         with self._connect() as connection:
-            row = connection.execute(f"SELECT {COLUMNS}, results FROM submissions WHERE id = ? AND token = ?", (submission_id, token)).fetchone()
+            row = connection.execute(f"SELECT {COLUMNS} FROM submissions JOIN teams USING (token) "
+                                     "WHERE id = ? AND (submissions.token = ? OR ?)", (submission_id, token, is_admin)).fetchone()
         return dict(row) if row else None
 
     def submissions(self, token):
-        """The team's submissions with their results, newest first."""
+        """Visible submissions with results and team metadata, newest first; all teams for admins."""
+        is_admin = self.is_admin(token)
         with self._connect() as connection:
-            return [dict(row) for row in connection.execute(f"SELECT {COLUMNS}, results FROM submissions WHERE token = ? ORDER BY created DESC", (token,))]
+            return [dict(row) for row in connection.execute(f"SELECT {COLUMNS} FROM submissions JOIN teams USING (token) "
+                                                           "WHERE submissions.token = ? OR ? ORDER BY submissions.created DESC",
+                                                           (token, is_admin))]
 
     # --- the worker's side ----------------------------------------------------------------------------------
 

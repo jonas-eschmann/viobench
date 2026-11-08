@@ -40,6 +40,45 @@ def test_bundle_uses_the_runtime_of_its_workspace(runtime_path, tmp_path, monkey
     assert bundle(root / "solution", tmp_path / "x.wasm")["runtime"] == str(target)
 
 
+@pytest.fixture
+def runtime_build_recipe(tmp_path):
+    root = tmp_path / "ws"
+    script = root / "runtime/python/build.sh"
+    script.parent.mkdir(parents=True)
+    script.write_text('''
+set -eu
+mkdir -p "$BUILD/dist" "$BUILD/logs"
+printf 'fixture runtime' > "$BUILD/dist/runtime.wasm"
+printf 'build completed' > "$BUILD/logs/build.log"
+''')
+    return root
+
+
+def test_runtime_build_ignores_conda_build_triplet(runtime_build_recipe, tmp_path, monkeypatch):
+    root = runtime_build_recipe
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("BUILD", "x86_64-conda-linux-gnu")
+
+    target = workspace.build_runtime(root)
+
+    assert target == root / "build/runtime/dist/runtime.wasm"
+    assert target.is_absolute()
+    assert target.read_text() == "fixture runtime"
+    assert (root / "build/runtime/logs/build.log").read_text() == "build completed"
+    assert not (tmp_path / "x86_64-conda-linux-gnu").exists()
+
+
+def test_direct_recipe_run_preserves_custom_build_directory(runtime_build_recipe, tmp_path, monkeypatch):
+    build = tmp_path / "custom-runtime"
+    monkeypatch.setenv("BUILD", str(build))
+
+    workspace.run(runtime_build_recipe, "runtime/python/build.sh")
+
+    assert (build / "dist/runtime.wasm").read_text() == "fixture runtime"
+    assert (build / "logs/build.log").read_text() == "build completed"
+    assert not (runtime_build_recipe / "build").exists()
+
+
 @pytest.mark.skipif(shutil.which("cmake") is None or (shutil.which("cc") is None and shutil.which("gcc") is None and shutil.which("clang") is None),
                     reason="needs cmake and a host C/C++ compiler")
 def test_native_workspace_finds_its_runtime_directory(tmp_path):
