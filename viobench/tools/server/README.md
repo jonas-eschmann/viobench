@@ -48,3 +48,18 @@ Cloudflare terminates TLS) and the worker unprivileged, without network and with
 the guest, not the host process); a one-shot `episodes` service fills the `conta-cache` volume (`worker --fetch`)
 before the worker starts. Keep the `server-data` volume private (the sqlite holds the tokens) and back it up. Behind a
 path prefix, serve the page with a trailing slash (`/prefix/`): its requests are relative to it.
+
+[`backup.sh`](backup.sh) copies uploads, reports and SQLite (including team tokens) into a dated local snapshot.
+It uses the active Docker context and finds `compose.yaml` next to the script, so it can run from any directory.
+The app and worker stop during the local copy; services that were running restart before the optional rsync,
+including if the copy fails. An interrupted evaluation is requeued when the worker starts.
+
+```bash
+viobench/tools/server/backup.sh  # defaults to ~/viobench-backups
+viobench/tools/server/backup.sh /path/to/backups
+viobench/tools/server/backup.sh /path/to/backups user@backup-host:/path/to/viobench-backups/
+```
+
+Each snapshot is a full copy of `server-data`; rsync transfers all completed snapshots and skips unchanged files.
+Failed copies remain in `.partial.*` directories and are excluded from rsync. The downloadable episode cache is
+separate from these backups. Keep the snapshots private, like the original volume.
