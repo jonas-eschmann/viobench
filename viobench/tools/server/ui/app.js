@@ -20,6 +20,7 @@ let retryMs = POLL_MS;
 let generation = 0;  // only the newest list request renders
 let session = 0;  // discard details requested before signing out
 let uploading = false;
+let deletingSubmission = false;
 let adminSaving = false;
 let evaluationPresets = null;
 let detailGeneration = 0;
@@ -222,6 +223,7 @@ function showSignIn(message, kind = "error") {
   token = null;
   config = null;
   adminSaving = false;
+  deletingSubmission = false;
   evaluationPresets = null;
   detailGeneration++;
   detailPending = false;
@@ -292,6 +294,7 @@ function renderConfiguration(next) {
   $("pause-controls").hidden = !admin;
   $("evaluation-controls").hidden = !admin;
   $("schedule-form").hidden = !admin;
+  $("delete-submission").hidden = config.team_type !== "baseline";
   $("team-column").hidden = !admin;
   $("account-column").hidden = !admin;
   $("submissions-title").textContent = admin ? "All submissions" : "Submissions";
@@ -423,7 +426,7 @@ function schedule(ms) {
 }
 
 async function refresh() {
-  if (token === null || adminSaving) return;
+  if (token === null || adminSaving || deletingSubmission) return;
   clearTimeout(pollTimer);
   const mine = ++generation;
   let rows, evaluations, comparison;
@@ -516,18 +519,22 @@ function renderComparison(comparison) {
       container.append(node("p", "No comparable results for this dataset yet.", "hint"));
       continue;
     }
-    const minX = comparison.fuel_floor, maxX = comparison.fuel_reference, minY = comparison.error_floor;
-    const maxY = Math.max(minY * 1.2, dataset.error_reference || 0, ...points.map((point) => point.sim3_ate_rmse_median * 1.1));
-    const x = (used) => 76 + Math.log(Math.max(minX, used) / minX) / Math.log(maxX / minX) * 580;
-    const y = (error) => 280 - Math.log(Math.max(minY, error) / minY) / Math.log(maxY / minY) * 256;
+    const fuelFloor = comparison.fuel_floor, errorFloor = comparison.error_floor, maxX = comparison.fuel_reference;
+    const visiblePoints = points.filter((point) => point.fuel_per_frame_max <= maxX);
+    // Zoom the display to one decade below the data, without changing the scoring reference.
+    const minX = visiblePoints.length ? Math.max(fuelFloor, Math.min(...visiblePoints.map((point) => point.fuel_per_frame_max)) / 10) : fuelFloor;
+    const minY = visiblePoints.length ? Math.max(errorFloor, Math.min(...visiblePoints.map((point) => point.sim3_ate_rmse_median)) / 10) : errorFloor;
+    const maxY = Math.max(errorFloor * 1.2, dataset.error_reference || 0, ...visiblePoints.map((point) => point.sim3_ate_rmse_median * 1.1));
+    const x = (used) => 76 + Math.log(Math.max(fuelFloor, used) / minX) / Math.log(maxX / minX) * 580;
+    const y = (error) => 280 - Math.log(Math.max(errorFloor, error) / minY) / Math.log(maxY / minY) * 256;
     const frontierIds = new Set(dataset.frontier);
     const baselineIds = new Set(dataset.baseline_frontier);
     // The envelope begins at its ceiling and drops only when a submission improves it.
     // Include the final horizontal segment through the fixed fuel reference.
     const steps = (ids, ceiling) => {
       const coordinates = [[minX, ceiling]];
-      const ordered = points.filter((point) => ids.has(point.id) && point.fuel_per_frame_max <= maxX)
-        .map((point) => [Math.max(minX, point.fuel_per_frame_max), Math.max(minY, point.sim3_ate_rmse_median)])
+      const ordered = visiblePoints.filter((point) => ids.has(point.id))
+        .map((point) => [Math.max(fuelFloor, point.fuel_per_frame_max), Math.max(errorFloor, point.sim3_ate_rmse_median)])
         .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
       for (const [used, error] of ordered) {
         if (error >= ceiling) continue;
@@ -559,7 +566,7 @@ function renderComparison(comparison) {
       chart.append(svgNode("polygon", {points: svgPoints(boundary), class: "comparison-area"}));
     }
     for (const [ids, className] of [[frontierIds, "comparison-frontier"], [baselineIds, "comparison-frontier baseline"]]) {
-      if (points.some((point) => ids.has(point.id) && point.fuel_per_frame_max <= maxX)) {
+      if (visiblePoints.some((point) => ids.has(point.id))) {
         chart.append(svgNode("polyline", {points: svgPoints(steps(ids, maxY)), class: className}));
       }
     }
@@ -596,9 +603,9 @@ function renderComparison(comparison) {
     if (dataset.claimed_area === null) {
       container.append(node("p", "Claimed area is unavailable until baseline results are available for this dataset.", "hint"));
     } else {
-      const fraction = dataset.claimed_area / (Math.log(maxX / minX) * Math.log(dataset.error_reference / minY));
+      const fraction = dataset.claimed_area / (Math.log(maxX / fuelFloor) * Math.log(dataset.error_reference / errorFloor));
       container.append(node("p", `Claimed area: ${decimal(fraction * 100)}% of the log–log reference rectangle. ` +
-        `Reference: ${fuel(minX)}–${fuel(maxX)} fuel/frame and ${decimal(minY)}–${decimal(dataset.error_reference)} m Sim(3) ATE.`, "hint"));
+        `Scoring reference: ${fuel(fuelFloor)}–${fuel(maxX)} fuel/frame and ${decimal(errorFloor)}–${decimal(dataset.error_reference)} m Sim(3) ATE.`, "hint"));
     }
     if (points.some((point) => point.fuel_per_frame_max > maxX)) {
       container.append(node("p", "Submissions beyond the fuel axis are listed in Exact values below.", "hint"));
@@ -678,6 +685,7 @@ const EPISODE_COLUMNS = [
 ];
 
 async function showDetails(id, scroll) {
+  if (deletingSubmission) return;
   const mine = session;
   const request = ++detailGeneration;
   detailPending = true;
@@ -691,14 +699,57 @@ async function showDetails(id, scroll) {
   } catch (error) {
     if (mine !== session || request !== detailGeneration) return;
     if (error.status === 401) return showSignIn("The token is no longer valid.");
+    if (error.status === 404 && shown?.id === id) {
+      shown = null;
+      $("details").hidden = true;
+    }
     notice(`Cannot show the submission: ${error.message}`);
   } finally {
     if (request === detailGeneration) detailPending = false;
   }
 }
 
+async function deleteSubmission(submission) {
+  if (deletingSubmission || config?.team_type !== "baseline") return;
+  if (!window.confirm(`Permanently delete “${submission.label || submission.id}”? This removes the upload, all evaluation jobs and results, and its points from everyone's comparisons.`)) return;
+  const mine = session;
+  deletingSubmission = true;
+  clearTimeout(pollTimer);
+  generation++; // discard list/comparison responses from before deletion
+  detailGeneration++;
+  detailPending = false;
+  $("delete-submission").disabled = true;
+  try {
+    await api(`submissions/${encodeURIComponent(submission.id)}`, {method: "DELETE"});
+    if (mine !== session) return;
+    shown = null;
+    $("details").hidden = true;
+    notice("Submission deleted.", "info");
+  } catch (error) {
+    if (mine !== session) return;
+    if (error.status === 401) return showSignIn("The token is no longer valid.");
+    if (error.status === 0 || error.status === 404 || error.status >= 500) {
+      shown = null; // deletion may have committed even if cleanup or the response failed
+      $("details").hidden = true;
+    }
+    notice(`Delete request failed: ${error.message}`);
+  } finally {
+    if (mine === session) {
+      deletingSubmission = false;
+      $("delete-submission").disabled = false;
+      refresh();
+    }
+  }
+}
+
 function renderDetails(submission) {
   $("details-title").textContent = submission.label || submission.id || "Submission";
+  const baseline = config.team_type === "baseline";
+  const running = submission.jobs.some((job) => job.status === "running");
+  $("delete-submission").hidden = !baseline;
+  $("delete-submission").disabled = deletingSubmission || running;
+  $("delete-submission").onclick = () => deleteSubmission(submission);
+  $("delete-hint").hidden = !baseline || !running;
   const facts = $("details-facts");
   facts.replaceChildren();
   const account = config.team_type === "admin" ? [["Team", submission.team_name], ["Account", submission.team_type]] : [];

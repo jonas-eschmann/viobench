@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import secrets
+import shutil
 import sqlite3
 import time
 from datetime import datetime
@@ -208,6 +209,32 @@ class Store:
             self._schedule(connection, self._evaluation_hashes(connection), submission_id)
             self.upload_path(submission_id).write_bytes(data)
         return submission_id
+
+    def delete_submission(self, token, submission_id):
+        """Delete a baseline account's own submission unless any of its jobs is running."""
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            team = connection.execute("SELECT type FROM teams WHERE token = ?", (token,)).fetchone()
+            if team is None or team["type"] != "baseline":
+                raise PermissionError("only baseline accounts can delete submissions")
+            if connection.execute("SELECT 1 FROM submissions WHERE id = ? AND token = ?", (submission_id, token)).fetchone() is None:
+                raise LookupError("no such submission")
+            if connection.execute("SELECT 1 FROM evaluation_jobs WHERE submission_id = ? AND status = 'running' LIMIT 1",
+                                  (submission_id,)).fetchone() is not None:
+                raise Refused("cannot delete a submission while an evaluation job is running")
+            connection.execute("DELETE FROM evaluation_jobs WHERE submission_id = ?", (submission_id,))
+            connection.execute("DELETE FROM submissions WHERE id = ?", (submission_id,))
+
+        # Commit after existing readers finish and before removing the files they may still need.
+        try:
+            self.upload_path(submission_id).unlink(missing_ok=True)
+            try:
+                shutil.rmtree(self.reports / submission_id)
+            except FileNotFoundError:
+                pass
+        except OSError as error:
+            # A filesystem PermissionError is a cleanup failure, distinct from the authorization error above.
+            raise OSError("submission deleted but file cleanup failed") from error
 
     # --- visibility, progress and metrics for the current selection -----------------------------------------
 

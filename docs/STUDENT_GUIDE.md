@@ -77,6 +77,8 @@ have equal weight. The plot, frontiers and area score use floors of `1` fuel/fra
 and labels stay unchanged. The reference bounds are `1.2 × step_fuel` and `1.2 ×` the worst eligible baseline ATE
 after applying the floor (`0.0012 m` when all baseline errors are zero). Improvement is the shaded area as a percentage
 of this log-space rectangle, unavailable without a baseline. Nonbaseline uploads do not change the references.
+The plot zooms each lower bound to one tenth of the visible minimum, never below its scoring floor.
+The full scoring reference and percentage denominator stay unchanged, as does the upper fuel bound `1.2 × step_fuel`.
 The fuel interval above `step_fuel` still earns area, but has less relative weight than on linear axes.
 Points appear once every selected episode has a scored report, and update when the instructors change the set and
 fill in the missing evaluations.

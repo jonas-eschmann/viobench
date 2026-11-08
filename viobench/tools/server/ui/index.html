@@ -80,6 +80,7 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
     <p class="hint">Current-set results: maximum fuel per frame across all episodes, and median Sim(3) ATE per dataset. Lower is better on both axes. Only submissions with all reports appear.</p>
     <p class="comparison-legend"><span class="own-key">● Your submissions</span> <span>■ Baselines</span> <span>┄ Baseline frontier</span> <span class="own-key">━ Pareto frontier (baselines + yours)</span></p>
     <p class="hint">Shading shows your extra area beyond the baselines. Both axes and the area use logarithmic scales, rewarding proportional improvements. Values below 1 fuel/frame or 1 mm ATE are clamped for the plot and area; Exact values keeps the raw scores. The upper reference uses 1.2× the fuel limit and 1.2× the worst baseline ATE after clamping.</p>
+    <p class="hint">The displayed lower bounds follow the lowest points with a 10× margin, limited by the log floors. This zoom does not change the claimed-area score.</p>
     <div id="comparison-charts"></div>
   </section>
 
@@ -100,7 +101,11 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
   </section>
 
   <section id="details" hidden>
-    <h2 id="details-title"></h2>
+    <div class="heading">
+      <h2 id="details-title"></h2>
+      <button id="delete-submission" class="error" type="button" hidden>Delete submission</button>
+    </div>
+    <p id="delete-hint" class="hint" hidden>Wait until all running evaluations finish before deleting this submission.</p>
     <dl id="details-facts"></dl>
     <p id="details-progress" class="hint"></p>
     <form id="schedule-form" hidden>

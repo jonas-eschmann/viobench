@@ -75,6 +75,12 @@ submission label for the method and configuration, such as `OpenVINS, 320px`; la
 existing account to baseline publishes its previous eligible submissions too; changing it away removes them from
 other teams' plots. Baseline accounts have no admin permissions and use the same upload pause and job queue.
 
+Baseline accounts can delete their own submissions through **Details → Delete submission**, with confirmation.
+Deletion permanently removes the submission, its queued/finished/failed jobs, uploaded WASM, reports and comparison
+points. Wait until every running job finishes, including jobs outside the current evaluation set. Other account
+types, including admins, cannot delete submissions. Deleting an upload counted in the current quota day frees its
+daily upload slot.
+
 Each dataset's plot compares median episode Sim(3)-aligned ATE (metres) with the submission's maximum fuel per frame
 across the current evaluation set. Baselines are squares, the viewer's other submissions are circles, and the dashed
 line marks the baseline Pareto frontier. The solid frontier combines baselines with the viewer's submissions;
@@ -86,6 +92,8 @@ metrics keep their raw values. The fuel reference is `X = 1.2 × step_fuel`; eac
 and fuel improvements can still earn area. Nonbaseline uploads do not change these references.
 The claimed area is the combined dominated area minus baseline dominated area in natural-log coordinates.
 Its percentage is `100 × claimed area / (ln(X / 1) × ln(Y / 0.001))`, unavailable until a baseline exists.
+The plot zooms each lower bound to one tenth of the visible minimum, never below its scoring floor.
+This changes only the display: the full scoring reference and denominator, and upper fuel bound `1.2 × step_fuel`, stay unchanged.
 The fuel interval from `step_fuel` to `1.2 × step_fuel` still contributes `ln(1.2)` width, with less relative
 weight than on linear axes. The comparison table provides raw values and names. Baseline details, files, and
 historical jobs remain private.
@@ -110,6 +118,7 @@ Submission responses include the submitting account's `team_name` and `team_type
 | `POST /submissions` | multipart `file` (and `label`) → 201 |
 | `GET /submissions` | the team's submissions (all submissions for admins), newest first, with current-set `status`, `progress` and `overall` |
 | `GET /submissions/<id>` | current-set `results` (`summary`, `episodes`, `partial`) plus all scheduled `jobs`, including episodes outside the current set; admins can access any submission |
+| `DELETE /submissions/<id>` | baseline accounts' own submissions only: 200 `{"deleted": "<id>"}`; 403 for other account types, 404 if missing or not owned, 409 if any job is running |
 | `GET /config` | the rules below, `team_name`, `team_type`, `pause_message` (null when accepting uploads), and current `evaluation_hashes` |
 | `GET /comparison` | current `evaluation_hashes` and per-dataset points for the viewer's submissions and shared baselines, baseline and combined frontiers, and improvement area; no other teams' private submissions |
 | `PUT /submission-pause` | admin only: JSON `{"message": "reason"}` pauses or updates the message; `{"message": null}` resumes; returns `pause_message` |

@@ -3,6 +3,7 @@
     POST /submissions        multipart: file (the .wasm), label (optional)  -> 201 and the new submission
     GET  /submissions        the team's submissions (all for admins), newest first, with overall summaries once evaluated
     GET  /submissions/{id}   one of them, with its results once evaluated
+    DELETE /submissions/{id} baseline: delete an own submission when none of its jobs is running
     GET  /config             the rules (`server.config`), team name/type and submission pause message
     GET  /comparison         own and baseline scores for the current evaluation selection
     PUT  /submission-pause   admin: {"message": "reason"} to pause, {"message": null} to resume
@@ -18,6 +19,7 @@ the checked-in viobench/tools/config.json.
 The evaluation itself is done by `viobench.tools.server.worker`, which polls the queue.
 """
 import json
+import logging
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -116,6 +118,23 @@ def submission(submission_id: str, authorization: str | None = Header(default=No
     if row is None:
         raise HTTPException(status_code=404, detail="no such submission")
     return public(row)
+
+
+@app.delete("/submissions/{submission_id}")
+def delete_submission(submission_id: str, authorization: str | None = Header(default=None)):
+    token = authenticate(authorization)
+    try:
+        get_store().delete_submission(token, submission_id)
+    except PermissionError as error:
+        raise HTTPException(status_code=403, detail=str(error)) from None
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from None
+    except Refused as error:
+        raise HTTPException(status_code=409, detail=str(error)) from None
+    except OSError:
+        logging.exception("Submission %s was deleted, but file cleanup failed", submission_id)
+        raise HTTPException(status_code=500, detail="Submission deleted, but server file cleanup failed.") from None
+    return {"deleted": submission_id}
 
 
 @app.get("/config")
