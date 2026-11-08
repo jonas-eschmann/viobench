@@ -2,7 +2,7 @@
 
     python -m viobench.tools.server.teams add --participant "team a" "team b"  # prints "<token>  <name>" for each participant
     python -m viobench.tools.server.teams add "test"              # a test account, not a participant
-    python -m viobench.tools.server.teams add --unlimited "debug"  # a team without a daily quota (still one at a time)
+    python -m viobench.tools.server.teams add --unlimited "debug"  # a team without a daily upload quota
     python -m viobench.tools.server.teams add --admin "admin"      # view all submissions and pause new uploads
     python -m viobench.tools.server.teams update "$TOKEN" --participant  # mark an existing test account as a participant
     python -m viobench.tools.server.teams update "$TOKEN" --no-admin     # revoke admin access

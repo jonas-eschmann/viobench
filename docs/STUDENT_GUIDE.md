@@ -52,19 +52,22 @@ writes `report-solution/report.json` and, per episode, `estimate.tum` (readable 
 
 ## Submit
 
-Your team gets a token from the instructors; only that token sees your submissions. Open `https://<server>/` in a
+Your team gets a token from the instructors that gives access to its submissions. Open `https://<server>/` in a
 browser and sign in with it to submit and follow your submissions, or use the API directly:
 
 ```bash
 curl -F file=@solution.wasm -F label="klt+imu v3" -H "Authorization: Bearer $TOKEN" https://<server>/submissions
 curl -H "Authorization: Bearer $TOKEN" https://<server>/submissions          # yours, newest first: id, times, status
-curl -H "Authorization: Bearer $TOKEN" https://<server>/submissions/<id>     # one of them, with results once done
+curl -H "Authorization: Bearer $TOKEN" https://<server>/submissions/<id>     # current results and per-episode progress
 curl -H "Authorization: Bearer $TOKEN" https://<server>/config               # the rules: quota, limits, timeouts
 ```
 
-The server evaluates on `EPISODES` in `viobench/tools/server/worker.py` (for now the public set) and returns metrics
-only, no logs; `viobench evaluate` applies the same limits, so reproduce failures locally. Quota (see `/config`): one submission at a time, one per day (from midnight
-Pacific time) plus one retry after a failed one.
+The instructors select the server's episode set, initially the public set; `/config` lists its `evaluation_hashes`.
+Results and progress use the current set and update as episodes finish. The server returns metrics only, no logs;
+`viobench evaluate` applies the same guest limits, so reproduce failures locally. Each server episode job has a
+24-minute timeout, including any archive download. Quota (see `/config`): one accepted upload per day, resetting at
+midnight Pacific time. Failed evaluations do not refund uploads. Queued or running evaluations do not block another
+upload; additional evaluations of an existing submission do not count as uploads.
 
 ## Tips
 

@@ -4,7 +4,7 @@ worker (restart both after editing it). Every key is required, `limits` with eve
 GET /config serves it as loaded.
 
 Deployment details stay in the environment: VIOBENCH_SERVER_DIR (uploads, reports, sqlite) and CONTA_CACHE (where the
-worker's episodes are cached). What the worker evaluates is code: `worker.EPISODES`.
+worker's episodes are cached). Evaluation episodes are selected by admins and stored in SQLite.
 """
 import json
 from dataclasses import asdict, dataclass, fields
@@ -19,10 +19,9 @@ CONFIG_PATH = Path(__file__).parents[1] / "config.json"
 @dataclass(frozen=True)
 class Config:
     daily_quota: int  # submissions per team and day
-    daily_failed_quota: int  # failed submissions per team and day that do not count towards daily_quota
     quota_time_zone: str  # a day starts at midnight here (America/Los_Angeles: PST/PDT)
     max_upload_mib: int
-    evaluation_timeout_seconds: float  # one submission's whole evaluation, all episodes
+    episode_timeout_seconds: float  # one episode job, including evaluation and report generation
     limits: Limits  # the sandbox's, per episode: fuel, memory, wall-clock deadlines
 
     def as_dict(self):

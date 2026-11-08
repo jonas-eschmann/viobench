@@ -5,6 +5,8 @@
     GET  /submissions/{id}   one of them, with its results once evaluated
     GET  /config             the rules (`server.config`), team name, admin status and submission pause message
     PUT  /submission-pause   admin: {"message": "reason"} to pause, {"message": null} to resume
+    GET/PUT /evaluations    admin: current hashes and presets; save a selection with optional backfill
+    POST /evaluations/schedule  admin: schedule missing jobs for all/one submission and current/explicit hashes
     GET  /, /app.js, /style.css   the web UI (ui/): a page on top of the routes above
 
 Every API request carries "Authorization: Bearer <token>" (tokens: `python -m viobench.tools.server.teams`) and sees
@@ -18,6 +20,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, Header, HTTPException, Response, UploadFile
+from pydantic import BaseModel, ConfigDict
 
 from ..abi import AbiError
 from ..abi.module import runtime_descriptor
@@ -54,14 +57,13 @@ def authenticate(authorization):
 
 
 def public(row):
-    """A submission as the API shows it: times in ISO 8601 (UTC), results parsed."""
+    """API timestamps are UTC; non-finite metrics are JSON null."""
     row["is_participant"] = bool(row["is_participant"])
-    for key in ("created", "started", "finished"):
-        if row[key] is not None:
-            row[key] = datetime.fromtimestamp(row[key], timezone.utc).isoformat(timespec="seconds")
-    if "results" in row:  # NaN and infinities (metrics of failed episodes) become null: JSON has neither
-        row["results"] = json.loads(row["results"], parse_constant=lambda constant: None) if row["results"] else None
-    return row
+    for item in [row, *row.get("jobs", [])]:
+        for key in ("created", "started", "finished"):
+            if item.get(key) is not None:
+                item[key] = datetime.fromtimestamp(item[key], timezone.utc).isoformat(timespec="seconds")
+    return json.loads(json.dumps(row), parse_constant=lambda constant: None)
 
 
 @app.post("/submissions", status_code=201)
@@ -92,7 +94,7 @@ async def submit(file: UploadFile = File(...), label: str = Form(""), authorizat
         submission_id = get_store().add(token, label[:80], file.filename or "solution.wasm", data)
     except Paused as error:  # the admin may have paused while the upload was being read and checked
         raise HTTPException(status_code=503, detail=str(error)) from None
-    except Refused as error:  # one still queued or running, or today's quota used up
+    except Refused as error:  # today's upload quota is used up
         raise HTTPException(status_code=429, detail=str(error)) from None
     return public(get_store().get(token, submission_id))
 
@@ -101,7 +103,9 @@ async def submit(file: UploadFile = File(...), label: str = Form(""), authorizat
 def submissions(authorization: str | None = Header(default=None)):
     rows = [public(row) for row in get_store().submissions(authenticate(authorization))]
     for row in rows:  # the headline numbers only; GET /submissions/{id} has the rest
-        row["overall"] = ((row.pop("results") or {}).get("summary") or {}).get("overall")
+        results = row.pop("results")
+        row["overall"] = (results["summary"] or {}).get("overall")
+        row["partial"] = results["partial"]
     return rows
 
 
@@ -117,15 +121,59 @@ def submission(submission_id: str, authorization: str | None = Header(default=No
 def configuration(authorization: str | None = Header(default=None)):
     token = authenticate(authorization)
     return {**get_store().config.as_dict(), "team_name": get_store().team_name(token),
-            "is_admin": get_store().is_admin(token), "pause_message": get_store().pause_message()}
+            "is_admin": get_store().is_admin(token), "pause_message": get_store().pause_message(),
+            "evaluation_hashes": get_store().evaluation_hashes()}
+
+
+def require_admin(authorization):
+    if not get_store().is_admin(authenticate(authorization)):
+        raise HTTPException(status_code=403, detail="admin access required")
+
+
+class EvaluationSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    hashes: list[str]
+    backfill: bool = False
+
+
+class EvaluationSchedule(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    submission_id: str | None = None
+    hashes: list[str] | None = None
+
+
+@app.get("/evaluations")
+def evaluations(authorization: str | None = Header(default=None)):
+    require_admin(authorization)
+    return get_store().evaluations()
+
+
+@app.put("/evaluations")
+def select_evaluations(selection: EvaluationSelection, authorization: str | None = Header(default=None)):
+    require_admin(authorization)
+    try:
+        scheduled = get_store().set_evaluations(selection.hashes, backfill=selection.backfill)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    return {**get_store().evaluations(), "scheduled": scheduled}
+
+
+@app.post("/evaluations/schedule")
+def schedule_evaluations(selection: EvaluationSchedule, authorization: str | None = Header(default=None)):
+    require_admin(authorization)
+    try:
+        scheduled = get_store().schedule_evaluations(selection.hashes, submission_id=selection.submission_id)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from None
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    return {"scheduled": scheduled}
 
 
 @app.put("/submission-pause")
 def submission_pause(message: str | None = Body(..., embed=True, max_length=MAX_PAUSE_MESSAGE, strict=True),
                      authorization: str | None = Header(default=None)):
-    token = authenticate(authorization)
-    if not get_store().is_admin(token):
-        raise HTTPException(status_code=403, detail="admin access required")
+    require_admin(authorization)
     try:
         return {"pause_message": get_store().set_pause_message(message)}
     except ValueError as error:

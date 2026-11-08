@@ -1,4 +1,4 @@
-"""SQLite store shared by the web app, the worker and `teams`: the team tokens and the submission queue.
+"""SQLite accounts, current evaluation selection, and one job per submission/episode.
 
 A team is its token: submissions belong to a token. Participants are marked separately from test accounts;
 admin accounts can see every team's submissions and pause new uploads."""
@@ -13,43 +13,40 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .config import load as load_config
+from .evaluations import default_hashes, normalize_hashes, presets, results_for
 
 DEFAULT_DIR = Path(os.environ.get("VIOBENCH_SERVER_DIR", "server-data"))
 TOKEN_BYTES = 24  # a token is 32 base64url characters
 ID_BYTES = 8  # a submission id is 16 hex digits, random: it says nothing about how many submissions exist
 MAX_PAUSE_MESSAGE = 1000
-COLUMNS = ("id, label, filename, sha256, bytes, submissions.created, started, finished, status, error, "
-           "results, teams.name AS team_name, teams.is_participant")  # API fields; never include tokens
+COLUMNS = ("submissions.id, label, filename, sha256, bytes, submissions.created, "
+           "teams.name AS team_name, teams.is_participant")  # API fields; never include tokens
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS teams (
-    token TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    created REAL NOT NULL,
-    unlimited INTEGER NOT NULL DEFAULT 0,  -- 1: no daily quota, e.g. the instructors' debug team
-    is_admin INTEGER NOT NULL DEFAULT 0,   -- 1: view every team's submissions and control new uploads
-    is_participant INTEGER NOT NULL DEFAULT 0  -- 1: a regular participant, rather than a test or admin account
+    token TEXT PRIMARY KEY, name TEXT NOT NULL, created REAL NOT NULL,
+    unlimited INTEGER NOT NULL DEFAULT 0,
+    is_admin INTEGER NOT NULL DEFAULT 0,
+    is_participant INTEGER NOT NULL DEFAULT 0,
+    CHECK (NOT (is_admin AND is_participant))
 );
 CREATE TABLE IF NOT EXISTS submissions (
-    id TEXT PRIMARY KEY,
-    token TEXT NOT NULL REFERENCES teams(token),
-    label TEXT,
-    filename TEXT NOT NULL,
-    sha256 TEXT NOT NULL,
-    bytes INTEGER NOT NULL,
-    created REAL NOT NULL,
-    status TEXT NOT NULL,            -- queued | running | done | failed
-    started REAL,
-    finished REAL,
-    results TEXT,                    -- JSON: the metrics the team gets back (worker.public_results)
-    error TEXT
+    id TEXT PRIMARY KEY, token TEXT NOT NULL REFERENCES teams(token), label TEXT,
+    filename TEXT NOT NULL, sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, created REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS submissions_token ON submissions(token, created);
 CREATE TABLE IF NOT EXISTS submission_control (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    pause_message TEXT  -- NULL: accepting submissions; otherwise the message shown to teams
+    id INTEGER PRIMARY KEY CHECK (id = 1), pause_message TEXT, evaluation_hashes TEXT NOT NULL
 );
-INSERT OR IGNORE INTO submission_control (id, pause_message) VALUES (1, NULL);
+CREATE TABLE IF NOT EXISTS evaluation_jobs (
+    id INTEGER PRIMARY KEY,
+    submission_id TEXT NOT NULL REFERENCES submissions(id),
+    episode_hash TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'done', 'failed')),
+    created REAL NOT NULL, started REAL, finished REAL, result TEXT, error TEXT,
+    UNIQUE (submission_id, episode_hash)
+);
+CREATE INDEX IF NOT EXISTS evaluation_queue ON evaluation_jobs(status, id);
 """
 
 
@@ -75,17 +72,16 @@ class Store:
             path.mkdir(parents=True, exist_ok=True)
         self.path = self.directory / "submissions.sqlite"
         with self._connect() as connection:
-            connection.executescript(SCHEMA)
-            connection.execute("BEGIN IMMEDIATE")  # app, worker and CLI may start together
-            columns = {row["name"] for row in connection.execute("PRAGMA table_info(teams)")}
-            for column in ("unlimited", "is_admin", "is_participant"):
-                if column not in columns:
-                    connection.execute(f"ALTER TABLE teams ADD COLUMN {column} INTEGER NOT NULL DEFAULT 0")
+            connection.executescript("BEGIN IMMEDIATE;" + SCHEMA)
+            hashes = default_hashes()
+            connection.execute("INSERT OR IGNORE INTO submission_control (id, evaluation_hashes) VALUES (1, ?)",
+                               (json.dumps(hashes),))
         self.config = load_config()
 
     def _connect(self):
         connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA foreign_keys = ON")
         return connection
 
     # --- teams ----------------------------------------------------------------------------------------------
@@ -151,83 +147,156 @@ class Store:
             connection.execute("UPDATE submission_control SET pause_message = ? WHERE id = 1", (message,))
         return message
 
-    # --- submissions, as a team or admin sees them -----------------------------------------------------------
+    # --- evaluation selection and scheduling ---------------------------------------------------------------
+
+    @staticmethod
+    def _evaluation_hashes(connection):
+        return json.loads(connection.execute("SELECT evaluation_hashes FROM submission_control WHERE id = 1").fetchone()[0])
+
+    def evaluation_hashes(self):
+        with self._connect() as connection:
+            return self._evaluation_hashes(connection)
+
+    def evaluations(self):
+        with self._connect() as connection:
+            connection.execute("BEGIN")
+            return {"hashes": self._evaluation_hashes(connection), "presets": presets()}
+
+    @staticmethod
+    def _schedule(connection, hashes, submission_id=None):
+        """Insert missing pairs only. Call inside the selection/upload transaction."""
+        ids = [submission_id] if submission_id is not None else [row[0] for row in connection.execute("SELECT id FROM submissions")]
+        now, count = time.time(), 0
+        for selected in ids:
+            for digest in hashes:
+                count += connection.execute(
+                    "INSERT OR IGNORE INTO evaluation_jobs (submission_id, episode_hash, created) VALUES (?, ?, ?)",
+                    (selected, digest, now)).rowcount
+        return count
+
+    def set_evaluations(self, hashes, backfill=False):
+        hashes = normalize_hashes(hashes)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("UPDATE submission_control SET evaluation_hashes = ? WHERE id = 1", (json.dumps(hashes),))
+            return self._schedule(connection, hashes) if backfill else 0
+
+    def schedule_evaluations(self, hashes=None, submission_id=None):
+        hashes = normalize_hashes(hashes) if hashes is not None else None
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if submission_id is not None and connection.execute("SELECT 1 FROM submissions WHERE id = ?", (submission_id,)).fetchone() is None:
+                raise LookupError("no such submission")
+            hashes = self._evaluation_hashes(connection) if hashes is None else hashes
+            return self._schedule(connection, hashes, submission_id)
+
+    # --- uploads: admission depends only on pause state and daily upload count ------------------------------
 
     def add(self, token, label, filename, data):
-        """Queues a submission and returns its id. Refused while paused, while the team has one queued or running, or once today's
-        quota is used up: config.daily_quota submissions, where up to config.daily_failed_quota failed ones do not count
-        (further failures count like any other submission). An unlimited team has no daily quota.
-
-        One transaction: concurrent uploads cannot both pass these checks, and the worker cannot claim the row before
-        the file is written."""
+        """Atomically admit an upload and schedule its jobs for the current hashes."""
         submission_id = secrets.token_hex(ID_BYTES)
-        now = time.time()
-        config = self.config
-        with self._connect() as connection:  # leaving it with an exception rolls back
+        now, config = time.time(), self.config
+        with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            message = connection.execute("SELECT pause_message FROM submission_control WHERE id = 1").fetchone()["pause_message"]
+            message = connection.execute("SELECT pause_message FROM submission_control WHERE id = 1").fetchone()[0]
             if message is not None:
                 raise Paused(message)
-            pending = connection.execute("SELECT id, status FROM submissions WHERE token = ? AND status IN ('queued', 'running')", (token,)).fetchone()
-            if pending is not None:
-                raise Refused(f"submission {pending['id']} is still {pending['status']}; submit again once it has finished")
-            unlimited = connection.execute("SELECT unlimited FROM teams WHERE token = ?", (token,)).fetchone()["unlimited"]
-            today = connection.execute("SELECT COUNT(*) AS n, COALESCE(SUM(status = 'failed'), 0) AS failed FROM submissions "
-                                       "WHERE token = ? AND created >= ?", (token, day_start(now, config.quota_time_zone))).fetchone()
-            counted = today["n"] - today["failed"] + max(0, today["failed"] - config.daily_failed_quota)
-            if counted >= config.daily_quota and not unlimited:
-                raise Refused(f"today's quota of {config.daily_quota} submission(s) is used up (up to {config.daily_failed_quota} "
-                              f"failed one(s) do not count); it resets at midnight ({config.quota_time_zone})")
+            unlimited = connection.execute("SELECT unlimited FROM teams WHERE token = ?", (token,)).fetchone()[0]
+            count = connection.execute("SELECT COUNT(*) FROM submissions WHERE token = ? AND created >= ?",
+                                       (token, day_start(now, config.quota_time_zone))).fetchone()[0]
+            if count >= config.daily_quota and not unlimited:
+                raise Refused(f"today's quota of {config.daily_quota} upload(s) is used up; "
+                              f"it resets at midnight ({config.quota_time_zone})")
             connection.execute(
-                "INSERT INTO submissions (id, token, label, filename, sha256, bytes, created, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued')",
+                "INSERT INTO submissions (id, token, label, filename, sha256, bytes, created) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (submission_id, token, label, filename, hashlib.sha256(data).hexdigest(), len(data), now))
+            self._schedule(connection, self._evaluation_hashes(connection), submission_id)
             self.upload_path(submission_id).write_bytes(data)
-            connection.execute("COMMIT")
         return submission_id
 
+    # --- visibility, progress and metrics for the current selection -----------------------------------------
+
+    def _view(self, connection, row, hashes, details):
+        submission = dict(row)
+        jobs = {}
+        for job_row in connection.execute("SELECT id, episode_hash, status, created, started, finished, result, error "
+                                          "FROM evaluation_jobs WHERE submission_id = ? ORDER BY id", (row["id"],)):
+            job = dict(job_row)
+            job["result"] = json.loads(job["result"]) if job["result"] else None
+            job["selected"] = job["episode_hash"] in hashes
+            jobs[job["episode_hash"]] = job
+        selected = [jobs[digest] for digest in hashes if digest in jobs]
+        terminal = [job for job in selected if job["status"] in ("done", "failed")]
+        completed = sum(bool(job["result"] and job["result"]["completed"]) for job in terminal)
+        queued = [job for job in selected if job["status"] == "queued"]
+        progress = {"total": len(hashes), "finished": len(terminal), "completed": completed,
+                    "failed": len(terminal) - completed, "queued": len(queued),
+                    "running": sum(job["status"] == "running" for job in selected),
+                    "missing": len(hashes) - len(selected)}
+        submission["progress"] = progress
+        submission["status"] = ("running" if progress["running"] else "queued" if progress["queued"] else
+                                "incomplete" if progress["missing"] else "done" if completed else "failed")
+        submission["error"] = "no episode completed" if submission["status"] == "failed" else None
+        submission["results"] = results_for(self, row["id"], hashes, jobs)
+        if details:
+            submission["jobs"] = list(jobs.values())
+        return submission
+
     def get(self, token, submission_id):
-        """A visible submission with results and team metadata, or None. Admins can see any team's submission."""
         is_admin = self.is_admin(token)
         with self._connect() as connection:
+            connection.execute("BEGIN")
             row = connection.execute(f"SELECT {COLUMNS} FROM submissions JOIN teams USING (token) "
-                                     "WHERE id = ? AND (submissions.token = ? OR ?)", (submission_id, token, is_admin)).fetchone()
-        return dict(row) if row else None
+                                     "WHERE submissions.id = ? AND (submissions.token = ? OR ?)", (submission_id, token, is_admin)).fetchone()
+            return self._view(connection, row, self._evaluation_hashes(connection), details=True) if row else None
 
     def submissions(self, token):
-        """Visible submissions with results and team metadata, newest first; all teams for admins."""
         is_admin = self.is_admin(token)
         with self._connect() as connection:
-            return [dict(row) for row in connection.execute(f"SELECT {COLUMNS} FROM submissions JOIN teams USING (token) "
-                                                           "WHERE submissions.token = ? OR ? ORDER BY submissions.created DESC",
-                                                           (token, is_admin))]
+            connection.execute("BEGIN")
+            hashes = self._evaluation_hashes(connection)
+            rows = connection.execute(f"SELECT {COLUMNS} FROM submissions JOIN teams USING (token) "
+                                      "WHERE submissions.token = ? OR ? ORDER BY submissions.created DESC", (token, is_admin)).fetchall()
+            return [self._view(connection, row, hashes, details=False) for row in rows]
 
-    # --- the worker's side ----------------------------------------------------------------------------------
+    # --- single worker -----------------------------------------------------------------------------
 
     def claim_next(self):
-        """Atomically moves the oldest queued submission to running; returns it or None."""
+        """Claim the oldest queued job; conta resolves its episode when evaluation reads it."""
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
-            row = connection.execute("SELECT submissions.*, teams.name FROM submissions JOIN teams USING (token) "
-                                     "WHERE status = 'queued' ORDER BY submissions.created LIMIT 1").fetchone()
+            row = connection.execute(
+                "SELECT evaluation_jobs.*, teams.name FROM evaluation_jobs "
+                "JOIN submissions ON submission_id = submissions.id JOIN teams USING (token) "
+                "WHERE evaluation_jobs.status = 'queued' "
+                "ORDER BY evaluation_jobs.id LIMIT 1").fetchone()
             if row is None:
-                connection.execute("COMMIT")
                 return None
-            connection.execute("UPDATE submissions SET status = 'running', started = ? WHERE id = ?", (time.time(), row["id"]))
-            connection.execute("COMMIT")
-        return dict(row)
+            now = time.time()
+            connection.execute("UPDATE evaluation_jobs SET status = 'running', started = ? WHERE id = ?", (now, row["id"]))
+            return dict(row) | {"status": "running", "started": now}
 
     def requeue_running(self):
-        """Puts submissions left running by a dead worker back in the queue; only while no worker runs. Returns how many."""
+        """Only at startup of the single worker: finished jobs are immutable."""
         with self._connect() as connection:
-            return connection.execute("UPDATE submissions SET status = 'queued', started = NULL WHERE status = 'running'").rowcount
+            return connection.execute("UPDATE evaluation_jobs SET status = 'queued', started = NULL WHERE status = 'running'").rowcount
 
-    def finish(self, submission_id, results=None, error=None):
+    def finish_job(self, job_id, result=None, error=None):
+        if (result is None) == (error is None):
+            raise ValueError("supply either an episode result or an error")
         with self._connect() as connection:
-            connection.execute("UPDATE submissions SET status = ?, finished = ?, results = ?, error = ? WHERE id = ?",
-                               ("done" if error is None else "failed", time.time(), json.dumps(results) if results else None, error, submission_id))
+            connection.execute("BEGIN IMMEDIATE")
+            job = connection.execute("SELECT * FROM evaluation_jobs WHERE id = ?", (job_id,)).fetchone()
+            if job is None or job["status"] not in ("queued", "running"):
+                raise ValueError("job is not pending")
+            if result is not None and result["hash"] != job["episode_hash"]:
+                raise ValueError("result hash does not match job")
+            now = time.time()
+            connection.execute("UPDATE evaluation_jobs SET status = ?, finished = ?, result = ?, error = ? WHERE id = ?",
+                               ("done" if error is None else "failed", now, json.dumps(result) if result is not None else None, error, job_id))
 
     def upload_path(self, submission_id):
         return self.uploads / f"{submission_id}.wasm"
 
-    def report_dir(self, submission_id):
-        return self.reports / submission_id
+    def report_dir(self, submission_id, episode_hash):
+        return self.reports / submission_id / episode_hash

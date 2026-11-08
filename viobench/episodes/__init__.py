@@ -6,8 +6,8 @@
 A set is a list of {"description", "hash"} entries: the `metadata.json` of the conta shard that holds the archives,
 copied verbatim. The hash, the sha1 of an archive, is the episode: reports, logs and the server know it by nothing
 else. The description only labels conta's log lines. `SETS` names the sets, and that name is the dataset of their
-episodes in reports, however they are named (a reference, a path to the archive). The submission server evaluates
-`viobench.tools.server.worker.EPISODES`.
+episodes in reports, however they are named (a reference, a path to the archive). The submission server uses these
+sets as named presets; its current ordered selection is stored in SQLite and managed by admins through the UI/API.
 """
 
 # conta shard viobench-public: the validation episodes, HyperDrone flights through ProcTHOR-Train-1

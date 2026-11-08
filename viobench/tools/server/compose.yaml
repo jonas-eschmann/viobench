@@ -1,14 +1,14 @@
-# The submission server: the REST API (app) and the evaluation worker, sharing the server-data volume; `episodes`,
-# which downloads the worker's evaluation episodes (worker.EPISODES) into the conta-cache volume before the worker starts
-# (the worker has no network); and a Cloudflare tunnel in front of the app. From the viobench repository root, with
+# The submission server: the REST API (app) and the evaluation worker, sharing the server-data volume, and a Cloudflare
+# tunnel in front of the app. The worker downloads episodes into conta-cache as evaluation reads them. From the
+# viobench repository root, with
 # TUNNEL_TOKEN (below) in viobench/tools/server/.env (gitignored, chmod 600; write it with an editor, not on the command
 # line, which keeps it in the shell history):
 #
-#   docker compose -f viobench/tools/server/compose.yaml up -d --build
+#   docker compose -f viobench/tools/server/compose.yaml up -d --build --remove-orphans
 #   docker compose -f viobench/tools/server/compose.yaml exec app python -m viobench.tools.server.teams add --participant "team a"
 #   docker compose -f viobench/tools/server/compose.yaml exec app python -m viobench.tools.server.teams add --admin admin
 #
-# After changing EPISODES, the same `up -d --build` fetches the new episodes and restarts the worker.
+# The worker and evaluation host have network access; wasmtime still sandboxes the guest.
 # No port is published: the tunnel service connects out to Cloudflare, which terminates TLS. Create a tunnel in the
 # Cloudflare dashboard (Zero Trust > Networks > Tunnels), give it a public hostname with service http://app:8000 and put
 # its token in TUNNEL_TOKEN. Compose copies it into the tunnel container as a secret file, not a bind mount, so a daemon
@@ -39,23 +39,13 @@ services:
     secrets: [{source: tunnel_token, uid: "65532", gid: "65532", mode: 0400}]  # cloudflared's user
     depends_on: [app]
 
-  episodes:
-    <<: *server
-    command: python -m viobench.tools.server.worker --fetch  # through the conta index; cached episodes are not fetched again
-    restart: "no"  # one-shot
-    volumes: [conta-cache:/srv/conta]
-
   worker:
     <<: *server
     command: python -m viobench.tools.server.worker  # exactly one: on start it requeues what a previous one left running
-    network_mode: none  # wasmtime sandboxes the guest, not the evaluation process
     mem_limit: ${WORKER_MEMORY:-8g}
-    depends_on:
-      episodes:
-        condition: service_completed_successfully
     volumes:
       - server-data:/srv/server-data
-      - conta-cache:/srv/conta:ro
+      - conta-cache:/srv/conta
 
 volumes:
   server-data:

@@ -51,5 +51,6 @@ Set in `viobench/tools/config.json`; `viobench check` and `evaluate` apply the s
 ## Data
 
 Train on `viobench simulate` output, validate on the public set (`viobench.episodes.public`, which `viobench evaluate`
-runs when given no episodes). The server evaluates on `EPISODES` in `viobench/tools/server/worker.py`.
+runs when given no episodes). Instructors select the server's current episode set, initially the public set;
+`GET /config` lists its `evaluation_hashes`, and submission progress and summaries follow that set.
 `viobench.tools.datasets.read_episode` loads an episode.

@@ -1,46 +1,54 @@
-"""The evaluation worker without datasets, including its subprocess output and timeout limits."""
+"""The evaluation worker, with bounded subprocesses and offline conta resolution."""
+import gzip
 import json
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
-from viobench import episodes as published
+from viobench.tools.datasets.storage import write_episode
 from viobench.tools.server import worker
-from viobench.tools.server.store import Store
+from tests.test_datasets import synthetic_episode
 
 MODULE = b"\0asm\x01\0\0\0"
-REFERENCES = [{"description": "val/a.zip", "hash": "a" * 40}, {"description": "val/b.zip", "hash": "B" * 40}]
-HASHES = ["a" * 40, "b" * 40]  # the episodes of REFERENCES
+HASH = "a" * 40
 
 
-def report(completed, hashes=HASHES):
-    episodes = [{field: 0 for field in worker.EPISODE_FIELDS} | {"hash": digest, "dataset": "val", "completed": bool(completed), "stderr_tail": "guest text"}
+def report(completed=True, hashes=(HASH,)):
+    episodes = [{field: 0 for field in worker.EPISODE_FIELDS} | {
+        "hash": digest, "dataset": "val", "completed": completed, "frames": 2, "frames_attempted": 2,
+        "fuel_total": 30, "fuel_per_frame_max": 20, "metrics": {}, "failure": "guest text", "stderr_tail": "guest text"}
                 for digest in hashes]
     return {"summary": {"overall": {"episodes": len(hashes), "completed": completed}, "datasets": {}}, "episodes": episodes}
 
 
 @pytest.fixture
 def queued(tmp_path):
-    store = Store(tmp_path / "server")
-    token = store.add_team("team")
-    submission_id = store.add(token, "v1", "solution.wasm", MODULE)
-    return store, token, submission_id, store.claim_next()
+    store = SimpleNamespace(config=SimpleNamespace(episode_timeout_seconds=1440), finished=[])
+    store.upload_path = lambda submission_id: tmp_path / f"{submission_id}.wasm"
+    store.report_dir = lambda submission_id, digest: tmp_path / "reports" / submission_id / digest
+    store.finish_job = lambda job_id, result=None, error=None: store.finished.append((job_id, result, error))
+    job = {"id": 1, "submission_id": "submission", "episode_hash": HASH, "name": "team"}
+    store.upload_path(job["submission_id"]).write_bytes(MODULE)
+    return store, job
 
 
-def test_the_server_evaluates_the_public_set():
-    assert worker.EPISODES is published.public
-
-
-def fake_evaluate(monkeypatch, report, commands=None):
-    """An evaluation subprocess that writes report."""
+def fake_evaluate(monkeypatch, result, commands=None, fuels=(10, 20)):
+    """An evaluation subprocess that writes its report and private attempted-frame fuel samples."""
     def run(command, log_path, timeout):
         if commands is not None:
-            commands.append(command)
-        (Path(command[command.index("-o") + 1]) / "report.json").write_text(json.dumps(report))
+            commands.append((command, timeout))
+        output = Path(command[command.index("-o") + 1])
+        (output / "report.json").write_text(json.dumps(result))
+        if fuels is not None:
+            logs = output / "logs" / HASH
+            logs.mkdir(parents=True)
+            np.save(logs / "fuel.npy", np.asarray(fuels))
         return subprocess.CompletedProcess(command, 0)
 
     monkeypatch.setattr(worker, "run_evaluation", run)
@@ -68,71 +76,111 @@ def test_worker_times_out_and_reaps_children(tmp_path, body):
         os.waitpid(int(pid_path.read_text()), os.WNOHANG)
 
 
-def test_worker_marks_timed_out_submission_failed(queued, monkeypatch):
-    store, token, submission_id, submission = queued
+def test_worker_marks_timed_out_job_failed(queued, monkeypatch):
+    store, job = queued
 
     def timeout(command, log_path, timeout):
         raise subprocess.TimeoutExpired(command, timeout)
 
     monkeypatch.setattr(worker, "run_evaluation", timeout)
-    worker.evaluate_submission(store, submission, REFERENCES, log=lambda *a: None)
-    row = store.get(token, submission_id)
-    assert row["status"] == "failed"
-    assert row["error"] == f"evaluation exceeded {store.config.evaluation_timeout_seconds:.0f} s"
+    worker.evaluate_job(store, job, log=lambda *a: None)
+    assert store.finished == [(job["id"], None, f"episode evaluation exceeded {store.config.episode_timeout_seconds:.0f} s")]
 
 
-@pytest.mark.parametrize("completed", [1, 0])
-def test_worker_evaluates_its_references(queued, monkeypatch, completed):
-    store, token, submission_id, submission = queued
+@pytest.mark.parametrize("completed", [True, False])
+def test_worker_evaluates_one_episode_and_keeps_guest_failures_for_aggregation(queued, monkeypatch, completed):
+    store, job = queued
     commands = []
     fake_evaluate(monkeypatch, report(completed), commands)
-    worker.evaluate_submission(store, submission, REFERENCES, log=lambda *a: None)
-    [command] = commands
-    assert command[3:6] == ["evaluate", str(store.upload_path(submission_id)), "conta:" + "a" * 40]
-    assert command[6] == "conta:" + "b" * 40 and command[7] == "-o"
-    row = store.get(token, submission_id)
-    if completed:
-        assert row["status"] == "done" and "guest text" not in row["results"]
-        assert [episode["hash"] for episode in json.loads(row["results"])["episodes"]] == HASHES
-    else:
-        assert row["status"] == "failed" and row["error"] == "no episode completed"
+    worker.evaluate_job(store, job, log=lambda *a: None)
+    [(command, timeout)] = commands
+    assert command[3:] == ["evaluate", str(store.upload_path(job["submission_id"])), "conta:" + HASH,
+                           "-o", str(store.report_dir(job["submission_id"], HASH))]
+    assert timeout == store.config.episode_timeout_seconds
+    [(job_id, result, error)] = store.finished
+    assert job_id == job["id"] and error is None
+    assert result["hash"] == HASH and result["completed"] is completed
+    assert set(result) == set(worker.EPISODE_FIELDS) and "guest text" not in json.dumps(result)
 
 
-@pytest.mark.parametrize("hashes", [HASHES[:1], HASHES[::-1], HASHES + ["c" * 40], [HASHES[0], None]])
+@pytest.mark.parametrize("hashes", [[], ["b" * 40], [HASH, HASH], [None]])
 def test_worker_fails_a_report_of_other_episodes(queued, monkeypatch, hashes):
     """An episode is its hash: results of anything but the requested hashes, in order, are not shown."""
-    store, token, submission_id, submission = queued
-    fake_evaluate(monkeypatch, report(1, hashes))
-    messages = []
-    worker.evaluate_submission(store, submission, REFERENCES, log=messages.append)
-    row = store.get(token, submission_id)
-    assert row["status"] == "failed" and row["error"] == "internal error" and row["results"] is None
-    assert "not the requested ones" in messages[-1]
+    store, job = queued
+    fake_evaluate(monkeypatch, report(True, hashes))
+    worker.evaluate_job(store, job, log=lambda *a: None)
+    assert store.finished == [(job["id"], None, "internal error")]
 
 
-def test_worker_does_not_start_without_distinct_episodes():
-    with pytest.raises(SystemExit, match="listed twice in EPISODES: " + "a" * 40):
-        worker.prepare([{"description": "a.zip", "hash": "a" * 40}, {"description": "A.zip", "hash": "A" * 40}])
-    with pytest.raises(SystemExit, match="not a conta reference"):
-        worker.prepare([{"description": "short.zip", "hash": "a" * 39}])
+@pytest.mark.parametrize("fuels", [None, (10,), [[10], [20]], (float("nan"), 20)])
+def test_worker_requires_usable_fuel_samples_for_every_attempted_frame(queued, monkeypatch, fuels):
+    store, job = queued
+    fake_evaluate(monkeypatch, report(), fuels=fuels)
+    worker.evaluate_job(store, job, log=lambda *a: None)
+    assert store.finished == [(job["id"], None, "internal error")]
 
 
-def test_worker_does_not_start_without_its_episodes(tmp_path, conta_store):
-    archive = tmp_path / "a.zip"
-    archive.write_bytes(b"an episode")
+def test_worker_does_not_reuse_a_stale_report_after_retry(queued, monkeypatch):
+    store, job = queued
+    output = store.report_dir(job["submission_id"], HASH)
+    logs = output / "logs" / HASH
+    logs.mkdir(parents=True)
+    (output / "report.json").write_text(json.dumps(report()))
+    np.save(logs / "fuel.npy", np.asarray([10, 20]))
+    monkeypatch.setattr(worker, "run_evaluation", lambda command, *args: subprocess.CompletedProcess(command, 17))
+    worker.evaluate_job(store, job, log=lambda *a: None)
+    [(job_id, result, error)] = store.finished
+    assert job_id == job["id"] and result is None and "17" in error and "without a report" in error
+    assert not (output / "report.json").exists() and not (logs / "fuel.npy").exists()
+
+
+def test_worker_resolves_cold_cache_and_continues_after_missing_episode(tmp_path, conta_store, monkeypatch):
+    pytest.importorskip("httpx")
+    TestClient = pytest.importorskip("fastapi.testclient").TestClient
+    from viobench.tools.server import app as server
+    from viobench.tools.server.store import Store
+    from tests.test_fuel import metered_module
+
+    archive = write_episode(synthetic_episode(n_frames=3, width=640, height=480), tmp_path / "episode.zip")
     digest = conta_store(archive)
-    [path] = worker.prepare([{"description": "a.zip", "hash": digest}])
-    assert path.read_bytes() == b"an episode"
-    with pytest.raises(SystemExit, match="0{40}"):
-        worker.prepare([{"description": "gone.zip", "hash": "0" * 40}])
-    with pytest.raises(SystemExit, match="EPISODES is empty"):
-        worker.prepare([])
-
-
-def test_fetch_only_fills_the_cache(tmp_path, conta_store, monkeypatch, capsys):
-    archive = tmp_path / "a.zip"
-    archive.write_bytes(b"an episode")
-    monkeypatch.setattr(worker, "EPISODES", [{"description": "a.zip", "hash": conta_store(archive)}])
-    monkeypatch.setattr(worker, "Store", lambda *a: pytest.fail("--fetch must not open the store"))
-    worker.main(["--fetch"])
-    assert "1 episodes in the conta cache" in capsys.readouterr().out
+    source = Path(os.environ["CONTA_ROOT"]) / "data" / digest
+    source.with_suffix(".gz").write_bytes(gzip.compress(source.read_bytes()))
+    source.unlink()
+    cache = Path(os.environ["CONTA_CACHE"]) / digest
+    assert not cache.exists()
+    missing = "0" * 40
+    monkeypatch.setattr("viobench.tools.server.store.default_hashes", lambda: [missing, digest])
+    store = Store(tmp_path / "server")
+    monkeypatch.setattr(server, "_store", store)
+    client = TestClient(server.app)
+    client.headers["Authorization"] = f"Bearer {store.add_team('team', is_participant=True)}"
+    wasm = metered_module(tmp_path)
+    created = client.post("/submissions", files={"file": ("native.wasm", wasm.read_bytes())})
+    assert created.status_code == 201 and created.json()["status"] == "queued"
+    submission_id = created.json()["id"]
+    failed_job = store.claim_next()
+    assert failed_job["episode_hash"] == missing
+    worker.evaluate_job(store, failed_job, log=lambda *args: None)
+    failed_result = client.get(f"/submissions/{submission_id}").json()
+    assert failed_result["jobs"][0]["status"] == "failed"
+    assert failed_result["progress"]["failed"] == 1 and failed_result["progress"]["queued"] == 1
+    job = store.claim_next()
+    assert job["episode_hash"] == digest
+    worker.evaluate_job(store, job, log=lambda *args: None)
+    assert cache.read_bytes() == archive.read_bytes()
+    detail = client.get(f"/submissions/{submission_id}")
+    assert detail.status_code == 200
+    result = detail.json()
+    assert result["status"] == "done" and result["results"]["partial"] is True
+    assert result["progress"]["failed"] == 1 and result["progress"]["completed"] == 1
+    assert not {"initial_status", "started", "finished"} & result.keys()
+    assert "initial" not in result["jobs"][0]
+    assert result["jobs"][0]["started"] is not None and result["jobs"][0]["finished"] is not None
+    assert result["results"]["episodes"][0]["hash"] == digest
+    fuel = np.load(store.report_dir(submission_id, digest) / "logs" / digest / "fuel.npy", allow_pickle=False)
+    overall = result["results"]["summary"]["overall"]
+    assert len(fuel) == overall["frames_attempted"] == 3
+    assert int(fuel.sum()) == overall["fuel_total"]
+    assert float(np.median(fuel)) == overall["fuel_per_frame_median"]
+    assert client.get("/submissions").json()[0]["overall"] == overall
+    assert store.claim_next() is None

@@ -1,1 +1,1 @@
-"""Submission server: a team uploads a solution .wasm, a worker evaluates it on worker.EPISODES, the team sees its results."""
+"""Submission server: uploads have per-episode jobs; admins select episodes and teams see current-set results."""

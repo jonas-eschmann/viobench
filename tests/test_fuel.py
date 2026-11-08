@@ -9,7 +9,7 @@ from viobench import Limits, abi
 from viobench.tools.cli import main
 from viobench.tools.runner.leaderboard import markdown_table, rows
 from viobench.tools.runner.run import evaluate
-from viobench.tools.server.worker import public_results
+from viobench.tools.server.worker import public_episode
 from tests.test_datasets import synthetic_episode
 
 
@@ -76,13 +76,11 @@ def test_peak_fuel_across_frames_episodes_and_datasets(engine, tmp_path, monkeyp
     assert len(table) == 2 and all(row["fuel_per_frame"] == maximum for row in table)
     assert "max fuel/frame (all datasets)" in markdown_table(table)
     assert all("fuel/frame max" in message for message in messages[:-1])
-    public = public_results(saved)
-    assert public["summary"]["overall"]["fuel_per_frame_max"] == maximum
-    assert public["episodes"][0]["fuel_per_frame_max"] == maximum
+    public = public_episode(saved["episodes"][0])
+    assert public["fuel_per_frame_max"] == maximum
     for field in ("frames_attempted", "fuel_per_frame_mean", "fuel_per_frame_median", "fuel_per_frame_p95",
                   "fuel_per_frame_p99", "fuel_total"):
-        assert public["episodes"][0][field] == peak[field]
-        assert public["summary"]["overall"][field] == summary["overall"][field]
+        assert public[field] == peak[field]
 
 
 def test_diagnostics_pool_frames_from_unequal_episodes(engine, tmp_path, monkeypatch):

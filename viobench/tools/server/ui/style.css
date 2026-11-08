@@ -61,7 +61,7 @@ form {
 
 form button, form progress, form .inline, form .hint { grid-column: 2; justify-self: start; }
 form progress { width: 100%; }
-input:not([type]), input[type=text], textarea { width: 100%; padding: 0.35rem 0.45rem; font: inherit; }
+input:not([type]), input[type=text], textarea, select { width: 100%; padding: 0.35rem 0.45rem; font: inherit; }
 textarea { resize: vertical; }
 #token { font-family: ui-monospace, monospace; }  /* tokens mix l, 1, I, O and 0 */
 
@@ -95,6 +95,8 @@ th { color: var(--muted); font-weight: 600; }
 .status.done { color: var(--ok); }
 .status.failed { color: var(--bad); }
 .status.queued, .status.running { color: var(--wait); }
+.status.incomplete { color: var(--wait); }
+#details-jobs td:last-child { white-space: normal; overflow-wrap: anywhere; }
 
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.2rem 1rem; }
 dt { color: var(--muted); }

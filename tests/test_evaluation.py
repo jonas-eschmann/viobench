@@ -50,6 +50,8 @@ def test_evaluate_report(engine, runtime_path, solution_dir, tmp_path):
     np.testing.assert_allclose(estimate[:, 1:], gt[:, :7], atol=1e-6)
     twist = np.loadtxt(tmp_path / "report" / "logs" / digest / "twist.txt")
     np.testing.assert_allclose(twist[:, 1:], gt[:, 7:], atol=1e-6)
+    fuel = np.load(tmp_path / "report" / "logs" / digest / "fuel.npy", allow_pickle=False)
+    assert fuel.shape == (episode_report["frames_attempted"],) and fuel.sum() == episode_report["fuel_total"]
 
 
 @pytest.mark.parametrize("failure", ["raise RuntimeError('flaky')", "return [float('nan')] * 13"])
@@ -72,6 +74,8 @@ class Solution:
     assert report["summary"]["overall"]["completed"] == 0
     episode_report = report["episodes"][0]
     assert not episode_report["completed"] and episode_report["failure"].startswith("step")
+    fuel = np.load(tmp_path / "report" / "logs" / digest / "fuel.npy", allow_pickle=False)
+    assert fuel.shape == (3,) and fuel.sum() == episode_report["fuel_total"]  # Includes the failed third attempt.
     estimate = np.loadtxt(tmp_path / "report" / "logs" / digest / "estimate.tum")
     assert list(estimate[:2, 1]) == [1, 2] and np.isnan(estimate[2:, 1:]).all()
     held = np.tile([0, 0, 0, 0, 0, 0, 1.0, 0, 0, 0, 0, 0, 0], (6, 1))

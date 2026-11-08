@@ -170,6 +170,7 @@ def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_
         reports.append(report)
         frame_fuels.append(fuel)
         write_estimates(log_dir, episode.frame_times, estimates)
+        np.save(log_dir / "fuel.npy", fuel, allow_pickle=False)  # private samples for exact aggregation of episode jobs
         m = report.metrics
         log(f"{episode.dataset}/{episode.key}: {'ok' if report.completed else 'FAILED'} RPE {m['rpe_translation_rmse']:.3f} m/1 s  ATE {m['ate_rmse']:.3f} m  "
             f"rot {np.degrees(m['rotation_rmse']):.1f} deg  vel {m['velocity_rmse']:.3f} m/s  held {m['held']}  fuel/frame max {report.fuel_per_frame_max:,.0f} (p95 {report.fuel_per_frame_p95:,.0f})  "

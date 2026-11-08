@@ -1,9 +1,8 @@
 {
  "daily_quota": 1,
- "daily_failed_quota": 1,
  "quota_time_zone": "America/Los_Angeles",
  "max_upload_mib": 128,
- "evaluation_timeout_seconds": 14400,
+ "episode_timeout_seconds": 1440,
  "limits": {
   "init_fuel": 200000000000,
   "step_fuel": 20000000000,

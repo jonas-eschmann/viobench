@@ -49,6 +49,19 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
     </form>
   </section>
 
+  <section id="evaluation-controls" hidden>
+    <h2>Evaluation episodes</h2>
+    <p id="evaluation-status" class="hint"></p>
+    <form id="evaluation-form">
+      <label for="evaluation-preset">Preset</label>
+      <select id="evaluation-preset"></select>
+      <label class="inline"><input id="evaluation-backfill" type="checkbox"> Also evaluate all existing submissions</label>
+      <button id="evaluation-save" type="submit">Save</button>
+      <button id="evaluation-fill" type="button">Fill missing for current set</button>
+    </form>
+    <p class="hint">New uploads use the saved set. Filling missing evaluations includes participant and test submissions and keeps existing results.</p>
+  </section>
+
   <section id="upload-section">
     <h2>Submit</h2>
     <form id="upload-form">
@@ -68,6 +81,7 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
       <button id="refresh" type="button">Refresh</button>
       <span id="updated" class="hint"></span>
     </div>
+    <p id="evaluation-summary" class="hint"></p>
     <div class="scroll">
       <table id="submissions">
         <thead><tr><th>Submitted</th><th id="team-column" hidden>Team</th><th id="account-column" hidden>Account</th><th>Label</th><th>Status</th><th>RPE (m)</th><th>Fuel/frame</th><th>Episodes</th><th></th></tr></thead>
@@ -80,7 +94,15 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
   <section id="details" hidden>
     <h2 id="details-title"></h2>
     <dl id="details-facts"></dl>
+    <p id="details-progress" class="hint"></p>
+    <form id="schedule-form" hidden>
+      <label for="schedule-hashes">Episode hashes (optional)</label>
+      <textarea id="schedule-hashes" rows="2" placeholder="Leave blank for the current set; otherwise separate hashes with spaces or commas"></textarea>
+      <button id="schedule-button" type="submit">Fill missing evaluations for this submission</button>
+    </form>
     <div id="details-results"></div>
+    <h3>All scheduled evaluations</h3>
+    <div id="details-jobs"></div>
     <details><summary>Raw JSON</summary><pre id="details-json"></pre></details>
   </section>
 

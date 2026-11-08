@@ -20,9 +20,11 @@ let retryMs = POLL_MS;
 let generation = 0;  // only the newest list request renders
 let session = 0;  // discard details requested before signing out
 let uploading = false;
-let pauseSaving = false;
-let shown = null;  // {id, status} of the submission in the details section
-const finished = new Map();  // id -> details of done and failed submissions, which no longer change
+let adminSaving = false;
+let evaluationPresets = null;
+let detailGeneration = 0;
+let detailPending = false;
+let shown = null;  // {id} of the submission in the details section; results change as jobs finish
 
 class ApiError extends Error {
   constructor(status, message) {
@@ -167,6 +169,13 @@ function episodeHash(hash) {
   return element;
 }
 
+function progressText(progress) {
+  if (!progress) return DASH;
+  const counts = [["completed", "completed"], ["failed", "failed"], ["queued", "queued"], ["running", "running"],
+                  ["missing", "not scheduled"]];
+  return `${progress.finished}/${progress.total} finished` + counts.filter(([key]) => progress[key]).map(([key, label]) => `; ${progress[key]} ${label}`).join("");
+}
+
 function node(tag, text, className) {
   const element = document.createElement(tag);
   if (text !== undefined && text !== null) element.textContent = String(text);
@@ -212,13 +221,18 @@ function showSignIn(message, kind = "error") {
   retryMs = POLL_MS;
   token = null;
   config = null;
-  pauseSaving = false;
+  adminSaving = false;
+  evaluationPresets = null;
+  detailGeneration++;
+  detailPending = false;
   $("pause-message").value = "";
+  $("evaluation-backfill").checked = false;
+  $("schedule-hashes").value = "";
   shown = null;
-  finished.clear();
   $("submissions").tBodies[0].replaceChildren();
-  for (const id of ["details-title", "details-facts", "details-results", "details-json", "updated", "rules", "team-name"]) $(id).replaceChildren();
-  for (const id of ["team", "account", "details", "connection", "pause-controls", "pause-banner"]) $(id).hidden = true;
+  for (const id of ["details-title", "details-facts", "details-results", "details-jobs", "details-progress", "details-json", "updated", "rules",
+                    "team-name", "evaluation-preset", "evaluation-status", "evaluation-summary"]) $(id).replaceChildren();
+  for (const id of ["team", "account", "details", "connection", "pause-controls", "pause-banner", "evaluation-controls", "schedule-form"]) $(id).hidden = true;
   $("sign-in").hidden = false;
   notice(message, kind);
   $("token").focus();
@@ -259,8 +273,14 @@ function renderConfiguration(next) {
   if (config && config.is_admin !== next.is_admin) {
     session++;  // discard details requested with the previous permissions
     shown = null;
-    finished.clear();
+    evaluationPresets = null;
+    detailGeneration++;
+    detailPending = false;
     $("submissions").tBodies[0].replaceChildren();
+    $("details").hidden = true;
+  } else if (config && JSON.stringify(config.evaluation_hashes) !== JSON.stringify(next.evaluation_hashes)) {
+    detailGeneration++;
+    detailPending = false;
     $("details").hidden = true;
   }
   config = next;
@@ -268,9 +288,12 @@ function renderConfiguration(next) {
   $("team-name").textContent = `Signed in as ${config.team_name}`;
   $("upload-section").hidden = admin;
   $("pause-controls").hidden = !admin;
+  $("evaluation-controls").hidden = !admin;
+  $("schedule-form").hidden = !admin;
   $("team-column").hidden = !admin;
   $("account-column").hidden = !admin;
   $("submissions-title").textContent = admin ? "All submissions" : "Submissions";
+  $("evaluation-summary").textContent = `Results and progress use the current set of ${config.evaluation_hashes.length} episode(s).`;
   renderPause();
   renderRules(config);
 }
@@ -281,16 +304,15 @@ function renderPause() {
   $("pause-banner").hidden = !message;
   $("pause-status").textContent = message ? "New submissions are paused." : "Accepting new submissions.";
   $("pause-button").textContent = message ? "Update message" : "Pause submissions";
-  $("pause-button").disabled = pauseSaving;
-  $("resume-button").disabled = pauseSaving || !message;
+  renderAdminButtons();
   if (message) $("upload-button").disabled = true;
 }
 
 async function setPause(message) {
-  if (pauseSaving || !config.is_admin) return;
+  if (adminSaving || !config.is_admin) return;
   if (message !== null && !message.trim()) return notice("Enter a message for the teams before pausing submissions.");
   const mine = session;
-  pauseSaving = true;
+  adminSaving = true;
   clearTimeout(pollTimer);
   generation++;  // discard config/list responses from before this update
   renderPause();
@@ -306,11 +328,86 @@ async function setPause(message) {
     notice(`Cannot update submission access: ${error.message}`);
   } finally {
     if (mine === session) {
-      pauseSaving = false;
+      adminSaving = false;
       renderPause();
       refresh();
     }
   }
+}
+
+// --- selecting and scheduling evaluations ----------------------------------------------------------------------
+
+function renderAdminButtons() {
+  $("pause-button").disabled = adminSaving;
+  $("resume-button").disabled = adminSaving || !config.pause_message;
+  $("evaluation-save").disabled = adminSaving || !evaluationPresets || !$("evaluation-preset").value;
+  $("evaluation-fill").disabled = adminSaving || !evaluationPresets;
+  $("schedule-button").disabled = adminSaving;
+}
+
+function renderEvaluations(state) {
+  const current = state.presets.find((preset) => JSON.stringify(preset.hashes) === JSON.stringify(state.hashes));
+  if (evaluationPresets === null) {
+    // This is a local edit form: keep both the options and their hashes until the next sign-in.
+    evaluationPresets = state.presets;
+    const select = $("evaluation-preset");
+    select.replaceChildren();
+    if (!current) {
+      const custom = node("option", "Custom current set");
+      custom.value = "";
+      custom.disabled = true;
+      select.append(custom);
+    }
+    for (const preset of evaluationPresets) {
+      const option = node("option", `${preset.name} (${preset.hashes.length} episodes)`);
+      option.value = preset.name;
+      select.append(option);
+    }
+    select.value = current?.name || "";
+  }
+  $("evaluation-status").textContent = `Current set: ${current?.name || "custom"}, ${state.hashes.length} episode(s).`;
+  renderAdminButtons();
+}
+
+async function updateEvaluations(path, method, body, savedSet = false) {
+  if (adminSaving || !config.is_admin) return;
+  const mine = session;
+  adminSaving = true;
+  clearTimeout(pollTimer);
+  generation++;
+  detailGeneration++;  // discard details computed before new evaluations were scheduled
+  detailPending = false;
+  renderAdminButtons();
+  try {
+    const result = await api(path, {method, headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    if (mine !== session) return;
+    notice(`${savedSet ? "Evaluation set saved. " : ""}${result.scheduled} evaluation(s) scheduled.`, "info");
+  } catch (error) {
+    if (mine !== session) return;
+    if (error.status === 401) return showSignIn("The token is no longer valid.");
+    notice(`Cannot update evaluations: ${error.message}`);
+  } finally {
+    if (mine === session) {
+      adminSaving = false;
+      renderAdminButtons();
+      refresh();
+    }
+  }
+}
+
+function saveEvaluations(event) {
+  event.preventDefault();
+  const preset = evaluationPresets?.find((entry) => entry.name === $("evaluation-preset").value);
+  if (preset) return updateEvaluations("evaluations", "PUT", {hashes: preset.hashes, backfill: $("evaluation-backfill").checked}, true);
+}
+
+function scheduleSubmission(event) {
+  event.preventDefault();
+  if (!shown) return;
+  const body = {submission_id: shown.id};
+  const hashes = $("schedule-hashes").value.trim();
+  if (hashes) body.hashes = hashes.split(/[\s,]+/).filter(Boolean);
+  return updateEvaluations("evaluations/schedule", "POST", body);
 }
 
 // --- the list of submissions -----------------------------------------------------------------------------------
@@ -324,15 +421,15 @@ function schedule(ms) {
 }
 
 async function refresh() {
-  if (token === null || pauseSaving) return;
+  if (token === null || adminSaving) return;
   clearTimeout(pollTimer);
   const mine = ++generation;
-  let rows;
+  let rows, evaluations;
   try {
     const next = await api("config");
     if (mine !== generation) return;
     renderConfiguration(next);
-    rows = await api("submissions");
+    [rows, evaluations] = await Promise.all([api("submissions"), config.is_admin ? api("evaluations") : null]);
     if (!Array.isArray(rows)) throw new ApiError(200, "the server sent an unreadable answer");
   } catch (error) {
     if (mine !== generation) return;
@@ -347,13 +444,12 @@ async function refresh() {
   if (mine !== generation) return;
   retryMs = POLL_MS;
   $("connection").hidden = true;
+  if (evaluations) renderEvaluations(evaluations);
   renderList(rows);
   $("updated").textContent = `updated ${new Date().toLocaleTimeString()}`;
-  const pending = rows.find((row) => row && (row.status === "queued" || row.status === "running"));
-  if (!config.is_admin) renderUploadState(pending);
+  if (!config.is_admin) renderUploadState();
   schedule(POLL_MS);
-  const current = shown && rows.find((row) => row && row.id === shown.id);
-  if (current && current.status !== shown.status) showDetails(current.id, false);
+  if (shown && !detailPending) showDetails(shown.id, false);
 }
 
 function renderList(rows) {
@@ -362,28 +458,29 @@ function renderList(rows) {
   for (const row of rows) {
     if (!row || typeof row !== "object") continue;
     const overall = row.overall || {};
-    const status = node("span", row.status === "failed" && row.error ? `failed: ${row.error}` : row.status, `status ${row.status}`);
+    const statusText = row.status === "failed" && row.error ? `failed: ${row.error}` : row.status;
+    const status = node("span", statusText + (row.partial && row.overall ? " (partial results)" : ""), `status ${row.status}`);
     const button = node("button", "Details");
     button.type = "button";
     button.setAttribute("aria-label", `Details of ${row.label || row.id}`);
     button.addEventListener("click", () => showDetails(row.id, true));
-    const episodes = isNumber(overall.episodes) ? `${overall.completed}/${overall.episodes}` : DASH;
+    const episodes = row.progress ? `${row.progress.finished}/${row.progress.total} finished` : DASH;
+    const progress = node("span", episodes);
+    progress.title = progressText(row.progress);
     body.append(tableRow([time(row.created), ...(config.is_admin ? [row.team_name || DASH, row.is_participant ? "Participant" : "Test"] : []),
                           row.label || DASH, status, decimal(overall.rpe_translation_rmse_median),
-                          fuel(overall.fuel_per_frame_median), episodes, button]));
+                          fuel(overall.fuel_per_frame_median), progress, button]));
   }
   $("empty").hidden = body.rows.length > 0;
 }
 
 // --- submitting ------------------------------------------------------------------------------------------------
 
-function renderUploadState(pending) {
-  $("upload-button").disabled = uploading || Boolean(pending) || Boolean(config.pause_message);
+function renderUploadState() {
+  $("upload-button").disabled = uploading || Boolean(config.pause_message);
   const hint = $("upload-hint");
-  if (pending) {
-    hint.textContent = `"${pending.label || pending.id}" is ${pending.status}: submit the next one once it has finished.`;
-  } else if (isNumber(get(config, "daily_quota"))) {
-    hint.textContent = `One submission at a time and ${config.daily_quota} per day (from midnight, ${config.quota_time_zone}); ` +
+  if (isNumber(get(config, "daily_quota"))) {
+    hint.textContent = `${config.daily_quota} accepted upload(s) per day (from midnight, ${config.quota_time_zone}; unlimited accounts exempt); ` +
                        `up to ${config.max_upload_mib} MiB.`;
   } else {
     hint.textContent = "";
@@ -446,21 +543,22 @@ const EPISODE_COLUMNS = [
 
 async function showDetails(id, scroll) {
   const mine = session;
-  let submission = finished.get(id);
-  if (!submission) {
-    try {
-      submission = await api(`submissions/${encodeURIComponent(id)}`);
-    } catch (error) {
-      if (mine !== session) return;
-      if (error.status === 401) return showSignIn("The token is no longer valid.");
-      return notice(`Cannot show the submission: ${error.message}`);
-    }
-    if (mine !== session || token === null) return;
-    if (submission.status === "done" || submission.status === "failed") finished.set(id, submission);
+  const request = ++detailGeneration;
+  detailPending = true;
+  try {
+    const submission = await api(`submissions/${encodeURIComponent(id)}`);
+    if (mine !== session || request !== detailGeneration || token === null) return;
+    if (shown?.id !== id) $("schedule-hashes").value = "";
+    shown = {id};
+    renderDetails(submission);
+    if (scroll) $("details").scrollIntoView({block: "start"});
+  } catch (error) {
+    if (mine !== session || request !== detailGeneration) return;
+    if (error.status === 401) return showSignIn("The token is no longer valid.");
+    notice(`Cannot show the submission: ${error.message}`);
+  } finally {
+    if (request === detailGeneration) detailPending = false;
   }
-  shown = {id, status: submission.status};
-  renderDetails(submission);
-  if (scroll) $("details").scrollIntoView({block: "start"});
 }
 
 function renderDetails(submission) {
@@ -471,24 +569,34 @@ function renderDetails(submission) {
   for (const [label, value] of [["Id", submission.id], ...account,
                                 ["File", `${submission.filename || DASH} (${size(submission.bytes)})`],
                                 ["SHA-256", submission.sha256], ["Status", submission.status], ["Error", submission.error],
-                                ["Submitted", time(submission.created)], ["Started", time(submission.started)],
-                                ["Finished", time(submission.finished)]]) {
+                                ["Submitted", time(submission.created)]]) {
     if (value !== null && value !== undefined) facts.append(node("dt", label), node("dd", value));
   }
   const results = $("details-results");
   results.replaceChildren();
+  $("details-progress").textContent = `Current set: ${progressText(submission.progress)}.`;
+  $("schedule-form").hidden = !config.is_admin;
+  if (get(submission, "results", "partial")) {
+    results.append(node("p", "Partial results for the current set. Summary numbers will update as more episodes finish.", "hint"));
+  }
   const summary = get(submission, "results", "summary");
   if (summary && typeof summary === "object") {
     const groups = [["overall", summary.overall], ...Object.entries(summary.datasets || {})];
-    results.append(node("h3", "Summary (medians over episodes)"),
+    results.append(node("h3", "Current-set summary"),
                    table(["", ...SUMMARY_COLUMNS.map(([title]) => title)],
                          groups.map(([name, values]) => [name, ...SUMMARY_COLUMNS.map(([, format]) => format(values || {}))])));
   }
   const episodes = get(submission, "results", "episodes");
   if (Array.isArray(episodes) && episodes.length) {
-    results.append(node("h3", "Episodes"), table(EPISODE_COLUMNS.map(([title]) => title),
+    results.append(node("h3", "Current-set results"), table(EPISODE_COLUMNS.map(([title]) => title),
                                                  episodes.map((episode) => EPISODE_COLUMNS.map(([, format]) => format(episode || {})))));
   }
+  const jobs = $("details-jobs");
+  jobs.replaceChildren();
+  jobs.append(table(["Episode", "Status", "Current set", "RPE (m)", "Error"],
+                    submission.jobs.map((job) => [episodeHash(job.episode_hash), node("span", job.status, `status ${job.status}`),
+                      job.selected ? "yes" : "no",
+                      decimal(get(job, "result", "metrics", "rpe_translation_rmse")), job.error || DASH])));
   $("details-json").textContent = JSON.stringify(submission, null, 2);
   $("details").hidden = false;
 }
@@ -497,10 +605,9 @@ function renderDetails(submission) {
 
 const RULES = {
   daily_quota: ["Submissions per day", String],
-  daily_failed_quota: ["Failed ones per day that do not count", String],
   quota_time_zone: ["A day starts at midnight in", String],
   max_upload_mib: ["Largest upload", (v) => `${v} MiB`],
-  evaluation_timeout_seconds: ["Time for the whole evaluation", (v) => `${decimal(v / 3600)} h`],
+  episode_timeout_seconds: ["Time per episode", (v) => `${decimal(v / 60)} min`],
   init_fuel: ["Fuel for init", fuel],
   step_fuel: ["Fuel per step", fuel],
   memory_bytes: ["Memory", (v) => `${decimal(v / 2 ** 30)} GiB`],
@@ -512,9 +619,9 @@ const RULES = {
 function renderRules(rules) {
   const list = $("rules");
   list.replaceChildren();
-  const flat = Object.entries(rules || {}).flatMap(([key, value]) => (value && typeof value === "object" ? Object.entries(value) : [[key, value]]));
+  const flat = Object.entries(rules || {}).filter(([key]) => !["is_admin", "pause_message", "team_name", "evaluation_hashes"].includes(key))
+    .flatMap(([key, value]) => (value && typeof value === "object" ? Object.entries(value) : [[key, value]]));
   for (const [key, value] of flat) {
-    if (key === "is_admin" || key === "pause_message" || key === "team_name") continue;
     const [label, format] = RULES[key] || [key, String];
     list.append(node("dt", label), node("dd", isNumber(value) ? format(value) : String(value)));
   }
@@ -540,6 +647,10 @@ $("pause-form").addEventListener("submit", (event) => {
   setPause($("pause-message").value);
 });
 $("resume-button").addEventListener("click", () => setPause(null));
+$("evaluation-form").addEventListener("submit", saveEvaluations);
+$("evaluation-fill").addEventListener("click", () => updateEvaluations("evaluations/schedule", "POST", {}));
+$("evaluation-preset").addEventListener("change", renderAdminButtons);
+$("schedule-form").addEventListener("submit", scheduleSubmission);
 $("refresh").addEventListener("click", () => {
   retryMs = POLL_MS;
   refresh();
