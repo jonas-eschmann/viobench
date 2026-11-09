@@ -16,6 +16,24 @@ python -m viobench.tools.server.worker &                        # exactly one wo
 uvicorn viobench.tools.server.app:app --host 0.0.0.0 --port 8000
 ```
 
+To seed a fresh local server that is already running with its worker, activate the Python environment and run
+[`seed.sh`](seed.sh) from the directory containing `server-data`. For example, from the parent project directory:
+
+```bash
+bash viobench/viobench/tools/server/seed.sh baselines
+```
+
+It creates `participant`, `baseline` (unlimited uploads), and `admin`, prints their tokens, and uploads
+every `*.wasm` in the given directory through the baseline account. Labels are filenames without `.wasm`.
+The directory defaults to `./baselines`; set `SERVER_URL` to override `http://localhost:8000`.
+Account creation uses the existing `python -m viobench.tools.server.teams add` CLI; uploads use curl.
+The script does not inspect, reset or edit the database directly. It keeps the current working directory, so the
+CLI uses `./server-data` (or `VIOBENCH_SERVER_DIR`, if set), just like the app and worker.
+The fixed tokens are `test-participant`, `test-baseline`, and `test-admin`, respectively; they stay the same across
+fresh database setups. These predictable credentials are for local testing only. An existing token causes an error;
+the script does not replace or reuse an existing account.
+Uploads join the worker queue; on an error it stops and leaves any accounts/uploads already created intact.
+
 The current evaluation set is stored as an ordered JSON list in SQLite's `submission_control.evaluation_hashes`,
 initially the public set from [`viobench.episodes`](../../episodes/__init__.py).
 The `public+private-10` preset combines all public episodes with the first ten entries of the neutrally labeled
@@ -55,6 +73,8 @@ and uses the API below.
 Accounts have one type: `test` (the default), `participant`, `baseline`, or `admin`. Use `teams add --type participant`
 for real participants. `--unlimited` independently removes the daily quota; for example,
 `python -m viobench.tools.server.teams add --unlimited debug` creates an unlimited test account.
+Tokens are random by default. For a single test account, `teams add --token test-participant --type participant participant`
+supplies a fixed token. Explicit tokens use ASCII letters, digits, `_` and `-`; they must be nonempty and unique.
 
 Create an admin account with the same token system:
 

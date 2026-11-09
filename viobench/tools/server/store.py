@@ -5,6 +5,7 @@ admin accounts can see every team's submissions and pause new uploads."""
 import hashlib
 import json
 import os
+import re
 import secrets
 import shutil
 import sqlite3
@@ -119,14 +120,21 @@ class Store:
 
     # --- teams ----------------------------------------------------------------------------------------------
 
-    def add_team(self, name, team_type="test", unlimited=False):
-        """Create an account and return its token. `unlimited` affects quotas only."""
+    def add_team(self, name, team_type="test", unlimited=False, *, token=None):
+        """Create an account with a random or explicit token. `unlimited` affects quotas only."""
         if team_type not in TEAM_TYPES:
             raise ValueError(f"account type must be one of: {', '.join(TEAM_TYPES)}")
-        token = secrets.token_urlsafe(TOKEN_BYTES)
-        with self._connect() as connection:
-            connection.execute("INSERT INTO teams (token, name, created, unlimited, type) VALUES (?, ?, ?, ?, ?)",
-                               (token, name, time.time(), unlimited, team_type))
+        token = secrets.token_urlsafe(TOKEN_BYTES) if token is None else token
+        if not isinstance(token, str) or re.fullmatch(r"[A-Za-z0-9_-]+", token) is None:
+            raise ValueError("token must be nonempty and contain only ASCII letters, digits, '_' or '-'")
+        try:
+            with self._connect() as connection:
+                connection.execute("INSERT INTO teams (token, name, created, unlimited, type) VALUES (?, ?, ?, ?, ?)",
+                                   (token, name, time.time(), unlimited, team_type))
+        except sqlite3.IntegrityError as error:
+            if error.sqlite_errorcode != sqlite3.SQLITE_CONSTRAINT_UNIQUE:
+                raise
+            raise ValueError("token already belongs to a team") from error
         return token
 
     def update_team(self, token, *, team_type):

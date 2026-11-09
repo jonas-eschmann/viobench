@@ -215,6 +215,74 @@ def test_cli_creates_and_lists_account_types(api, monkeypatch, capsys, flags, ki
     assert ("(unlimited)" in listed) is unlimited
 
 
+def test_explicit_tokens_are_repeatable_across_fresh_stores_and_defaults_stay_random(tmp_path):
+    stores = [Store(tmp_path / name) for name in ("first", "second")]
+    for store in stores:
+        assert store.add_team("fixed", token="fixed_TOKEN-09") == "fixed_TOKEN-09"
+        assert store.is_team("fixed_TOKEN-09")
+    random_tokens = [stores[0].add_team("random") for _ in range(2)]
+    assert len(set(random_tokens)) == 2
+    assert all(re.fullmatch(r"[A-Za-z0-9_-]{32}", token) for token in random_tokens)
+
+
+@pytest.mark.parametrize("token", ["", "has space", "naïve", "slash/value", "line\nbreak"])
+def test_invalid_explicit_tokens_create_no_accounts(api, token):
+    _, store = api
+    before = store.teams()
+    with pytest.raises(ValueError):
+        store.add_team("invalid", token=token)
+    assert store.teams() == before
+
+
+def test_fixed_tokens_authenticate_with_their_configured_roles_and_allowances(api):
+    client, store = api
+    for kind in ("participant", "baseline", "admin"):
+        token = f"test-{kind}"
+        assert store.add_team(kind, team_type=kind, unlimited=kind == "baseline", token=token) == token
+        headers = {"Authorization": f"Bearer {token}"}
+        config = client.get("/config", headers=headers)
+        assert config.status_code == 200 and config.json()["team_type"] == kind
+        assert config.json()["allowance"]["unlimited"] is (kind == "baseline")
+        upload = client.post("/submissions", headers=headers, files={"file": ("solution.wasm", MODULE)})
+        assert upload.status_code == (403 if kind == "admin" else 201)
+    assert client.post("/submissions", headers={"Authorization": "Bearer test-baseline"},
+                       files={"file": ("again.wasm", MODULE)}).status_code == 201
+    assert client.post("/submissions", headers={"Authorization": "Bearer test-participant"},
+                       files={"file": ("again.wasm", MODULE)}).status_code == 429
+
+
+def test_cli_explicit_token_is_printed_and_collision_never_updates_account(api, monkeypatch, capsys):
+    _, store = api
+    monkeypatch.setattr(teams, "Store", lambda: store)
+    monkeypatch.setattr(sys, "argv", ["teams", "add", "--type", "baseline", "--unlimited", "--token", "fixed-token", "reference"])
+    teams.main()
+    assert capsys.readouterr().out.split() == ["fixed-token", "reference"]
+    before = store.teams()
+    assert before[-1] == ("fixed-token", "reference", True, "baseline")
+    with pytest.raises(ValueError, match="token already"):
+        store.add_team("replacement", team_type="admin", token="fixed-token")
+    assert store.teams() == before
+    monkeypatch.setattr(sys, "argv", ["teams", "add", "--type", "admin", "--token", "fixed-token", "replacement"])
+    with pytest.raises(SystemExit) as error:
+        teams.main()
+    output = capsys.readouterr()
+    assert error.value.code == 2 and "token already" in output.err
+    assert "Traceback" not in output.err and output.out == "" and store.teams() == before
+
+
+@pytest.mark.parametrize("arguments", [["--token", "new-token", "first", "second"], ["--token", "bad token", "first"]])
+def test_cli_invalid_explicit_token_request_creates_no_accounts(api, monkeypatch, capsys, arguments):
+    _, store = api
+    before = store.teams()
+    monkeypatch.setattr(teams, "Store", lambda: store)
+    monkeypatch.setattr(sys, "argv", ["teams", "add", *arguments])
+    with pytest.raises(SystemExit) as error:
+        teams.main()
+    output = capsys.readouterr()
+    assert error.value.code == 2 and "token" in output.err and "Traceback" not in output.err
+    assert output.out == "" and store.teams() == before
+
+
 def test_invalid_account_type_is_rejected(api, monkeypatch, capsys):
     _, store = api
     before = store.teams()
