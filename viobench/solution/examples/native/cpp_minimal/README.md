@@ -1,6 +1,8 @@
 # cpp_minimal
 
-The ABI in C++ without the Python runtime: about 40 KB, a few thousand fuel units of overhead per step.
+The smallest valid C++ baseline: ignores the config, image and IMU and writes only the identity pose and zero twist
+(all 13 required output values). It has no logging, frame copies, sensor processing or persistent state.
+Use `viobench check` to measure the per-step fuel for this constant output; initialization fuel is reported separately.
 
 ```bash
 viobench bundle <this directory> -o solution.wasm

@@ -657,8 +657,62 @@ function logTicks(min, max) {
   return [...ticks, max];
 }
 
+function comparisonTooltip(container, chart) {
+  const tooltip = node("div", null, "comparison-tooltip");
+  tooltip.id = "comparison-tooltip";
+  tooltip.setAttribute("role", "tooltip");
+  tooltip.hidden = true;
+  container.append(tooltip);
+  let activeMark = null, hideTimer = null;
+  const hide = () => {
+    clearTimeout(hideTimer);
+    if (activeMark) activeMark.removeAttribute("aria-describedby");
+    activeMark = null;
+    tooltip.hidden = true;
+  };
+  const leave = () => {
+    if (document.activeElement !== activeMark) hideTimer = setTimeout(hide, 150);
+  };
+  tooltip.addEventListener("pointerenter", () => clearTimeout(hideTimer));
+  tooltip.addEventListener("pointerleave", leave);
+  return (mark, point, onFrontier, canOpen) => {
+    const show = () => {
+      hide();
+      activeMark = mark;
+      const metrics = node("dl");
+      metrics.append(node("dt", "Mean Sim(3) ATE"), node("dd", `${Number(point.sim3_ate_rmse_mean.toPrecision(6))} m`),
+                     node("dt", "Max fuel/frame"), node("dd", point.fuel_per_frame_max.toLocaleString()));
+      tooltip.replaceChildren(node("strong", point.label || point.id),
+        node("div", `${point.team_name} · ${point.own ? "Your submission" : "Baseline"}${onFrontier ? " · Pareto frontier" : ""}`, "hint"), metrics);
+      if (canOpen) tooltip.append(node("div", "Click the point or press Enter for details.", "hint"));
+      mark.setAttribute("aria-describedby", tooltip.id);
+      tooltip.hidden = false;
+      const bounds = container.getBoundingClientRect(), plot = chart.getBoundingClientRect();
+      const target = mark.getBoundingClientRect(), card = tooltip.getBoundingClientRect();
+      const gap = 8;
+      // Prefer above/right of the point; flip at the edges and stay in the viewport.
+      let left = target.right + gap;
+      if (left + card.width > plot.right) left = target.left - card.width - gap;
+      left = Math.max(plot.left, Math.min(left, plot.right - card.width));
+      let top = target.top - card.height - gap;
+      if (top < Math.max(gap, plot.top)) top = target.bottom + gap;
+      top = Math.max(gap, Math.min(top, window.innerHeight - card.height - gap));
+      tooltip.style.left = `${left - bounds.left}px`;
+      tooltip.style.top = `${top - bounds.top}px`;
+    };
+    mark.addEventListener("pointerenter", show);
+    mark.addEventListener("pointerleave", leave);
+    mark.addEventListener("focus", show);
+    mark.addEventListener("blur", hide);
+  };
+}
+
 function renderComparison(comparison) {
   const container = $("comparison-charts");
+  const key = JSON.stringify([comparison, config.team_type, config.evaluation_hashes]);
+  // Polling unchanged data must not interrupt hovering or keyboard focus.
+  if (container.childElementCount && container.dataset.comparison === key) return;
+  container.dataset.comparison = key;
   container.replaceChildren();
   if (JSON.stringify(comparison.evaluation_hashes) !== JSON.stringify(config.evaluation_hashes)) {
     container.append(node("p", "The evaluation set changed. Comparison will update on the next refresh.", "hint"));
@@ -698,7 +752,7 @@ function renderComparison(comparison) {
   const svgPoints = (coordinates) => coordinates.map(([used, error]) => `${x(used)},${y(error)}`).join(" ");
   const chart = svgNode("svg", {viewBox: "0 0 680 340", class: "comparison-chart", role: "group",
                                 "aria-label": "Current set: mean Sim(3) ATE versus maximum fuel per frame, both on logarithmic scales. Lower is better."});
-  chart.append(svgNode("title", {}, "Current set: your submissions and baselines"));
+  const attachTooltip = comparisonTooltip(container, chart);
   for (const tick of logTicks(minX, maxX)) {
     const px = x(tick);
     chart.append(svgNode("line", {x1: px, y1: 24, x2: px, y2: 280, class: "comparison-grid"}),
@@ -721,7 +775,7 @@ function renderComparison(comparison) {
       chart.append(svgNode("polyline", {points: svgPoints(steps(ids, maxY)), class: className}));
     }
   }
-  const rows = [];
+  const rows = [], ownMarks = [];
   for (const point of points) {
     const name = point.label || point.id;
     const onFrontier = frontierIds.has(point.id);
@@ -729,9 +783,10 @@ function renderComparison(comparison) {
     const canOpen = point.own || config.team_type === "admin";
     const mark = svgNode("g", {class: `comparison-point ${point.own ? "own" : "baseline"}${onFrontier ? " frontier" : ""}`,
                                role: canOpen ? "button" : "img", tabindex: 0, "aria-label": description});
-    mark.append(svgNode("title", {}, description), point.team_type === "baseline" ?
+    mark.append(svgNode("circle", {cx: x(point.fuel_per_frame_max), cy: y(point.sim3_ate_rmse_mean), r: 12, class: "comparison-hit"}), point.team_type === "baseline" ?
                 svgNode("rect", {x: x(point.fuel_per_frame_max) - 5, y: y(point.sim3_ate_rmse_mean) - 5, width: 10, height: 10}) :
                 svgNode("circle", {cx: x(point.fuel_per_frame_max), cy: y(point.sim3_ate_rmse_mean), r: 5}));
+    attachTooltip(mark, point, onFrontier, canOpen);
     let button = "";
     if (canOpen) {
       mark.addEventListener("click", () => showDetails(point.id, true));
@@ -746,10 +801,15 @@ function renderComparison(comparison) {
       button.setAttribute("aria-label", `Details of ${point.team_name}: ${name}`);
       button.addEventListener("click", () => showDetails(point.id, true));
     }
-    if (point.fuel_per_frame_max <= maxX) chart.append(mark);
+    if (point.fuel_per_frame_max <= maxX) {
+      if (point.own) ownMarks.push(mark);
+      else chart.append(mark);
+    }
     rows.push([point.team_name, name, point.own ? `Yours (${point.team_type})` : "Baseline",
                point.fuel_per_frame_max, point.sim3_ate_rmse_mean, button]);
   }
+  // SVG paints in document order: own submissions stay above baselines and all frontiers.
+  chart.append(...ownMarks);
   container.append(chart);
   if (comparison.claimed_area === null) {
     container.append(node("p", "Claimed area is unavailable until baseline results are available for the current set.", "hint"));
@@ -964,6 +1024,13 @@ function renderRules(rules) {
 
 window.addEventListener("error", () => notice("Something went wrong on this page: reloading it should help."));
 window.addEventListener("unhandledrejection", () => notice("Something went wrong on this page: reloading it should help."));
+document.addEventListener("keydown", (event) => {
+  const tooltip = $("comparison-tooltip");
+  if (event.key === "Escape" && tooltip && !tooltip.hidden) {
+    tooltip.hidden = true;
+    $("comparison-charts").querySelector("[aria-describedby]")?.removeAttribute("aria-describedby");
+  }
+});
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden && waiting && token !== null) {
     waiting = false;

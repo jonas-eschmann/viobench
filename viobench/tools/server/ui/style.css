@@ -104,6 +104,7 @@ th { color: var(--muted); font-weight: 600; }
 
 .comparison-legend { display: flex; flex-wrap: wrap; gap: 1rem; color: var(--muted); }
 .own-key { color: var(--ok); }
+#comparison-charts { position: relative; }
 .comparison-chart { display: block; width: 100%; max-width: 48rem; height: auto; overflow: visible; }
 .comparison-chart text { fill: var(--muted); font: 13px system-ui, sans-serif; }
 .comparison-grid { stroke: var(--line); stroke-width: 1; }
@@ -115,7 +116,24 @@ th { color: var(--muted); font-weight: 600; }
 .comparison-point.baseline { fill: var(--muted); }
 .comparison-point.frontier { stroke: var(--fg); stroke-width: 2.5; }
 .comparison-point[role=button] { cursor: pointer; }
-.comparison-point[role=button]:hover, .comparison-point:focus { stroke: var(--fg); stroke-width: 3; outline: none; }
+.comparison-point:hover, .comparison-point:focus { stroke: var(--fg); stroke-width: 3; outline: none; }
+.comparison-hit { fill: transparent; stroke: none; pointer-events: all; }
+.comparison-tooltip {
+  position: absolute;
+  z-index: 1;
+  width: max-content;
+  max-width: min(22rem, 100%);
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--bg);
+  box-shadow: 0 3px 14px #0003;
+  overflow-wrap: anywhere;
+  font-size: 0.9rem;
+}
+.comparison-tooltip strong { display: block; }
+.comparison-tooltip dl { grid-template-columns: minmax(0, 1fr) max-content; margin: 0.5rem 0; gap: 0.25rem 1rem; }
+.comparison-tooltip dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
 .comparison-values { margin: 0.5rem 0 1rem; }
 .comparison-values td:first-child, .comparison-values td:nth-child(2) { white-space: normal; overflow-wrap: anywhere; }
 
