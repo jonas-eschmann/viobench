@@ -113,12 +113,12 @@ def trace(solution, episode):
         yield Step(index, float(t), frame, imu, state[:abi.POSE_VALUES], state[abi.POSE_VALUES:], seconds)
 
 
-def run(solution, dataset, output_dir=None, max_episodes=None, log=print):
-    """Runs the solution over a Dataset; returns [(episode, estimates (N, 13), TrajectoryMetrics)]. A failing step raises."""
-    from .run import as_dataset
+def run(solution, sources, output_dir=None, max_episodes=None, log=print):
+    """Runs the solution over episodes; returns [(episode, estimates (N, 13), TrajectoryMetrics)]. A failing step raises."""
+    from .run import as_episodes
 
     results = []
-    for episode in islice(as_dataset(dataset), max_episodes):  # never asks for one more: it may be a download
+    for episode in islice(as_episodes(sources), max_episodes):  # never asks for one more: it may be a download
         estimates = np.empty((episode.num_frames, abi.STATE_VALUES))
         seconds = []
         for step in trace(solution, episode):
@@ -131,12 +131,12 @@ def run(solution, dataset, output_dir=None, max_episodes=None, log=print):
             from .video import write_video
 
             log(f"video: {write_video(episode, estimates, directory / 'trajectory.mp4')}")
-        log(f"{episode.dataset}/{episode.key}: Sim(3) ATE {metrics.sim3_ate_rmse:.3f} m  RPE {metrics.rpe_translation_rmse:.3f} m/1 s  ATE {metrics.ate_rmse:.3f} m  "
+        log(f"{episode.key}: Sim(3) ATE {metrics.sim3_ate_rmse:.3f} m  RPE {metrics.rpe_translation_rmse:.3f} m/1 s  ATE {metrics.ate_rmse:.3f} m  "
             f"rot {np.degrees(metrics.rotation_rmse):.1f} deg  vel {metrics.velocity_rmse:.3f} m/s  filled {metrics.filled_frames}  "
             f"{np.median(seconds) * 1e3:.1f} ms/frame (host, no fuel)")
         results.append((episode, estimates, metrics))
     if not results:
-        raise ValueError("the dataset yielded no episodes")
+        raise ValueError("no episodes to evaluate")
     return results
 
 
@@ -150,8 +150,8 @@ def add_arguments(parser):
     parser.add_argument("-o", "--output", help="write estimate.tum, twist.txt and trajectory.mp4 per episode under this directory")
 
 
-def run_arguments(arguments, dataset):
-    """`viobench debug` over dataset (the episodes its `datasets` argument names)."""
+def run_arguments(arguments, episodes):
+    """`viobench debug` over the requested episodes."""
     solution = PythonSolution(arguments.solution)
-    run(solution, dataset, output_dir=arguments.output, max_episodes=arguments.max_episodes)
+    run(solution, episodes, output_dir=arguments.output, max_episodes=arguments.max_episodes)
     return 0

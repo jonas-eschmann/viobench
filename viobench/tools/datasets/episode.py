@@ -20,7 +20,7 @@ STORAGE_RESOLUTION = (640, 480)
 def validate_storage_resolution(resolution):
     if tuple(resolution) != STORAGE_RESOLUTION:
         width, height = resolution
-        raise ValueError(f"episodes must be stored at 640x480, got {width}x{height}; regenerate the dataset at 640x480")
+        raise ValueError(f"episodes must be stored at 640x480, got {width}x{height}; regenerate the episodes at 640x480")
 
 
 class FrameSequence:
@@ -113,10 +113,6 @@ class Episode:
     @property
     def duration(self):
         return float(self.frame_times[-1] - self.frame_times[0])
-
-    @property
-    def dataset(self):
-        return self.meta.get("dataset", "episodes")
 
     @property
     def hash(self):

@@ -37,7 +37,7 @@ ZIP_DATE_TIME = (1980, 1, 1, 0, 0, 0)  # member timestamps are fixed: identical 
 CAM_HEADER = "#timestamp [ns],filename"
 IMU_HEADER = "#timestamp [ns],w_RS_S_x [rad s^-1],w_RS_S_y [rad s^-1],w_RS_S_z [rad s^-1],a_RS_S_x [m s^-2],a_RS_S_y [m s^-2],a_RS_S_z [m s^-2]"
 GT_HEADER = "#timestamp, p_RS_R_x [m], p_RS_R_y [m], p_RS_R_z [m], q_RS_w [], q_RS_x [], q_RS_y [], q_RS_z []"
-READ_ONLY_META = ("dataset", "path", "origin_ns", "hash")  # set by read_episode, not stored in the manifest's meta
+READ_ONLY_META = ("path", "origin_ns", "hash")  # set by read_episode, not stored in the manifest's meta
 
 
 def _nanoseconds(seconds, origin_ns=0):
@@ -233,7 +233,7 @@ def _read_csv(data):
     return stamps, rows
 
 
-def read_episode(path, frames="lazy", dataset=None, digest=None):
+def read_episode(path, frames="lazy", digest=None):
     """path: an episode archive or an unzipped episode directory.
     frames: "lazy" (decode PNGs on demand, default), "memory" (load everything), "none" (metadata only).
     digest: the archive's sha1 when the caller has it (a conta reference); otherwise computed for an archive."""
@@ -283,7 +283,6 @@ def read_episode(path, frames="lazy", dataset=None, digest=None):
             finally:
                 tree.close()
     meta = dict(manifest["meta"])
-    meta["dataset"] = dataset or path.parent.name
     meta["path"] = str(path)
     meta["origin_ns"] = origin_ns
     meta["hash"] = digest or (archive_hash(path) if path.is_file() else None)
@@ -311,12 +310,11 @@ def list_episodes(root):
 
 
 def episodes(roots, frames="lazy"):
-    """The file-system Dataset provider: yields the episodes under each root (dataset name = the root directory's name)."""
+    """Yield episodes under each file-system root."""
     for root in ([roots] if isinstance(roots, (str, Path)) else roots):
         root = Path(root)
         paths = list_episodes(root)
         if not paths:
             raise FileNotFoundError(f"no episodes under {root}")
-        name = root.parent.name if paths == [root] else root.name
         for path in paths:
-            yield read_episode(path, frames=frames, dataset=name)
+            yield read_episode(path, frames=frames)

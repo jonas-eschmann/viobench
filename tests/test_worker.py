@@ -17,6 +17,7 @@ import pytest
 
 from viobench.tools.datasets.storage import write_episode
 from viobench.tools.server import worker
+from viobench.tools.server.evaluations import EPISODE_FIELDS
 from tests.test_datasets import synthetic_episode
 
 MODULE = b"\0asm\x01\0\0\0"
@@ -24,11 +25,11 @@ HASH = "a" * 40
 
 
 def report(completed=True, hashes=(HASH,)):
-    episodes = [{field: 0 for field in worker.EPISODE_FIELDS} | {
-        "hash": digest, "dataset": "val", "completed": completed, "frames": 2, "frames_attempted": 2,
+    episodes = [{field: 0 for field in EPISODE_FIELDS} | {
+        "hash": digest, "completed": completed, "frames": 2, "frames_attempted": 2,
         "fuel_total": 30, "fuel_per_frame_max": 20, "metrics": {}, "failure": "guest text", "stderr_tail": "guest text"}
                 for digest in hashes]
-    return {"summary": {"overall": {"episodes": len(hashes), "completed": completed}, "datasets": {}}, "episodes": episodes}
+    return {"summary": {"episodes": len(hashes), "completed": completed}, "episodes": episodes}
 
 
 @pytest.fixture
@@ -276,7 +277,7 @@ def test_worker_evaluates_one_episode_and_keeps_guest_failures_for_aggregation(q
     [(job_id, result, error)] = store.finished
     assert job_id == job["id"] and error is None
     assert result["hash"] == HASH and result["completed"] is completed
-    assert set(result) == set(worker.EPISODE_FIELDS) and "guest text" not in json.dumps(result)
+    assert set(result) == set(EPISODE_FIELDS) and "guest text" not in json.dumps(result)
 
 
 @pytest.mark.parametrize("hashes", [[], ["b" * 40], [HASH, HASH], [None]])
@@ -353,10 +354,12 @@ def test_worker_resolves_cold_cache_and_continues_after_missing_episode(tmp_path
     assert "initial" not in result["jobs"][0]
     assert result["jobs"][0]["started"] is not None and result["jobs"][0]["finished"] is not None
     assert result["results"]["episodes"][0]["hash"] == digest
+    assert '"dataset"' not in detail.text and '"datasets"' not in detail.text
     fuel = np.load(store.report_dir(submission_id, digest) / "logs" / digest / "fuel.npy", allow_pickle=False)
-    overall = result["results"]["summary"]["overall"]
-    assert len(fuel) == overall["frames_attempted"] == 3
-    assert int(fuel.sum()) == overall["fuel_total"]
-    assert float(np.median(fuel)) == overall["fuel_per_frame_median"]
-    assert client.get("/submissions").json()[0]["overall"] == overall
+    summary = result["results"]["summary"]
+    assert "overall" not in summary
+    assert len(fuel) == summary["frames_attempted"] == 3
+    assert int(fuel.sum()) == summary["fuel_total"]
+    assert float(np.median(fuel)) == summary["fuel_per_frame_median"]
+    assert client.get("/submissions").json()[0]["summary"] == summary
     assert store.claim_next() is None

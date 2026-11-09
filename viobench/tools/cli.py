@@ -5,7 +5,7 @@ solution     init                              new workspace: an example solutio
              build-runtime                     (re)build the workspace's Python runtime; bundle does when it is missing
 runner       check, evaluate, leaderboard      run a module on synthetic frames / on episodes (default: the public set); aggregate reports
              debug, score                      run a Python solution in-process (debugger-friendly); score an estimate
-datasets     simulate, pack, feed              write episodes with HyperDrone (GPU); re-pack episodes as archives; export raw inputs for native debugging
+episodes     simulate, pack, feed              write episodes with HyperDrone (GPU); re-pack episodes as archives; export raw inputs for native debugging
 
 The CLI is the one host component that also reaches into the guest side (for `bundle`, `init` and the builds); the
 runner library never does.
@@ -113,19 +113,19 @@ def command_check(arguments):
 
 
 def run_on_episodes(arguments, function):
-    """function(dataset) for the episodes that the `datasets` argument names (`datasets.sources.add_argument`); 1, after
+    """function(episodes) for the episodes that the `episodes` argument names (`datasets.sources.add_argument`); 1, after
     saying why, for a source that is malformed or missing (before function runs) or cannot be downloaded (when read)."""
     import conta
 
     from .datasets.sources import from_arguments
 
     try:
-        dataset = from_arguments(arguments.datasets)
+        episodes = from_arguments(arguments.episodes)
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
     try:
-        return function(dataset)
+        return function(episodes)
     except conta.ContaError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
@@ -134,22 +134,22 @@ def run_on_episodes(arguments, function):
 def command_evaluate(arguments):
     from .runner.run import evaluate
 
-    def run(dataset):
-        result = evaluate(arguments.wasm, dataset, output_dir=arguments.output, max_episodes=arguments.max_episodes)
-        summary = result["summary"]["overall"]
-        print(f"overall: {summary['completed']}/{summary['episodes']} episodes completed, Sim(3) ATE median {summary['sim3_ate_rmse_median']:.3f} m, "
-              f"fuel/frame max (all datasets) {summary['fuel_per_frame_max']:,.0f} "
+    def run(episodes):
+        result = evaluate(arguments.wasm, episodes, output_dir=arguments.output, max_episodes=arguments.max_episodes)
+        summary = result["summary"]
+        print(f"summary: {summary['completed']}/{summary['episodes']} episodes completed, Sim(3) ATE mean {summary['sim3_ate_rmse_mean']:.3f} m, "
+              f"fuel/frame max {summary['fuel_per_frame_max']:,.0f} "
               f"(mean {summary['fuel_per_frame_mean']:,.0f}, median {summary['fuel_per_frame_median']:,.0f}, "
               f"p95 {summary['fuel_per_frame_p95']:,.0f}, p99 {summary['fuel_per_frame_p99']:,.0f})")
         return 0 if summary["completed"] == summary["episodes"] else 1
 
-    return run_on_episodes(arguments, lambda dataset: run_with_large_stack(lambda: run(dataset)))
+    return run_on_episodes(arguments, lambda episodes: run_with_large_stack(lambda: run(episodes)))
 
 
 def command_debug(arguments):
     from .runner.direct import run_arguments
 
-    return run_on_episodes(arguments, lambda dataset: run_arguments(arguments, dataset))  # plain Python on the main thread: breakpoint() and Ctrl-C behave
+    return run_on_episodes(arguments, lambda episodes: run_arguments(arguments, episodes))  # plain Python on the main thread: breakpoint() and Ctrl-C behave
 
 
 def command_score(arguments):
@@ -185,13 +185,13 @@ def command_leaderboard(arguments):
     return 0
 
 
-# --- datasets --------------------------------------------------------------------------------------------------
+# --- episodes --------------------------------------------------------------------------------------------------
 
 def command_simulate(arguments):
     import tempfile
     from pathlib import Path
 
-    from .datasets.generate.simulation import dataset_from_arguments
+    from .datasets.generate.simulation import episodes_from_arguments
     from .datasets.storage import write_episode
 
     output = Path(arguments.output)
@@ -199,7 +199,7 @@ def command_simulate(arguments):
     written = 0
     try:
         with tempfile.TemporaryDirectory(prefix=".viobench-simulate-", dir=output) as scratch:  # the video before it goes into the archive
-            for episode in dataset_from_arguments(arguments):
+            for episode in episodes_from_arguments(arguments):
                 attachments = {}
                 if not arguments.no_video:
                     from .runner.video import write_video
@@ -263,7 +263,7 @@ def command_feed(arguments):
 def main(argv=None):
     from ..solution.workspace import EXAMPLES
     from .datasets.generate.simulation import add_simulation_arguments
-    from .datasets.sources import add_argument as add_datasets_argument
+    from .datasets.sources import add_argument as add_episodes_argument
     from .runner.direct import add_arguments as add_debug_arguments
 
     parser = argparse.ArgumentParser(prog="viobench", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -301,7 +301,7 @@ def main(argv=None):
 
     evaluate = commands.add_parser("evaluate", help="[runner] run a module over episodes and write report.json")
     evaluate.add_argument("wasm")
-    add_datasets_argument(evaluate)
+    add_episodes_argument(evaluate)
     evaluate.add_argument("-o", "--output", help="report directory; also write trajectory.mp4 per episode (default: ./report-<name>, without video)")
     evaluate.add_argument("--max-episodes", type=int)
     evaluate.set_defaults(function=command_evaluate)
@@ -321,18 +321,18 @@ def main(argv=None):
     leaderboard.add_argument("--plot", help="write a Sim(3)-ATE-vs-max-fuel PNG here (needs matplotlib)")
     leaderboard.set_defaults(function=command_leaderboard)
 
-    simulate = commands.add_parser("simulate", help="[datasets] write episodes generated with HyperDrone (needs an NVIDIA GPU)")
+    simulate = commands.add_parser("simulate", help="[episodes] write episodes generated with HyperDrone (needs an NVIDIA GPU)")
     simulate.add_argument("-o", "--output", default="datasets", help="directory that receives one .zip per episode, with trajectory.mp4 inside by default (default: datasets)")
     simulate.add_argument("--no-video", action="store_true", help="skip the camera and ground-truth trajectory MP4 in each episode")
     add_simulation_arguments(simulate)
     simulate.set_defaults(function=command_simulate)
 
-    pack = commands.add_parser("pack", help="[datasets] write episodes (archives or unzipped directories) as one .zip each, e.g. to convert sets made before the archive format")
+    pack = commands.add_parser("pack", help="[episodes] write episodes (archives or unzipped directories) as one .zip each, e.g. to convert sets made before the archive format")
     pack.add_argument("episodes", nargs="+", help="episodes or directories of episodes")
     pack.add_argument("-o", "--output", required=True, help="directory that receives one .zip per episode")
     pack.set_defaults(function=command_pack)
 
-    feed = commands.add_parser("feed", help="[datasets] export one episode's inputs as raw files for a native debug build (viobench_debug_main.c)")
+    feed = commands.add_parser("feed", help="[episodes] export one episode's inputs as raw files for a native debug build (viobench_debug_main.c)")
     feed.add_argument("episode", help="episode (.zip or unzipped directory)")
     feed.add_argument("-o", "--output", required=True, help="feed directory")
     feed.add_argument("--resolution", default="x".join(map(str, abi.DEFAULT_RESOLUTION)), choices=[f"{w}x{h}" for w, h in abi.SUPPORTED_RESOLUTIONS],

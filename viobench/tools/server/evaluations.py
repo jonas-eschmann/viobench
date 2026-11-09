@@ -11,6 +11,14 @@ from ..runner.run import summarize
 
 FUEL_FLOOR = 1
 ERROR_FLOOR = 0.001
+EPISODE_FIELDS = ("hash", "frames", "frames_attempted", "duration_s", "completed", "metrics", "fuel_init", "fuel_per_frame_max", "fuel_per_frame_median",
+                  "fuel_per_frame_p95", "fuel_per_frame_p99", "fuel_per_frame_mean", "fuel_total", "wall_init_s", "wall_per_frame_median_ms",
+                  "wall_per_frame_p95_ms")
+
+
+def public_episode(episode):
+    """The episode metrics exposed to teams; no source labels or guest-written text."""
+    return {key: episode[key] for key in EPISODE_FIELDS}
 
 
 def normalize_hashes(values):
@@ -63,7 +71,7 @@ def comparison_for(store, hashes, submissions):
     def valid(value):
         return isinstance(value, (int, float)) and isfinite(value) and value >= 0
 
-    datasets = {}
+    points = []
     for row, jobs in submissions:
         episodes = [jobs[digest]["result"] for digest in hashes if digest in jobs and jobs[digest]["result"] is not None]
         if len(episodes) != len(hashes):
@@ -72,34 +80,27 @@ def comparison_for(store, hashes, submissions):
         if not all(valid(score) for score in scores):
             continue  # never compare an aggregate that silently omitted an unscored episode
         summary = results_for(store, row["id"], hashes, jobs)["summary"]
-        fuel = summary["overall"]["fuel_per_frame_max"]
-        if not valid(fuel):
+        fuel = summary["fuel_per_frame_max"]
+        score = summary["sim3_ate_rmse_mean"]
+        if not valid(fuel) or not valid(score):
             continue
-        for name, values in summary["datasets"].items():
-            score = values["sim3_ate_rmse_median"]
-            if valid(score):
-                datasets.setdefault(name, []).append({
-                    "id": row["id"], "label": row["label"] or row["id"], "team_name": row["team_name"],
-                    "team_type": row["team_type"], "own": bool(row["own"]),
-                    "fuel_per_frame_max": fuel, "sim3_ate_rmse_median": score,
-                })
-    result = []
+        points.append({
+            "id": row["id"], "label": row["label"] or row["id"], "team_name": row["team_name"],
+            "team_type": row["team_type"], "own": bool(row["own"]),
+            "fuel_per_frame_max": fuel, "sim3_ate_rmse_mean": score,
+        })
     fuel_reference = 1.2 * store.config.limits.step_fuel
-    for name, points in sorted(datasets.items()):
-        baselines = [point for point in points if point["team_type"] == "baseline"]
-        coordinates = [(max(point["fuel_per_frame_max"], FUEL_FLOOR), max(point["sim3_ate_rmse_median"], ERROR_FLOOR))
-                       for point in points]
-        baseline_coordinates = [(max(point["fuel_per_frame_max"], FUEL_FLOOR), max(point["sim3_ate_rmse_median"], ERROR_FLOOR))
-                                for point in baselines]
-        error_reference = 1.2 * max(error for _, error in baseline_coordinates) if baselines else None
-        claimed_area = None if error_reference is None else max(
-            0.0, dominated_area(coordinates, fuel_reference, error_reference)
-            - dominated_area(baseline_coordinates, fuel_reference, error_reference))
-        result.append({
-            "name": name, "points": points,
+    baselines = [point for point in points if point["team_type"] == "baseline"]
+    coordinates = [(max(point["fuel_per_frame_max"], FUEL_FLOOR), max(point["sim3_ate_rmse_mean"], ERROR_FLOOR))
+                   for point in points]
+    baseline_coordinates = [(max(point["fuel_per_frame_max"], FUEL_FLOOR), max(point["sim3_ate_rmse_mean"], ERROR_FLOOR))
+                            for point in baselines]
+    error_reference = 1.2 * max(error for _, error in baseline_coordinates) if baselines else None
+    claimed_area = None if error_reference is None else max(
+        0.0, dominated_area(coordinates, fuel_reference, error_reference)
+        - dominated_area(baseline_coordinates, fuel_reference, error_reference))
+    return {"evaluation_hashes": hashes, "fuel_floor": FUEL_FLOOR, "error_floor": ERROR_FLOOR,
+            "fuel_reference": fuel_reference, "points": points,
             "baseline_frontier": [baselines[index]["id"] for index in pareto_front(baseline_coordinates)],
             "frontier": [points[index]["id"] for index in pareto_front(coordinates)],
-            "error_reference": error_reference, "claimed_area": claimed_area,
-        })
-    return {"evaluation_hashes": hashes, "fuel_floor": FUEL_FLOOR, "error_floor": ERROR_FLOOR,
-            "fuel_reference": fuel_reference, "datasets": result}
+            "error_reference": error_reference, "claimed_area": claimed_area}

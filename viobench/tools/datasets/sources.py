@@ -8,9 +8,8 @@ A source is
   and the archive is read in place from there like one on disk.
 
 An episode is its hash, the sha1 of its archive (`Episode.hash`), however it is named: a reference, or a path to the
-archive (hashed when read); an unzipped episode has none. An episode whose hash a set in `viobench.episodes.SETS` lists
-belongs to the dataset of the set's name; any other to the dataset "conta" if referenced, to its directory's name if
-on disk. An existing path wins over a bare hash of the same spelling.
+archive (hashed when read); an unzipped episode has none. Presets in `viobench.episodes.SETS` are named collections of
+hashes, and their descriptions label conta's logs. An existing path wins over a bare hash of the same spelling.
 """
 from pathlib import Path
 
@@ -19,7 +18,6 @@ from .storage import episodes as stored_episodes
 from .storage import read_episode
 
 PREFIX = "conta:"
-UNLISTED_DATASET = "conta"  # the dataset of an episode whose hash no set in viobench.episodes lists
 HEX_DIGITS = frozenset("0123456789abcdef")
 HELP = ("episodes (.zip or unzipped), directories of them, or conta hashes of episode archives (sha1 or conta:<sha1>); "
         "default: the public set (viobench.episodes.public)")
@@ -59,18 +57,18 @@ def resolve(sources):
     sources = _as_list(sources)
     digests = [_classify(source) for source in sources]
     wanted = list(dict.fromkeys(digest for digest in digests if digest is not None))
-    paths = dict(zip(wanted, _resolve_all(wanted, _listed()), strict=True))
+    paths = dict(zip(wanted, _resolve_all(wanted, _references()), strict=True))
     return [Path(source) if digest is None else paths[digest] for source, digest in zip(sources, digests)]
 
 
 def add_argument(parser):
-    """The `datasets` argument of `viobench evaluate` and `viobench debug`: any sources, the public set when none are given."""
-    parser.add_argument("datasets", nargs="*", help=HELP)
+    """The `episodes` argument of `viobench evaluate` and `viobench debug`; default to the public preset."""
+    parser.add_argument("episodes", nargs="*", help=HELP)
 
 
-def from_arguments(datasets, frames="lazy"):
-    """The episodes of the `datasets` argument (add_argument)."""
-    return episodes(datasets or published.public, frames)
+def from_arguments(sources, frames="lazy"):
+    """The episodes of the positional arguments (add_argument)."""
+    return episodes(sources or published.public, frames)
 
 
 def _as_list(sources):
@@ -92,13 +90,9 @@ def _classify(source):
     return digest
 
 
-def _listed():
-    """{sha1: (set name, entry)} over viobench.episodes.SETS; a hash listed in two sets belongs to the first."""
-    listed = {}
-    for name, entries in published.SETS.items():
-        for entry in entries:
-            listed.setdefault(reference_hash(entry), (name, entry))
-    return listed
+def _references():
+    """Catalog references supply log labels when an episode is named only by its hash."""
+    return {entry["hash"]: entry for entries in published.SETS.values() for entry in entries}
 
 
 def _resolve_all(digests, listed):
@@ -107,17 +101,14 @@ def _resolve_all(digests, listed):
         return []
     import conta  # not at the top: urllib and ssl stay out of the CLI's startup
 
-    return [Path(path) for path in conta.resolve_all([listed[digest][1] if digest in listed else digest for digest in digests])]
+    return [Path(path) for path in conta.resolve_all([listed.get(digest, digest) for digest in digests])]
 
 
 def _read(classified, frames):
-    listed = _listed()
+    listed = _references()
     for source, digest in classified:
         if digest is None:
-            for episode in stored_episodes([source], frames=frames):
-                if episode.hash in listed:  # a published archive on disk: its set, as if referenced
-                    episode.meta["dataset"] = listed[episode.hash][0]
-                yield episode
+            yield from stored_episodes([source], frames=frames)
         else:
             [path] = _resolve_all([digest], listed)
-            yield read_episode(path, frames=frames, dataset=listed[digest][0] if digest in listed else UNLISTED_DATASET, digest=digest)
+            yield read_episode(path, frames=frames, digest=digest)

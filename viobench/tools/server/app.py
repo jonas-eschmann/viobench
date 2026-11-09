@@ -1,7 +1,7 @@
 """FastAPI submission server.  Run:  uvicorn viobench.tools.server.app:app --host 0.0.0.0 --port 8000
 
     POST /submissions        multipart: file (the .wasm), label (optional)  -> 201 and the new submission
-    GET  /submissions        the team's submissions (all for admins), newest first, with overall summaries once evaluated
+    GET  /submissions        the team's submissions (all for admins), newest first, with current-set summaries once evaluated
     GET  /submissions/{id}   one of them, with its results once evaluated
     DELETE /submissions/{id} baseline: delete an own submission when none of its jobs is running
     GET  /config             the rules (`server.config`), team name/type and submission pause message
@@ -107,7 +107,7 @@ def submissions(authorization: str | None = Header(default=None)):
     rows = [public(row) for row in get_store().submissions(authenticate(authorization))]
     for row in rows:  # the headline numbers only; GET /submissions/{id} has the rest
         results = row.pop("results")
-        row["overall"] = (results["summary"] or {}).get("overall")
+        row["summary"] = results["summary"]
         row["partial"] = results["partial"]
     return rows
 

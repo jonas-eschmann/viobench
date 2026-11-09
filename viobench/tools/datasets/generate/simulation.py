@@ -215,7 +215,7 @@ def simulate(sim, scenes, episodes, seed=0, camera=nominal_camera, name="sim", l
     episode raises RuntimeError, after yielding what it had.
 
     scenes: {name: reference} (scene_references). camera: how renders become frames (see nominal_camera).
-    name: the episodes' dataset and the prefix of their names, `{name}-{scene}-{index:04d}` by order within the scene;
+    name: the prefix of the episodes' names, `{name}-{scene}-{index:04d}` by order within the scene;
     the round's seed and the flight's slot in it are rendering details and stay in the episode's meta.
     """
     import hyperdrone
@@ -360,7 +360,7 @@ def _run_batch(env, sim, seed, scene_name, camera, name, log, progress=(0, None)
             imu=imu_rows[:, instance, :],
             ground_truth=ground_truth[:, instance, :],
             T_body_camera=T_body_camera,
-            meta={"dataset": name, "source": "hyperdrone", "scene": scene_name, "seed": seed, "instance": instance, "sub_frames": k,
+            meta={"source": "hyperdrone", "scene": scene_name, "seed": seed, "instance": instance, "sub_frames": k,
                   **camera_meta, "spawn": spawns[instance], "hyperdrone": _versions(), "sim": asdict(sim)},
         )
         yield regularize(episode)  # frame 0's window starts before the first IMU sample
@@ -392,8 +392,8 @@ def add_simulation_arguments(parser):
     parser.add_argument("--spool", help="directory for the frames while they render (default: $VIOBENCH_SPOOL or the system temp dir)")
 
 
-def dataset_from_arguments(arguments, camera=nominal_camera, name="sim"):
-    """The Dataset provider configured from add_simulation_arguments() options."""
+def episodes_from_arguments(arguments, camera=nominal_camera, name="sim"):
+    """Episodes configured from add_simulation_arguments() options."""
     sim = SimConfig(instances=min(PARALLEL_FLIGHTS, int(arguments.episodes)), duration_seconds=arguments.duration, waypoints=arguments.waypoints,
                     fov_range=arguments.fov_range, hold_seconds=arguments.hover, spool=arguments.spool, fov=arguments.fov)
     return simulate(sim, scene_references(arguments.scene_names), arguments.episodes, seed=arguments.seed, camera=camera, name=name)

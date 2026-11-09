@@ -14,7 +14,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .config import load as load_config
-from .evaluations import comparison_for, default_hashes, normalize_hashes, presets, results_for
+from .evaluations import comparison_for, default_hashes, normalize_hashes, presets, public_episode, results_for
 
 DEFAULT_DIR = Path(os.environ.get("VIOBENCH_SERVER_DIR", "server-data"))
 TOKEN_BYTES = 24  # a token is 32 base64url characters
@@ -244,7 +244,7 @@ class Store:
         for job_row in connection.execute("SELECT id, episode_hash, status, created, started, finished, result, error "
                                           "FROM evaluation_jobs WHERE submission_id = ? ORDER BY id", (submission_id,)):
             job = dict(job_row)
-            job["result"] = json.loads(job["result"]) if job["result"] else None
+            job["result"] = public_episode(json.loads(job["result"])) if job["result"] else None
             job["selected"] = job["episode_hash"] in hashes
             jobs[job["episode_hash"]] = job
         return jobs

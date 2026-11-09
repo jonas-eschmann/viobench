@@ -12,6 +12,7 @@ pytest.importorskip("httpx")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
+from viobench.tools.runner.run import fuel_statistics  # noqa: E402
 from viobench.tools.server import app as server  # noqa: E402
 from viobench.tools.server import teams  # noqa: E402
 from viobench.tools.server.store import Store  # noqa: E402
@@ -31,8 +32,8 @@ def api(tmp_path, monkeypatch):
 
 
 def results(rpe):
-    return {"hash": "a" * 40, "dataset": "val", "completed": True, "frames": 1, "frames_attempted": 1,
-            "duration_s": 1, "fuel_per_frame_median": 4.1e6, "wall_per_frame_median_ms": 1,
+    return {"hash": "a" * 40, "completed": True, "frames": 1, **fuel_statistics(np.array([4.1e6])),
+            "duration_s": 1, "fuel_init": 0, "wall_init_s": 0, "wall_per_frame_median_ms": 1, "wall_per_frame_p95_ms": 1,
             "metrics": {"sim3_ate_rmse": 0.2, "rpe_translation_rmse": rpe, "rpe_rotation_rmse": 0, "ate_rmse": 0, "rotation_rmse": 0,
                         "velocity_rmse": 0, "angular_velocity_rmse": 0, "drift_per_metre": float("inf")}}
 
@@ -70,7 +71,7 @@ def test_non_finite_metrics_come_back_as_null(api):
     finish_submission(store, created.json()["id"], results=results(NAN))
     [listed] = client.get("/submissions").json()
     assert listed["status"] == "done" and "results" not in listed
-    assert listed["overall"]["rpe_translation_rmse_median"] is None and listed["overall"]["fuel_per_frame_median"] == 4.1e6
+    assert listed["summary"]["rpe_translation_rmse_median"] is None and listed["summary"]["fuel_per_frame_median"] == 4.1e6
     detail = client.get(f"/submissions/{listed['id']}")
     assert detail.status_code == 200
     assert detail.json()["results"]["episodes"][0]["metrics"]["rpe_translation_rmse"] is None
@@ -86,7 +87,7 @@ def test_errors_carry_a_detail_the_ui_shows(api):
     assert refused.status_code == 429 and "today's quota" in refused.json()["detail"]
     finish_submission(store, first["id"], error="no episode completed")
     [listed] = client.get("/submissions").json()
-    assert listed["status"] == "failed" and listed["overall"] is None
+    assert listed["status"] == "failed" and listed["summary"] is None
     assert client.post("/submissions", files={"file": ("x.wasm", MODULE)}).status_code == 429  # Failed evaluations still count.
 
 
@@ -146,12 +147,12 @@ def test_admin_can_read_all_submissions_without_exposing_tokens(api):
     listed = client.get("/submissions", headers=admin)
     assert [(row["id"], row["team_name"]) for row in listed.json()] == [(second, "admin"), (first, "team")]
     assert listed.json()[0]["team_type"] == "participant" and listed.json()[1]["team_type"] == "test"
-    assert listed.json()[1]["overall"]["rpe_translation_rmse_median"] == 0.1
+    assert listed.json()[1]["summary"]["rpe_translation_rmse_median"] == 0.1
     details = [client.get(f"/submissions/{submission_id}", headers=admin) for submission_id in (first, second)]
     assert all(response.status_code == 200 for response in details)
     assert [response.json()["team_name"] for response in details] == ["team", "admin"]
     assert details[0].json()["team_type"] == "test" and details[1].json()["team_type"] == "participant"
-    assert details[0].json()["results"]["summary"]["overall"]["rpe_translation_rmse_median"] == 0.1
+    assert details[0].json()["results"]["summary"]["rpe_translation_rmse_median"] == 0.1
     assert client.get("/submissions/missing", headers=admin).status_code == 404
     for response in [listed, *details, client.get("/config", headers=admin)]:
         for secret in (team_token, other_token, admin_token):

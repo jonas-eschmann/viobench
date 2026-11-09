@@ -77,9 +77,9 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
 
   <section>
     <h2>Comparison with baselines</h2>
-    <p class="hint">Current-set results: maximum fuel per frame across all episodes, and median Sim(3) ATE per dataset. Lower is better on both axes. Only submissions with all reports appear.</p>
+    <p class="hint">Current-set results: maximum fuel per frame and mean Sim(3) ATE across all selected episodes, with equal weight per episode. Lower is better on both axes. Only submissions with all reports appear.</p>
     <p class="comparison-legend"><span class="own-key">● Your submissions</span> <span>■ Baselines</span> <span>┄ Baseline frontier</span> <span class="own-key">━ Pareto frontier (baselines + yours)</span></p>
-    <p class="hint">Shading shows your extra area beyond the baselines. Both axes and the area use logarithmic scales, rewarding proportional improvements. Values below 1 fuel/frame or 1 mm ATE are clamped for the plot and area; Exact values keeps the raw scores. The upper reference uses 1.2× the fuel limit and 1.2× the worst baseline ATE after clamping.</p>
+    <p class="hint">Shading shows your extra area beyond the baselines. Both axes and the area use logarithmic scales, rewarding proportional improvements. Values below 1 fuel/frame or 1 mm ATE are clamped for the plot and area; Exact values keeps the raw scores. The upper reference uses 1.2× the fuel limit and 1.2× the worst baseline mean ATE after clamping.</p>
     <p class="hint">The displayed lower bounds follow the lowest points with a 10× margin, limited by the log floors. This zoom does not change the claimed-area score.</p>
     <div id="comparison-charts"></div>
   </section>
@@ -93,7 +93,7 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
     <p id="evaluation-summary" class="hint"></p>
     <div class="scroll">
       <table id="submissions">
-        <thead><tr><th>Submitted</th><th id="team-column" hidden>Team</th><th id="account-column" hidden>Account</th><th>Label</th><th>Status</th><th>Sim(3) ATE (m)</th><th>Max fuel/frame</th><th>Episodes</th><th></th></tr></thead>
+        <thead><tr><th>Submitted</th><th id="team-column" hidden>Team</th><th id="account-column" hidden>Account</th><th>Label</th><th>Status</th><th>Mean Sim(3) ATE (m)</th><th>Max fuel/frame</th><th>Episodes</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>

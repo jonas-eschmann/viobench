@@ -68,7 +68,7 @@ def test_delete_removes_all_jobs_and_artifacts_and_baseline_comparison_point(api
     cache_file = tmp_path / "conta-cache" / A
     cache_file.parent.mkdir()
     cache_file.write_bytes(b"shared archive")
-    assert client.get("/comparison").json()["datasets"][0]["points"][0]["id"] == submission_id
+    assert client.get("/comparison").json()["points"][0]["id"] == submission_id
 
     response = client.delete(f"/submissions/{submission_id}", headers=headers)
     assert response.status_code == 200 and response.json() == {"deleted": submission_id}
@@ -77,7 +77,7 @@ def test_delete_removes_all_jobs_and_artifacts_and_baseline_comparison_point(api
         assert connection.execute("SELECT 1 FROM evaluation_jobs WHERE submission_id = ?", (submission_id,)).fetchone() is None
     assert not store.upload_path(submission_id).exists()
     assert not (store.reports / submission_id).exists()
-    assert client.get("/comparison").json()["datasets"] == []
+    assert client.get("/comparison").json()["points"] == []
     assert client.get(f"/submissions/{submission_id}", headers=headers).status_code == 404
     assert client.get(f"/submissions/{other}").status_code == 200
     assert store.upload_path(other).read_bytes() == MODULE

@@ -19,6 +19,8 @@ The current evaluation set is stored as an ordered JSON list in SQLite's `submis
 initially the public set from [`viobench.episodes`](../../episodes/__init__.py).
 The `public+private-10` preset combines all public episodes with the first ten entries of the neutrally labeled
 `private` catalog. The individual `public` and `private` sets are also available as presets.
+Preset names are admin-only shortcuts for selecting hashes. Episodes have no dataset membership: every team's
+summary, comparison point, and claimed area use the entire current evaluation set.
 Admins choose a named preset for new uploads and can check **Also evaluate all existing submissions** or use
 **Fill missing for current set** later. A submission's details also accept individual episode hashes. Scheduling
 adds only missing jobs, including for test accounts, and keeps existing results. The API accepts arbitrary hash
@@ -92,14 +94,15 @@ points. Wait until every running job finishes, including jobs outside the curren
 types, including admins, cannot delete submissions. Deleting an upload counted in the current quota day frees its
 daily upload slot.
 
-Each dataset's plot compares median episode Sim(3)-aligned ATE (metres) with the submission's maximum fuel per frame
-across the current evaluation set. Baselines are squares, the viewer's other submissions are circles, and the dashed
+One plot compares each submission's mean episode Sim(3)-aligned ATE (metres) with its maximum fuel per frame,
+both across the entire current evaluation set. The arithmetic mean gives each selected hash equal weight,
+regardless of its frame count. Baselines are squares, the viewer's other submissions are circles, and the dashed
 line marks the baseline Pareto frontier. The solid frontier combines baselines with the viewer's submissions;
 shading shows the additional area they cover beyond the baselines (lower is better on both axes).
 Both axes and the area calculation use logarithms, giving equal proportional improvements equal weight. For the
 plot, frontiers and area only, fuel is clamped to at least `1` per frame and ATE to `0.001 m`; labels and reported
-metrics keep their raw values. The fuel reference is `X = 1.2 × step_fuel`; each dataset's error reference is
-`Y = 1.2 ×` its worst eligible baseline ATE after clamping. Thus all-zero baseline errors give `Y = 0.0012 m`,
+metrics keep their raw values. The fuel reference is `X = 1.2 × step_fuel`; the error reference is
+`Y = 1.2 ×` the worst eligible baseline's mean ATE after clamping. Thus all-zero baseline errors give `Y = 0.0012 m`,
 and fuel improvements can still earn area. Nonbaseline uploads do not change these references.
 The claimed area is the combined dominated area minus baseline dominated area in natural-log coordinates.
 Its percentage is `100 × claimed area / (ln(X / 1) × ln(Y / 0.001))`, unavailable until a baseline exists.
@@ -127,11 +130,11 @@ Submission responses include the submitting account's `team_name` and `team_type
 |---|---|
 | `GET /` (`/app.js`, `/style.css`) | the web UI; public files, strict Content-Security-Policy |
 | `POST /submissions` | multipart `file` (and `label`) → 201 |
-| `GET /submissions` | the team's submissions (all submissions for admins), newest first, with current-set `status`, `progress` and `overall` |
+| `GET /submissions` | the team's submissions (all submissions for admins), newest first, with current-set `status`, `progress` and `summary` |
 | `GET /submissions/<id>` | current-set `results` (`summary`, `episodes`, `partial`) plus all scheduled `jobs`, including episodes outside the current set; admins can access any submission |
 | `DELETE /submissions/<id>` | baseline accounts' own submissions only: 200 `{"deleted": "<id>"}`; 403 for other account types, 404 if missing or not owned, 409 if any job is running |
 | `GET /config` | the rules below, `team_name`, `team_type`, `pause_message` (null when accepting uploads), and current `evaluation_hashes` |
-| `GET /comparison` | current `evaluation_hashes` and per-dataset points for the viewer's submissions and shared baselines, baseline and combined frontiers, and improvement area; no other teams' private submissions |
+| `GET /comparison` | current `evaluation_hashes`, one aggregate point per eligible submission from the viewer or shared baselines, baseline and combined frontiers, and improvement area; no other teams' private submissions |
 | `PUT /submission-pause` | admin only: JSON `{"message": "reason"}` pauses or updates the message; `{"message": null}` resumes; returns `pause_message` |
 | `GET /evaluations` | admin only: current `hashes` and named `presets` |
 | `PUT /evaluations` | admin only: `{"hashes": ["<sha1>", "..."], "backfill": true}` saves the set and optionally schedules missing jobs for all submissions; returns selection and `scheduled` count |
@@ -158,8 +161,8 @@ output. Excess output is discarded while evaluation continues. Report tails read
 Local `--verbose` streams guest output directly to the console without these capture limits.
 
 Results include maximum, mean, median, p95 and p99 fuel per attempted frame, total step fuel and attempted-frame counts
-per episode, per dataset and overall. Current-set dataset and overall statistics pool the original per-frame fuel
-samples from their finished jobs; they do not average per-episode percentiles. Judging uses the overall maximum;
+per episode and for the entire current evaluation set. Current-set statistics pool the original per-frame fuel
+samples from their finished jobs; they do not average per-episode percentiles. Judging uses the current-set maximum;
 the other statistics are diagnostics. Initialization fuel is reported separately per episode.
 
 Deployment: [`compose.yaml`](compose.yaml) (usage in its header) runs the app behind a Cloudflare tunnel (no open port;

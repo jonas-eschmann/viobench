@@ -109,7 +109,7 @@ def test_write_read_roundtrip(tmp_path):
     np.testing.assert_allclose(loaded.imu, episode.imu, rtol=1e-6, atol=1e-9)
     np.testing.assert_allclose(loaded.ground_truth, episode.ground_truth, rtol=1e-6, atol=1e-9)
     np.testing.assert_allclose(loaded.T_body_camera, episode.T_body_camera)
-    assert loaded.config == episode.config and loaded.meta["condition"] == "test" and loaded.meta["dataset"] == tmp_path.name
+    assert loaded.config == episode.config and loaded.meta["condition"] == "test" and "dataset" not in loaded.meta
     assert loaded.meta["origin_ns"] == 1_400_000_000_000_000_000 and loaded.meta["path"] == str(path)
     assert loaded.hash == loaded.key == hashlib.sha1(path.read_bytes()).hexdigest()  # what conta stores the archive under
     with zipfile.ZipFile(path) as archive:
@@ -133,9 +133,9 @@ def test_unzipped_episode_reads_the_same(tmp_path):
     assert list_episodes(tmp_path / "unzipped") == [directory] and (directory / "mav0" / "cam0" / "data.csv").is_file()
     unzipped = read_episode(directory)
     np.testing.assert_array_equal(np.asarray(unzipped.frames), episode.frames)
-    assert unzipped.meta["dataset"] == "unzipped" and episode_file(directory, "trajectory.mp4") == b"not really a video"
+    assert episode_file(directory, "trajectory.mp4") == b"not really a video"
     assert unzipped.hash is None and unzipped.key == unzipped.name  # no archive, no hash
-    assert [e.meta["dataset"] for e in episodes([tmp_path / "set", directory])] == ["set", "unzipped"]
+    assert [e.hash for e in episodes([tmp_path / "set", directory])] == [hashlib.sha1(path.read_bytes()).hexdigest(), None]
     repacked = write_episode(unzipped, tmp_path / "repacked" / "ep.zip", attachments={"trajectory.mp4": directory / "trajectory.mp4"})
     assert repacked.read_bytes() == path.read_bytes()
 
@@ -463,12 +463,13 @@ def test_sources_read_paths_and_conta_references_alike(tmp_path, conta_store):
 
     episode, path, digest = stored_archive(tmp_path, conta_store)
     read = list(sources.episodes([tmp_path / "set", digest, f"conta:{digest.upper()}", {"description": "x", "hash": digest}]))
-    assert [e.dataset for e in read] == ["set", "conta", "conta", "conta"] and {e.hash for e in read} == {digest}
+    assert len(read) == 4 and {e.hash for e in read} == {digest}
+    assert all("dataset" not in e.meta for e in read)
     np.testing.assert_array_equal(np.asarray(read[1].frames), np.asarray(read[0].frames))
     assert sources.argument({"hash": digest.upper()}) == f"conta:{digest}" and sources.reference_hash(str(path)) is None
 
 
-def test_a_listed_hash_belongs_to_its_set(tmp_path, conta_store, monkeypatch):
+def test_catalog_and_default_references_preserve_hash_identity(tmp_path, conta_store, monkeypatch):
     from viobench import episodes as published
     from viobench.tools.datasets import sources
 
@@ -476,9 +477,9 @@ def test_a_listed_hash_belongs_to_its_set(tmp_path, conta_store, monkeypatch):
     val = [{"description": "val/synthetic.zip", "hash": digest}]
     monkeypatch.setattr(published, "SETS", {"val": val})
     monkeypatch.setattr(published, "public", val)
-    assert [e.dataset for e in sources.episodes([f"conta:{digest}"])] == ["val"]
-    assert [e.dataset for e in sources.episodes([tmp_path / "set"])] == ["val"]  # its archive on disk is the same episode
-    assert [e.dataset for e in sources.from_arguments([])] == ["val"]  # no sources: the public set
+    assert [e.hash for e in sources.episodes([f"conta:{digest}"])] == [digest]
+    assert [e.hash for e in sources.episodes([tmp_path / "set"])] == [digest]  # its archive on disk is the same episode
+    assert [e.hash for e in sources.from_arguments([])] == [digest]  # no sources: the public set
 
 
 def test_sources_are_checked_when_named_and_downloaded_when_read(tmp_path, conta_store):

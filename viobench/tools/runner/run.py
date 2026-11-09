@@ -1,6 +1,6 @@
-"""`viobench evaluate`: run a solution .wasm over a Dataset (any iterable of Episodes), meter it, score it, write a report.
+"""`viobench evaluate`: run a solution .wasm over episodes, meter it, score it, write a report.
 
-The Dataset may be episodes on disk or in the conta cache (`datasets.sources.episodes`: paths and conta hashes) or fresh
+Inputs may be episodes on disk or in the conta cache (`datasets.sources.episodes`: paths and conta hashes) or fresh
 episodes from the simulator (`datasets.generate.simulation.simulate`); the runner does not care, and reads frames one at
 a time either way.
 """
@@ -23,10 +23,9 @@ from .score import write_estimates
 @dataclass
 class EpisodeReport:
     hash: str | None  # the sha1 of the episode's archive, its identity (Episode.hash); None for one without an archive
-    dataset: str
     frames: int
     frames_attempted: int  # includes a failing step, excludes unattempted frames after the failure
-    duration_s: float  # first to last frame; episodes of one set share it, sets may differ
+    duration_s: float  # first to last frame
     completed: bool  # all frames were fed; otherwise missing states are scored as origin/identity with zero twist
     failure: str | None  # why it ended early: init failed, a step failed or returned an unusable state, a trap
     fuel_init: int
@@ -94,7 +93,6 @@ def run_episode(wasm_path, episode, engine, limits, log_dir):
     per_frame_wall = wall[:max(fed, 1)]
     return EpisodeReport(
         hash=episode.hash,
-        dataset=episode.dataset,
         frames=episode.num_frames,
         duration_s=float(episode.duration),
         completed=completed,
@@ -110,47 +108,39 @@ def run_episode(wasm_path, episode, engine, limits, log_dir):
 
 
 def summarize(reports, frame_fuels):
-    """Per-dataset and overall fuel distributions pooled across attempted frames; accuracy uses episode medians."""
-    entries = list(zip(reports, frame_fuels, strict=True))
-
-    def summary(entries):
-        group, fuel = zip(*entries)
-        completed = [r for r in group if r.completed]
-        return {
-            "episodes": len(group),
-            "completed": len(completed),
-            "duration_s_median": float(np.median([r.duration_s for r in group])),
-            "sim3_ate_rmse_median": float(np.median([r.metrics["sim3_ate_rmse"] for r in group])),  # the headline
-            "rpe_translation_rmse_median": float(np.nanmedian([r.metrics["rpe_translation_rmse"] for r in group])),
-            "rpe_rotation_rmse_median": float(np.nanmedian([r.metrics["rpe_rotation_rmse"] for r in group])),
-            "ate_rmse_median": float(np.median([r.metrics["ate_rmse"] for r in group])),
-            "rotation_rmse_median": float(np.median([r.metrics["rotation_rmse"] for r in group])),
-            "velocity_rmse_median": float(np.median([r.metrics["velocity_rmse"] for r in group])),
-            "angular_velocity_rmse_median": float(np.median([r.metrics["angular_velocity_rmse"] for r in group])),
-            **fuel_statistics(np.concatenate(fuel)),
-            "wall_per_frame_median_ms": float(np.median([r.wall_per_frame_median_ms for r in group])),
-        }
-
-    datasets = sorted({r.dataset for r in reports})
-    return {"overall": summary(entries), "datasets": {name: summary([entry for entry in entries if entry[0].dataset == name]) for name in datasets}}
+    """Aggregate all episodes: mean Sim(3) ATE, median diagnostics, and fuel pooled across every attempted frame."""
+    reports, frame_fuels = zip(*zip(reports, frame_fuels, strict=True))
+    return {
+        "episodes": len(reports),
+        "completed": sum(r.completed for r in reports),
+        "duration_s_median": float(np.median([r.duration_s for r in reports])),
+        "sim3_ate_rmse_mean": float(np.mean([r.metrics["sim3_ate_rmse"] for r in reports])),  # the headline
+        "rpe_translation_rmse_median": float(np.nanmedian([r.metrics["rpe_translation_rmse"] for r in reports])),
+        "rpe_rotation_rmse_median": float(np.nanmedian([r.metrics["rpe_rotation_rmse"] for r in reports])),
+        "ate_rmse_median": float(np.median([r.metrics["ate_rmse"] for r in reports])),
+        "rotation_rmse_median": float(np.median([r.metrics["rotation_rmse"] for r in reports])),
+        "velocity_rmse_median": float(np.median([r.metrics["velocity_rmse"] for r in reports])),
+        "angular_velocity_rmse_median": float(np.median([r.metrics["angular_velocity_rmse"] for r in reports])),
+        **fuel_statistics(np.concatenate(frame_fuels)),
+        "wall_per_frame_median_ms": float(np.median([r.wall_per_frame_median_ms for r in reports])),
+    }
 
 
-def as_dataset(dataset):
-    """Anything a user may pass as a dataset -> an iterable of Episodes: sources (paths, conta references) go through
-    `datasets.sources`, anything else is taken as the Dataset itself."""
+def as_episodes(sources):
+    """Paths and conta references go through `datasets.sources`; other iterables already contain Episodes."""
     from ..datasets.sources import episodes
 
     source_types = (str, Path, dict)
-    if isinstance(dataset, source_types):
-        return episodes([dataset])
-    dataset = list(dataset) if not hasattr(dataset, "__next__") else dataset
-    if isinstance(dataset, list) and dataset and all(isinstance(item, source_types) for item in dataset):
-        return episodes(dataset)
-    return dataset
+    if isinstance(sources, source_types):
+        return episodes([sources])
+    sources = list(sources) if not hasattr(sources, "__next__") else sources
+    if isinstance(sources, list) and sources and all(isinstance(item, source_types) for item in sources):
+        return episodes(sources)
+    return sources
 
 
-def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_episodes=None, log=print):
-    """Evaluate a Dataset and write report.json; an explicit output_dir also enables per-episode videos."""
+def evaluate(wasm_path, sources, output_dir=None, limits=None, engine=None, max_episodes=None, log=print):
+    """Evaluate episodes and write report.json; an explicit output_dir also enables per-episode videos."""
     wasm_path = Path(wasm_path)
     engine = engine or Engine()
     limits = limits or Limits()
@@ -161,7 +151,7 @@ def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_
     frame_fuels = []
     hashes = set()
     started = time.perf_counter()
-    for episode in islice(as_dataset(dataset), max_episodes):  # never asks for one more: it may be a download
+    for episode in islice(as_episodes(sources), max_episodes):  # never asks for one more: it may be a download
         if episode.hash in hashes:  # one episode (copies of an archive are one): it would count twice, in one log directory
             raise ValueError(f"episode {episode.hash} given twice")
         if episode.hash is not None:
@@ -173,7 +163,7 @@ def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_
         write_estimates(log_dir, episode.frame_times, estimates)
         np.save(log_dir / "fuel.npy", fuel, allow_pickle=False)  # private samples for exact aggregation of episode jobs
         m = report.metrics
-        log(f"{episode.dataset}/{episode.key}: {'ok' if report.completed else 'FAILED'} Sim(3) ATE {m['sim3_ate_rmse']:.3f} m  RPE {m['rpe_translation_rmse']:.3f} m/1 s  ATE {m['ate_rmse']:.3f} m  "
+        log(f"{episode.key}: {'ok' if report.completed else 'FAILED'} Sim(3) ATE {m['sim3_ate_rmse']:.3f} m  RPE {m['rpe_translation_rmse']:.3f} m/1 s  ATE {m['ate_rmse']:.3f} m  "
             f"rot {np.degrees(m['rotation_rmse']):.1f} deg  vel {m['velocity_rmse']:.3f} m/s  filled {m['filled_frames']}  fuel/frame max {report.fuel_per_frame_max:,.0f} (p95 {report.fuel_per_frame_p95:,.0f})  "
             f"wall/frame {report.wall_per_frame_median_ms:.1f} ms" + (f"  [{report.failure}]" if report.failure else ""))
         if save_video:
@@ -181,7 +171,7 @@ def evaluate(wasm_path, dataset, output_dir=None, limits=None, engine=None, max_
 
             log(f"video: {write_video(episode, estimates, log_dir / 'trajectory.mp4')}")
     if not reports:
-        raise ValueError("the dataset yielded no episodes")
+        raise ValueError("no episodes to evaluate")
     result = {
         "solution": str(wasm_path),
         "solution_bytes": wasm_path.stat().st_size,

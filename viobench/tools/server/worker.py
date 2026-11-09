@@ -27,17 +27,10 @@ import numpy as np
 
 from ..datasets.sources import argument
 from ..runner.logs import MAX_LOG_BYTES
+from .evaluations import public_episode
 from .store import Store
 
 POLL_SECONDS = 3.0
-EPISODE_FIELDS = ("hash", "dataset", "frames", "frames_attempted", "duration_s", "completed", "metrics", "fuel_init", "fuel_per_frame_max", "fuel_per_frame_median",
-                  "fuel_per_frame_p95", "fuel_per_frame_p99", "fuel_per_frame_mean", "fuel_total", "wall_init_s", "wall_per_frame_median_ms",
-                  "wall_per_frame_p95_ms")  # allowlist: numbers, no text from the guest
-
-
-def public_episode(episode):
-    """An episode's metrics without guest-written text."""
-    return {key: episode[key] for key in EPISODE_FIELDS}
 
 
 class EvaluationStopped(Exception):

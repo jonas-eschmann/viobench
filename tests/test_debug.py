@@ -82,7 +82,7 @@ def test_direct_cli(tmp_path, capsys):
     episode = synthetic_episode(n_frames=4, width=640, height=480)
     digest = archive_hash(write_episode(episode, tmp_path / "set" / f"{episode.name}.zip"))
     assert cli(["debug", str(EXAMPLES / "python" / "minimal"), str(tmp_path / "set"), "-o", str(tmp_path / "out")]) == 0
-    assert f"set/{digest}: Sim(3) ATE" in capsys.readouterr().out
+    assert f"{digest}: Sim(3) ATE" in capsys.readouterr().out
     assert (tmp_path / "out" / digest / "estimate.tum").is_file()
     assert (tmp_path / "out" / digest / "twist.txt").is_file()
     from tests.test_video import read_video
@@ -143,13 +143,12 @@ def test_native_host_debug_build(tmp_path):
 
 
 def test_debug_never_asks_for_an_episode_beyond_max_episodes():
-    """A Dataset's next episode may be a download (a conta reference): a run that stops early must not ask for it."""
+    """The next episode may be a download (a conta reference): a run that stops early must not ask for it."""
     episode = synthetic_episode(n_frames=4, width=640, height=480)
-    episode.meta["dataset"] = "adhoc"
 
-    def dataset():
+    def episode_stream():
         yield episode
         pytest.fail("asked for an episode beyond max_episodes")
 
-    [(read, _, _)] = direct.run(direct.PythonSolution(EXAMPLES / "python" / "minimal"), dataset(), max_episodes=1, log=lambda *a: None)
+    [(read, _, _)] = direct.run(direct.PythonSolution(EXAMPLES / "python" / "minimal"), episode_stream(), max_episodes=1, log=lambda *a: None)
     assert read is episode

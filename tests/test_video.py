@@ -78,7 +78,7 @@ def test_simulate_cli_writes_video_in_each_episode_by_default(tmp_path, monkeypa
     for index, episode in enumerate(episodes):
         episode.name = f"sim-{index}"
         episode.config["camera"]["horizontal_fov_degrees"] = 60.0
-    monkeypatch.setattr("viobench.tools.datasets.generate.simulation.dataset_from_arguments", lambda args: iter(episodes))
+    monkeypatch.setattr("viobench.tools.datasets.generate.simulation.episodes_from_arguments", lambda args: iter(episodes))
     if no_video:
         def unexpected(*args, **kwargs):
             pytest.fail("video rendered with --no-video")

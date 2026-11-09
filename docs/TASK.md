@@ -24,12 +24,13 @@ Per episode (`viobench.tools.runner.metrics`):
 - ATE: position RMSE in frame-0 coordinates, without alignment.
 - Rotation RMSE, velocity RMSE, angular-velocity RMSE.
 - Diagnostics: fitted Sim(3) scale, final drift per metre, and the number of filled frames (`filled_frames`).
-- Compute: the maximum fuel consumed by a single `step` call across all frames, episodes and test datasets.
+- Compute: the maximum fuel consumed by a single `step` call across all frames in the selected episodes.
   This is Wasmtime's deterministic fuel count for a fixed module, input and runtime version. Failed calls count too.
   Initialization fuel is reported separately and has its own budget.
 
-Per dataset, a submission is the point (maximum fuel per frame across the entire test set, median Sim(3) ATE for that dataset).
-Every dataset's point uses the same compute value for a submission. From the first failed step onward, missing predictions
+A submission is one point: maximum fuel per frame and arithmetic mean Sim(3) ATE across all selected episodes.
+Every selected episode has equal weight in the mean, regardless of its frame count.
+Named presets only select episode hashes; they do not split scoring into groups. From the first failed step onward, missing predictions
 are filled with position `[0, 0, 0]`, identity quaternion `[0, 0, 0, 1]`, and zero twist before scoring the complete trajectory.
 Missing or invalid states in exported estimates use the same rule. Raw exports retain missing values for diagnosis.
 Attempted frames, including the failing call, contribute to the fuel maximum. A constant predicted position uses scale 1
@@ -37,8 +38,8 @@ and identity rotation and is translated to the ground-truth centroid; its Sim(3)
 spread around that centroid. Zero predictions are therefore scored normally, not assigned an artificial failure penalty.
 Sim(3) ATE requires at least three frames; shorter episodes have no Sim(3) score.
 
-For analysis, each episode, dataset and overall report also records mean, median, p95 and p99 fuel per frame,
-total step fuel and the number of attempted frames. Dataset and overall statistics pool all attempted frames, so the
+For analysis, each episode and the aggregate report also records mean, median, p95 and p99 fuel per frame,
+total step fuel and the number of attempted frames. Aggregate statistics pool all attempted frames, so the
 mean is weighted by frame count and percentiles describe the full frame distribution. Unattempted frames after a failure
 add no samples. With no attempted frames, the count and fuel statistics are zero. Wall time is reported for reference.
 

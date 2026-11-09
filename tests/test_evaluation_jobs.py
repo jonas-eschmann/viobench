@@ -29,14 +29,14 @@ def jobs(store, token, submission_id):
     return {job["episode_hash"]: job for job in store.get(token, submission_id)["jobs"]}
 
 
-def succeed(store, submission_id, job, fuel=(1, 3), rpe=0.1, dataset="val", sim3=0.2, completed=True):
+def succeed(store, submission_id, job, fuel=(1, 3), rpe=0.1, sim3=0.2, completed=True):
     """Persist the same numeric result and fuel artifact that the isolated worker commits."""
     samples = np.asarray(fuel, dtype=np.float64)
     directory = store.report_dir(submission_id, job["episode_hash"]) / "logs" / job["episode_hash"]
     directory.mkdir(parents=True, exist_ok=True)
     np.save(directory / "fuel.npy", samples, allow_pickle=False)
     result = {
-        "hash": job["episode_hash"], "dataset": dataset, "completed": completed,
+        "hash": job["episode_hash"], "completed": completed,
         "frames": len(samples), "duration_s": 1.0, "fuel_init": 0, "wall_init_s": 0.1,
         "wall_per_frame_median_ms": 1.0, "wall_per_frame_p95_ms": 2.0,
         "metrics": {"sim3_ate_rmse": sim3, "rpe_translation_rmse": rpe, "rpe_rotation_rmse": 0.1, "rotation_rmse": 0.1, "ate_rmse": 0.2,
@@ -244,28 +244,29 @@ def test_aggregates_pool_unequal_frame_distributions_and_follow_current_selectio
     token = store.add_team("team")
     submission_id = submit(store, token)
     selected_jobs = jobs(store, token, submission_id)
-    succeed(store, submission_id, selected_jobs[A], fuel=[1, 3], rpe=0.1, dataset="short")
+    succeed(store, submission_id, selected_jobs[A], fuel=[1, 3], rpe=0.1, sim3=2)
     partial = store.get(token, submission_id)
     assert partial["results"]["partial"] and partial["progress"]["finished"] == 1
-    succeed(store, submission_id, selected_jobs[B], fuel=[10, 30, 50, 70, 90, 200], rpe=0.3, dataset="long")
+    succeed(store, submission_id, selected_jobs[B], fuel=[10, 30, 50, 70, 90, 200], rpe=0.3, sim3=8)
     complete = store.get(token, submission_id)
     assert complete["progress"]["finished"] == complete["progress"]["completed"] == 2
     assert not complete["results"]["partial"]
-    overall = complete["results"]["summary"]["overall"]
-    assert overall["frames_attempted"] == 8 and overall["fuel_total"] == 454
-    assert overall["fuel_per_frame_median"] == 40  # Neither mean nor median of the episode medians (2 and 60).
-    assert overall["fuel_per_frame_p95"] == pytest.approx(161.5)
-    assert overall["fuel_per_frame_p99"] == pytest.approx(192.3)
-    assert overall["fuel_per_frame_mean"] == pytest.approx(56.75)
-    assert overall["rpe_translation_rmse_median"] == pytest.approx(0.2)
-    assert complete["results"]["summary"]["datasets"]["short"]["fuel_per_frame_median"] == 2
+    summary = complete["results"]["summary"]
+    assert summary["frames_attempted"] == 8 and summary["fuel_total"] == 454
+    assert summary["fuel_per_frame_median"] == 40  # Neither mean nor median of the episode medians (2 and 60).
+    assert summary["fuel_per_frame_p95"] == pytest.approx(161.5)
+    assert summary["fuel_per_frame_p99"] == pytest.approx(192.3)
+    assert summary["fuel_per_frame_mean"] == pytest.approx(56.75)
+    assert summary["rpe_translation_rmse_median"] == pytest.approx(0.2)
+    assert summary["sim3_ate_rmse_mean"] == 5
+    assert not {"overall", "datasets"} & summary.keys()
 
     assert store.set_evaluations([B], backfill=True) == 0
     narrowed = store.get(token, submission_id)
     assert [episode["hash"] for episode in narrowed["results"]["episodes"]] == [B]
-    assert narrowed["results"]["summary"]["overall"]["fuel_per_frame_median"] == 60
+    assert narrowed["results"]["summary"]["fuel_per_frame_median"] == 60
     assert store.set_evaluations([B, A], backfill=True) == 0
-    assert store.get(token, submission_id)["results"]["summary"]["overall"] == overall
+    assert store.get(token, submission_id)["results"]["summary"] == summary
 
 
 def test_wrong_hash_and_duplicate_completion_do_not_mutate_the_job(store):

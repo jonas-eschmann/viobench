@@ -69,8 +69,8 @@ Results and progress use the current set and update as episodes finish. The serv
 midnight Pacific time. Failed evaluations do not refund uploads. Queued or running evaluations do not block another
 upload; additional evaluations of an existing submission do not count as uploads.
 
-The comparison plots show your submissions alongside shared baselines. Lower **Sim(3)-aligned ATE** and lower
-**maximum fuel per frame** are better. Each dataset uses the median ATE over its episodes; maximum fuel spans the
+The comparison plot shows your submissions alongside shared baselines. Lower **Sim(3)-aligned ATE** and lower
+**maximum fuel per frame** are better. Each submission uses the mean ATE (equal weight per episode) and maximum fuel over the
 whole selected set. The dashed frontier uses baselines; the solid frontier combines baselines and your submissions.
 Shading marks your improvement beyond the baselines in logarithmic coordinates, so equal proportional improvements
 have equal weight. The plot, frontiers and area score use floors of `1` fuel/frame and `0.001 m` ATE; reported metrics

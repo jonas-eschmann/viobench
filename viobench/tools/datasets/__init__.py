@@ -1,6 +1,6 @@
-"""Datasets: episodes and where they come from.
+"""Episodes and where they come from.
 
-A *Dataset* is simply an iterable of `Episode`s. Two providers implement it:
+Two providers yield `Episode` objects:
 - `storage.episodes(roots)`            episode archives (or unzipped directories) on disk, frames streamed
 - `generate.simulation.simulate(...)`  fresh episodes from HyperDrone, frames spooled to a temporary directory (NVIDIA GPU)
 The runner and the training example consume either. `sources.episodes(sources)` is how the CLI, the runner and the

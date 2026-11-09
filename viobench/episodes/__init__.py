@@ -5,7 +5,7 @@
 
 A set is a list of {"description", "hash"} entries. The hash, the sha1 of an archive, is the episode: reports, logs
 and the server know it by nothing else. Descriptions only label conta's log lines and may conceal source filenames.
-`SETS` names the sets; an episode listed in several sets keeps the first set's name as its dataset in reports.
+`SETS` names presets of episode hashes; every selected episode contributes to one aggregate score.
 The submission server uses these sets as named presets; its current ordered selection is stored in SQLite and
 managed by admins through the UI/API.
 """
@@ -42,5 +42,4 @@ private = [
     {"description": "private/episode-0013.zip", "hash": "b1012aa11bf8a72834e07d9a45d0ed2bd3977ac0"},
 ]
 
-# List the individual datasets first so combined selections preserve their report grouping.
 SETS = {"public": public, "private": private, "public+private-10": public + private[:10]}

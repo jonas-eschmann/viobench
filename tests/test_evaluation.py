@@ -38,15 +38,15 @@ def test_evaluate_report(engine, runtime_path, solution_dir, tmp_path):
     wasm = tmp_path / "perfect.wasm"
     bundle(directory, wasm, runtime=runtime_path)
     report = evaluate(wasm, [dataset], output_dir=tmp_path / "report", engine=engine, log=lambda *a: None)
-    assert report["summary"]["overall"]["episodes"] == 1 and report["summary"]["overall"]["completed"] == 1
+    assert report["summary"]["episodes"] == 1 and report["summary"]["completed"] == 1
     episode_report = report["episodes"][0]
     assert episode_report["metrics"]["ate_rmse"] < 1e-9 and episode_report["metrics"]["filled_frames"] == 0
-    assert report["summary"]["overall"]["sim3_ate_rmse_median"] < 1e-9
+    assert report["summary"]["sim3_ate_rmse_mean"] < 1e-9
     assert episode_report["metrics"]["velocity_rmse"] < 1e-6 and episode_report["metrics"]["angular_velocity_rmse"] < 1e-6
     assert episode_report["fuel_per_frame_median"] > 0
     assert (tmp_path / "report" / "report.json").is_file()
     saved = json.loads((tmp_path / "report" / "report.json").read_text())["episodes"][0]
-    assert saved["hash"] == digest and saved["dataset"] == "set" and "name" not in saved
+    assert saved["hash"] == digest and "dataset" not in saved and "name" not in saved
     estimate = np.loadtxt(tmp_path / "report" / "logs" / digest / "estimate.tum")
     np.testing.assert_allclose(estimate[:, 1:], gt[:, :7], atol=1e-6)
     twist = np.loadtxt(tmp_path / "report" / "logs" / digest / "twist.txt")
@@ -72,7 +72,7 @@ class Solution:
     wasm = tmp_path / "flaky.wasm"
     bundle(solution_dir(flaky), wasm, runtime=runtime_path)
     report = evaluate(wasm, [tmp_path / "set"], output_dir=tmp_path / "report", engine=engine, log=lambda *a: None)
-    assert report["summary"]["overall"]["completed"] == 0
+    assert report["summary"]["completed"] == 0
     episode_report = report["episodes"][0]
     assert not episode_report["completed"] and episode_report["failure"].startswith("step")
     fuel = np.load(tmp_path / "report" / "logs" / digest / "fuel.npy", allow_pickle=False)
@@ -86,7 +86,7 @@ class Solution:
     expected = evaluate_trajectory(stored.ground_truth_state(), filled, stored.frame_times)
     assert episode_report["metrics"]["filled_frames"] == 4 and episode_report["metrics"]["ate_rmse"] == expected.ate_rmse
     assert episode_report["metrics"]["sim3_ate_rmse"] == pytest.approx(expected.sim3_ate_rmse)
-    assert report["summary"]["overall"]["sim3_ate_rmse_median"] == pytest.approx(expected.sim3_ate_rmse)
+    assert report["summary"]["sim3_ate_rmse_mean"] == pytest.approx(expected.sim3_ate_rmse)
 
 
 def test_evaluate_delivers_rgb_from_gray_and_rgb_sets(engine, runtime_path, solution_dir, tmp_path):
@@ -106,7 +106,7 @@ class Solution:
     wasm = tmp_path / "probe.wasm"
     bundle(solution_dir(probe), wasm, runtime=runtime_path)
     report = evaluate(wasm, [tmp_path / "gray", tmp_path / "rgb"], output_dir=tmp_path / "report", engine=engine, log=lambda *a: None)
-    assert report["summary"]["overall"]["completed"] == 2
+    assert report["summary"]["completed"] == 2
     for dataset, replicated in (("gray", 1.0), ("rgb", 0.0)):
         estimate = np.loadtxt(tmp_path / "report" / "logs" / digests[dataset] / "estimate.tum")
         assert estimate[0, 1] == 3 and estimate[0, 2] == 3 and estimate[0, 3] == replicated
@@ -134,23 +134,22 @@ class Solution:
         bundle(solution_dir(probe.format(declaration=declaration), name=name), wasm, runtime=runtime_path)
         report = evaluate(wasm, [dataset], output_dir=tmp_path / name, engine=engine, log=lambda *a: None)
         estimate = np.loadtxt(tmp_path / name / "logs" / digest / "estimate.tum")
-        assert (estimate[0, 1], estimate[0, 2]) == size and report["summary"]["overall"]["completed"] == 1
+        assert (estimate[0, 1], estimate[0, 2]) == size and report["summary"]["completed"] == 1
         assert estimate[0, 3] == pytest.approx(episode.config["camera"]["fx"] * size[0] / 640)
 
 
-def test_evaluate_accepts_an_in_memory_dataset(engine, runtime_path, solution_dir, tmp_path):
+def test_evaluate_accepts_in_memory_episodes(engine, runtime_path, solution_dir, tmp_path):
     """The ad-hoc provider path: a list of Episodes, nothing on disk (what a library caller or the simulator feeds the runner)."""
     import io
 
     episode = synthetic_episode(n_frames=5, width=640, height=480)
-    episode.meta["dataset"] = "adhoc"
     gt = episode.ground_truth_state()
     buffer = io.BytesIO()
     np.save(buffer, gt)
     wasm = tmp_path / "perfect.wasm"
     bundle(solution_dir(PERFECT, {"gt.npy": buffer.getvalue()}, name="perfect"), wasm, runtime=runtime_path)
     report = evaluate(wasm, [episode, episode], output_dir=tmp_path / "report", engine=engine, log=lambda *a: None)
-    assert report["summary"]["overall"]["episodes"] == 2 and list(report["summary"]["datasets"]) == ["adhoc"]
+    assert report["summary"]["episodes"] == 2
     assert report["episodes"][0]["metrics"]["ate_rmse"] < 1e-9 and report["episodes"][0]["hash"] is None
     assert (tmp_path / "report" / "logs" / episode.name / "estimate.tum").is_file()  # no archive, no hash: logs by name
 
@@ -167,7 +166,7 @@ def test_streamed_frames_from_disk(tmp_path):
     np.testing.assert_array_equal(np.asarray(lazy.frames), episode.frames)
     config, frames = lazy.adapt((320, 240))
     assert isinstance(frames, FrameSequence) and frames.shape == (6, 240, 320, 3)
-    assert next(iter(episodes([tmp_path / "set"]))).dataset == "set"
+    assert next(iter(episodes([tmp_path / "set"]))).hash == lazy.hash
 
 
 def test_cli_evaluates_conta_references(engine, runtime_path, solution_dir, tmp_path, conta_store):
@@ -183,7 +182,7 @@ def test_cli_evaluates_conta_references(engine, runtime_path, solution_dir, tmp_
     bundle(solution_dir(PERFECT, {"gt.npy": buffer.getvalue()}), wasm, runtime=runtime_path)
     assert main(["evaluate", str(wasm), f"conta:{digest}", "-o", str(tmp_path / "report")]) == 0
     report = json.loads((tmp_path / "report" / "report.json").read_text())
-    assert list(report["summary"]["datasets"]) == ["conta"] and report["episodes"][0]["hash"] == digest
+    assert report["summary"]["episodes"] == 1 and report["episodes"][0]["hash"] == digest
     assert (tmp_path / "report" / "logs" / digest / "estimate.tum").is_file()
 
 
@@ -214,17 +213,16 @@ def test_cli_rejects_unknown_sources_before_running(tmp_path, conta_store, capsy
 
 
 def test_evaluate_never_asks_for_an_episode_beyond_max_episodes(engine, runtime_path, tmp_path):
-    """A Dataset's next episode may be a download (a conta reference): a run that stops early must not ask for it."""
+    """The next episode may be a download (a conta reference): a run that stops early must not ask for it."""
     from pathlib import Path
 
     episode = synthetic_episode(n_frames=4, width=640, height=480)
-    episode.meta["dataset"] = "adhoc"
 
-    def dataset():
+    def episode_stream():
         yield episode
         pytest.fail("asked for an episode beyond max_episodes")
 
     wasm = tmp_path / "minimal.wasm"
     bundle(Path(__file__).resolve().parent.parent / "viobench" / "solution" / "examples" / "python" / "minimal", wasm, runtime=runtime_path)
-    report = evaluate(wasm, dataset(), output_dir=tmp_path / "report", engine=engine, max_episodes=1, log=lambda *a: None)
-    assert report["summary"]["overall"]["episodes"] == 1
+    report = evaluate(wasm, episode_stream(), output_dir=tmp_path / "report", engine=engine, max_episodes=1, log=lambda *a: None)
+    assert report["summary"]["episodes"] == 1
