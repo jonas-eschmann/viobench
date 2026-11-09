@@ -17,6 +17,8 @@ uvicorn viobench.tools.server.app:app --host 0.0.0.0 --port 8000
 
 The current evaluation set is stored as an ordered JSON list in SQLite's `submission_control.evaluation_hashes`,
 initially the public set from [`viobench.episodes`](../../episodes/__init__.py).
+The `public+private-10` preset combines all public episodes with the first ten entries of the neutrally labeled
+`private` catalog. The individual `public` and `private` sets are also available as presets.
 Admins choose a named preset for new uploads and can check **Also evaluate all existing submissions** or use
 **Fill missing for current set** later. A submission's details also accept individual episode hashes. Scheduling
 adds only missing jobs, including for test accounts, and keeps existing results. The API accepts arbitrary hash
@@ -31,6 +33,15 @@ the evaluation subprocesses; interrupted running jobs are requeued at the next w
 Each evaluator reads its archive through conta (`CONTA_CACHE`, default
 `~/.cache/conta`), downloading it if absent. A download failure fails that job with a sanitized public error;
 details stay in the private log. Saving or scheduling again does not rerun existing jobs, including failed ones.
+
+For additional local archives, set `CONTA_SEARCH_PATHS` to directories containing `<hash>` or `<hash>.gz` files
+(for a shard checkout, use its `data` directory). Separate directories with `:` on Unix or `;` on Windows.
+They are searched after the normal cache and before downloads, and remain read-only; downloads and extracted
+files still go into the normal cache. Leave `CONTA_ROOT` unset to retain online fallback.
+
+```bash
+export CONTA_SEARCH_PATHS="/datasets/private/data:/datasets/shared/data"
+```
 
 A team is its token: every API request sends `Authorization: Bearer <token>`. Submission lists and details are
 restricted to their owner and admins; comparison plots also show shared baseline scores.

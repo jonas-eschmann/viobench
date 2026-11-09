@@ -15,7 +15,7 @@ dependencies = [
     "opencv-python-headless>=4.9",
     "pyyaml>=6",
     "hyperdrone==0.1.10",
-    "conta>=0.0.6",  # episode archives by hash (viobench.episodes)
+    "conta>=0.0.7",  # episode archives by hash (viobench.episodes)
 ]
 
 [project.optional-dependencies]
