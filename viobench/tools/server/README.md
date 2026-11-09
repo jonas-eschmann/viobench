@@ -163,7 +163,7 @@ samples from their finished jobs; they do not average per-episode percentiles. J
 the other statistics are diagnostics. Initialization fuel is reported separately per episode.
 
 Deployment: [`compose.yaml`](compose.yaml) (usage in its header) runs the app behind a Cloudflare tunnel (no open port;
-Cloudflare terminates TLS) and the worker unprivileged. Set `WORKER_JOBS=2` for two concurrent evaluations (default `1`).
+Cloudflare terminates TLS) and the worker unprivileged. Compose defaults to 16 concurrent evaluations; set `WORKER_JOBS` to override.
 The worker's memory limit (`WORKER_MEMORY`, default `8g`) is shared across all evaluations. The worker has network access and a writable
 `conta-cache` volume for archive downloads. Wasmtime sandboxes the guest, while each evaluation subprocess has a time
 limit and capped logs. New selections and scheduled jobs need no service restart.

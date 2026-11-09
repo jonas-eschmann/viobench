@@ -8,7 +8,7 @@
 #   docker compose -f viobench/tools/server/compose.yaml exec app python -m viobench.tools.server.teams add --type participant "team a"
 #   docker compose -f viobench/tools/server/compose.yaml exec app python -m viobench.tools.server.teams add --type admin admin
 #
-# WORKER_JOBS=2 enables two concurrent evaluations (default 1). Run one worker container; do not scale replicas.
+# WORKER_JOBS overrides the default 16 concurrent evaluations. Run one worker container; do not scale replicas.
 # The worker and evaluation host have network access; wasmtime still sandboxes the guest.
 # No port is published: the tunnel service connects out to Cloudflare, which terminates TLS. Create a tunnel in the
 # Cloudflare dashboard (Zero Trust > Networks > Tunnels), give it a public hostname with service http://app:8000 and put
@@ -42,7 +42,7 @@ services:
 
   worker:
     <<: *server
-    command: python -m viobench.tools.server.worker --jobs ${WORKER_JOBS:-1}  # one supervisor; requeues interrupted jobs on startup
+    command: python -m viobench.tools.server.worker --jobs ${WORKER_JOBS:-16}  # one supervisor; requeues interrupted jobs on startup
     mem_limit: ${WORKER_MEMORY:-8g}  # total across all concurrent evaluations
     environment:
       CONTA_SEARCH_PATHS: /srv/private-episodes
