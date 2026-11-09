@@ -236,6 +236,10 @@ Use the fresh database described above; this command does not migrate the old da
 It uses the active Docker context and finds `compose.yaml` next to the script, so it can run from any directory.
 The app and worker stop during the local copy; services that were running restart before the optional
 rsync, including if the copy fails. An interrupted episode job is requeued when the worker starts.
+It also works after `docker compose down`, as long as the `server-data` volume remains. In that case,
+Python 3 resolves the volume name from the Compose configuration, and a temporary, never-started container
+mounts it read-only using the locally built app image on the active Docker host. The helper is removed
+after the copy; the server stays down. A missing volume fails the backup instead of creating an empty one.
 
 ```bash
 viobench/tools/server/backup.sh  # defaults to ~/viobench-backups
