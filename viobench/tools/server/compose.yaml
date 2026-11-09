@@ -43,7 +43,7 @@ services:
   worker:
     <<: *server
     command: python -m viobench.tools.server.worker --jobs ${WORKER_JOBS:-16}  # one supervisor; requeues interrupted jobs on startup
-    mem_limit: ${WORKER_MEMORY:-8g}  # total across all concurrent evaluations
+    mem_limit: 40g  # fixed total cap: 2.5 GiB per job at the default 16 jobs
     environment:
       CONTA_SEARCH_PATHS: /srv/private-episodes
     volumes:

@@ -217,7 +217,8 @@ the other statistics are diagnostics. Initialization fuel is reported separately
 
 Deployment: [`compose.yaml`](compose.yaml) (usage in its header) runs the app behind a Cloudflare tunnel (no open port;
 Cloudflare terminates TLS) and the worker unprivileged. Compose defaults to 16 concurrent evaluations; set `WORKER_JOBS` to override.
-The worker's memory limit (`WORKER_MEMORY`, default `8g`) is shared across all evaluations. The worker has network access and a writable
+The worker has a fixed `40g` memory limit (2.5 GiB per job at the default 16 jobs), shared across all evaluations.
+Changing `WORKER_JOBS` does not change this cap. The worker has network access and a writable
 `conta-cache` volume for archive downloads. Wasmtime sandboxes the guest, while each evaluation subprocess has a time
 limit and capped logs. New selections and scheduled jobs need no service restart.
 Compose mounts `evaluation-data/viobench-private/data` beside `compose.yaml` read-only at `/srv/private-episodes`
