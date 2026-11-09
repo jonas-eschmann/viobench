@@ -18,6 +18,7 @@ import pytest
 from viobench.tools.datasets.storage import write_episode
 from viobench.tools.server import worker
 from viobench.tools.server.evaluations import EPISODE_FIELDS
+from viobench.tools.server.config import load as load_config
 from tests.test_datasets import synthetic_episode
 
 MODULE = b"\0asm\x01\0\0\0"
@@ -29,16 +30,18 @@ def report(completed=True, hashes=(HASH,)):
         "hash": digest, "completed": completed, "frames": 2, "frames_attempted": 2,
         "fuel_total": 30, "fuel_per_frame_max": 20, "metrics": {}, "failure": "guest text", "stderr_tail": "guest text"}
                 for digest in hashes]
-    return {"summary": {"episodes": len(hashes), "completed": completed}, "episodes": episodes}
+    return {"limits": load_config().evaluation.as_dict()["limits"],
+            "summary": {"episodes": len(hashes), "completed": completed}, "episodes": episodes}
 
 
 @pytest.fixture
 def queued(tmp_path):
-    store = SimpleNamespace(config=SimpleNamespace(episode_timeout_seconds=1440), finished=[])
+    store = SimpleNamespace(finished=[])
     store.upload_path = lambda submission_id: tmp_path / f"{submission_id}.wasm"
     store.report_dir = lambda submission_id, digest: tmp_path / "reports" / submission_id / digest
     store.finish_job = lambda job_id, result=None, error=None: store.finished.append((job_id, result, error))
-    job = {"id": 1, "submission_id": "submission", "episode_hash": HASH, "name": "team"}
+    job = {"id": 1, "submission_id": "submission", "episode_hash": HASH, "name": "team",
+           "evaluation_config": load_config().evaluation.as_dict()}
     store.upload_path(job["submission_id"]).write_bytes(MODULE)
     return store, job
 
@@ -261,7 +264,7 @@ def test_worker_marks_timed_out_job_failed(queued, monkeypatch):
 
     monkeypatch.setattr(worker, "run_evaluation", timeout)
     worker.evaluate_job(store, job, log=lambda *a: None)
-    assert store.finished == [(job["id"], None, f"episode evaluation exceeded {store.config.episode_timeout_seconds:.0f} s")]
+    assert store.finished == [(job["id"], None, f"episode evaluation exceeded {job['evaluation_config']['episode_timeout_seconds']:.0f} s")]
 
 
 @pytest.mark.parametrize("completed", [True, False])
@@ -272,8 +275,12 @@ def test_worker_evaluates_one_episode_and_keeps_guest_failures_for_aggregation(q
     worker.evaluate_job(store, job, log=lambda *a: None)
     [(command, timeout)] = commands
     assert command[3:] == ["evaluate", str(store.upload_path(job["submission_id"])), "conta:" + HASH,
-                           "-o", str(store.report_dir(job["submission_id"], HASH))]
-    assert timeout == store.config.episode_timeout_seconds
+                           "-o", str(store.report_dir(job["submission_id"], HASH)),
+                           "--limits", str(store.report_dir(job["submission_id"], HASH) / "limits.json")]
+    assert timeout == job["evaluation_config"]["episode_timeout_seconds"]
+    output = store.report_dir(job["submission_id"], HASH)
+    assert json.loads((output / "limits.json").read_text()) == job["evaluation_config"]["limits"]
+    assert json.loads((output / "evaluation-config.json").read_text()) == job["evaluation_config"]
     [(job_id, result, error)] = store.finished
     assert job_id == job["id"] and error is None
     assert result["hash"] == HASH and result["completed"] is completed
@@ -328,6 +335,10 @@ def test_worker_resolves_cold_cache_and_continues_after_missing_episode(tmp_path
     missing = "0" * 40
     monkeypatch.setattr("viobench.tools.server.store.default_hashes", lambda: [missing, digest])
     store = Store(tmp_path / "server")
+    settings = store.config.as_dict()
+    settings["evaluation"]["limits"]["step_fuel"] = 100_000
+    settings["evaluation"]["episode_timeout_seconds"] = 30
+    store.set_config(settings)
     monkeypatch.setattr(server, "_store", store)
     client = TestClient(server.app)
     client.headers["Authorization"] = f"Bearer {store.add_team('team', team_type='participant')}"
@@ -340,11 +351,19 @@ def test_worker_resolves_cold_cache_and_continues_after_missing_episode(tmp_path
     worker.evaluate_job(store, failed_job, log=lambda *args: None)
     failed_result = client.get(f"/submissions/{submission_id}").json()
     assert failed_result["jobs"][0]["status"] == "failed"
+    assert failed_result["jobs"][0]["evaluation_config"] == failed_job["evaluation_config"]
     assert failed_result["progress"]["failed"] == 1 and failed_result["progress"]["queued"] == 1
     job = store.claim_next()
     assert job["episode_hash"] == digest
+    captured = job["evaluation_config"]
+    settings["evaluation"]["limits"]["step_fuel"] = 1
+    settings["evaluation"]["episode_timeout_seconds"] = 0.001
+    store.set_config(settings)  # claimed work must keep its original limits and outer timeout
     worker.evaluate_job(store, job, log=lambda *args: None)
     assert cache.read_bytes() == archive.read_bytes()
+    actual = json.loads((store.report_dir(submission_id, digest) / "report.json").read_text())
+    assert actual["limits"] == captured["limits"]
+    assert actual["limits"]["step_fuel"] == 100_000 and actual["episodes"][0]["completed"]
     detail = client.get(f"/submissions/{submission_id}")
     assert detail.status_code == 200
     result = detail.json()
@@ -363,3 +382,18 @@ def test_worker_resolves_cold_cache_and_continues_after_missing_episode(tmp_path
     assert float(np.median(fuel)) == summary["fuel_per_frame_median"]
     assert client.get("/submissions").json()[0]["summary"] == summary
     assert store.claim_next() is None
+
+
+@pytest.mark.parametrize("mismatch", ["missing", "different", "extra"])
+def test_worker_rejects_report_limits_that_differ_from_claim(queued, monkeypatch, mismatch):
+    store, job = queued
+    result = report()
+    if mismatch == "missing":
+        del result["limits"]
+    elif mismatch == "different":
+        result["limits"]["step_fuel"] += 1
+    else:
+        result["limits"]["unexpected"] = 1
+    fake_evaluate(monkeypatch, result)
+    worker.evaluate_job(store, job, log=lambda *args: None)
+    assert store.finished == [(job["id"], None, "internal error")]

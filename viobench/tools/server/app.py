@@ -4,18 +4,21 @@
     GET  /submissions        the team's submissions (all for admins), newest first, with current-set summaries once evaluated
     GET  /submissions/{id}   one of them, with its results once evaluated
     DELETE /submissions/{id} baseline: delete an own submission when none of its jobs is running
-    GET  /config             the rules (`server.config`), team name/type and submission pause message
+    GET/PUT /config          current rules and own allowance; admin can update rules
+    GET  /teams              admin: team allowances, without authentication tokens
+    PUT  /teams/{id}/allowance admin: daily quota override, unlimited and today's extra uploads
     GET  /comparison         own and baseline scores for the current evaluation selection
     PUT  /submission-pause   admin: {"message": "reason"} to pause, {"message": null} to resume
     GET/PUT /evaluations    admin: current hashes and presets; save a selection with optional backfill
     POST /evaluations/schedule  admin: schedule missing jobs for all/one submission and current/explicit hashes
+    POST /evaluations/rerun-outdated admin: rerun outdated terminal jobs in the current set
     GET  /, /app.js, /style.css   the web UI (ui/): a page on top of the routes above
 
 Every API request carries "Authorization: Bearer <token>" (tokens: `python -m viobench.tools.server.teams`). Submission
 lists and details show the team's own submissions, or all submissions for admins; comparisons also show baseline scores.
 The UI's files are public.
-VIOBENCH_SERVER_DIR: uploads, reports and sqlite (default ./server-data); the rules are
-the checked-in viobench/tools/config.json.
+VIOBENCH_SERVER_DIR: uploads, reports and sqlite (default ./server-data). Current rules are in SQLite;
+viobench/tools/config.json seeds a fresh database and supplies local evaluation defaults.
 The evaluation itself is done by `viobench.tools.server.worker`, which polls the queue.
 """
 import json
@@ -24,12 +27,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Body, FastAPI, File, Form, Header, HTTPException, Response, UploadFile
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..abi import AbiError
 from ..abi.module import runtime_descriptor
 from ..abi.wasm_binary import iter_sections
-from .store import MAX_PAUSE_MESSAGE, Paused, Refused, Store
+from .store import MAX_PAUSE_MESSAGE, Paused, Refused, Store, UploadTooLarge
 
 app = FastAPI(title="viobench submissions", docs_url=None, redoc_url=None, openapi_url=None)  # the routes below, nothing else
 _store = None
@@ -77,7 +80,7 @@ async def submit(file: UploadFile = File(...), label: str = Form(""), authorizat
     message = get_store().pause_message()
     if message is not None:
         raise HTTPException(status_code=503, detail=message)
-    config = get_store().config
+    config = get_store().config.uploads
     data = await file.read()
     if len(data) > config.max_upload_mib << 20:
         raise HTTPException(status_code=413, detail=f"file larger than {config.max_upload_mib} MiB")
@@ -97,6 +100,8 @@ async def submit(file: UploadFile = File(...), label: str = Form(""), authorizat
         submission_id = get_store().add(token, label[:80], file.filename or "solution.wasm", data)
     except Paused as error:  # the admin may have paused while the upload was being read and checked
         raise HTTPException(status_code=503, detail=str(error)) from None
+    except UploadTooLarge as error:  # rechecked with the live rules in the upload transaction
+        raise HTTPException(status_code=413, detail=str(error)) from None
     except Refused as error:  # today's upload quota is used up
         raise HTTPException(status_code=429, detail=str(error)) from None
     return public(get_store().get(token, submission_id))
@@ -109,6 +114,7 @@ def submissions(authorization: str | None = Header(default=None)):
         results = row.pop("results")
         row["summary"] = results["summary"]
         row["partial"] = results["partial"]
+        row["outdated"] = results["outdated"]
     return rows
 
 
@@ -140,9 +146,7 @@ def delete_submission(submission_id: str, authorization: str | None = Header(def
 @app.get("/config")
 def configuration(authorization: str | None = Header(default=None)):
     token = authenticate(authorization)
-    return {**get_store().config.as_dict(), "team_name": get_store().team_name(token),
-            "team_type": get_store().team_type(token), "pause_message": get_store().pause_message(),
-            "evaluation_hashes": get_store().evaluation_hashes()}
+    return get_store().configuration(token)
 
 
 @app.get("/comparison")
@@ -153,6 +157,44 @@ def comparison(authorization: str | None = Header(default=None)):
 def require_admin(authorization):
     if not get_store().is_admin(authenticate(authorization)):
         raise HTTPException(status_code=403, detail="admin access required")
+
+
+@app.put("/config")
+def update_configuration(values: dict = Body(...), authorization: str | None = Header(default=None)):
+    require_admin(authorization)
+    try:
+        get_store().set_config(values)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    return configuration(authorization)
+
+
+class TeamAllowance(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    daily_quota: int | None = Field(..., ge=0, le=2**53 - 1)
+    unlimited: bool
+    extra_uploads: int = Field(..., ge=0, le=2**53 - 1)
+
+
+@app.get("/teams")
+def team_allowances(authorization: str | None = Header(default=None)):
+    require_admin(authorization)
+    return get_store().team_allowances()
+
+
+@app.put("/teams/{team_id}/allowance")
+def update_team_allowance(team_id: int, allowance: TeamAllowance, authorization: str | None = Header(default=None)):
+    require_admin(authorization)
+    try:
+        return get_store().set_team_allowance(team_id, **allowance.model_dump())
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from None
+
+
+@app.post("/evaluations/rerun-outdated")
+def rerun_outdated(authorization: str | None = Header(default=None)):
+    require_admin(authorization)
+    return get_store().rerun_outdated()
 
 
 class EvaluationSelection(BaseModel):

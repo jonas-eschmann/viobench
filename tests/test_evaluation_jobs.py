@@ -1,7 +1,9 @@
 """Evaluation selection, durable per-episode jobs, and upload quota accounting; no datasets or network."""
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import asdict, replace
+import json
 from threading import Barrier
+import time
 
 import numpy as np
 import pytest
@@ -29,6 +31,14 @@ def jobs(store, token, submission_id):
     return {job["episode_hash"]: job for job in store.get(token, submission_id)["jobs"]}
 
 
+def start_job(store, job_id):
+    """Set up a particular queued job for tests that deliberately complete jobs out of FIFO order."""
+    with store._connect() as connection:
+        connection.execute("BEGIN IMMEDIATE")
+        connection.execute("UPDATE evaluation_jobs SET status = 'running', started = ?, evaluation_config = ? "
+                           "WHERE id = ? AND status = 'queued'", (time.time(), json.dumps(asdict(store.config.evaluation)), job_id))
+
+
 def succeed(store, submission_id, job, fuel=(1, 3), rpe=0.1, sim3=0.2, completed=True):
     """Persist the same numeric result and fuel artifact that the isolated worker commits."""
     samples = np.asarray(fuel, dtype=np.float64)
@@ -43,6 +53,7 @@ def succeed(store, submission_id, job, fuel=(1, 3), rpe=0.1, sim3=0.2, completed
                     "velocity_rmse": 0.3, "angular_velocity_rmse": 0.4},
         **fuel_statistics(samples),
     }
+    start_job(store, job["id"])
     store.finish_job(job["id"], result=result)
     return result
 
@@ -61,7 +72,7 @@ def test_default_selection_is_seeded_once_and_reopening_preserves_state(tmp_path
     reopened = Store(tmp_path)
     assert reopened.evaluation_hashes() == [D, A]
     assert reopened.pause_message() == "Maintenance"
-    assert set(reopened.evaluations()) == {"hashes", "presets"}
+    assert set(reopened.evaluations()) == {"hashes", "presets", "outdated_jobs", "outdated_running"}
 
 
 @pytest.mark.parametrize("invalid", [[], [A, A.upper()], ["x" * 40], ["a" * 39], [7], A])
@@ -109,7 +120,7 @@ def test_selection_changes_during_execution_preserve_queued_work_and_reuse_pairs
     assert store.set_evaluations([B, C]) == 0
     view = store.get(token, submission_id)
     assert view["progress"] == {"total": 2, "finished": 0, "completed": 0, "failed": 0,
-                                "queued": 1, "running": 0, "missing": 1}
+                                "queued": 1, "running": 0, "missing": 1, "outdated": 0}
     preserved = jobs(store, token, submission_id)
     assert not preserved[A]["selected"] and preserved[A]["status"] == "running"
     assert preserved[B]["status"] == "queued"
@@ -180,7 +191,7 @@ def test_concurrent_scheduling_is_idempotent_and_claims_are_unique(store):
 def test_jobs_run_fifo_including_backfills(store):
     token = store.add_team("older")
     old = submit(store, token)
-    store.finish_job(jobs(store, token, old)[A]["id"], error="failure")
+    store.finish_job(store.claim_next()["id"], error="failure")
     store.set_evaluations([B], backfill=True)
     newcomer = store.add_team("newer")
     new = submit(store, newcomer)
@@ -192,10 +203,10 @@ def test_jobs_run_fifo_including_backfills(store):
 
 
 def test_upload_quota_counts_accepted_uploads_independently_of_jobs(store):
-    store.config = replace(store.config, daily_quota=2)
+    store.set_config(replace(store.config, uploads=replace(store.config.uploads, daily_quota=2)))
     token = store.add_team("team")
     first = submit(store, token)
-    store.finish_job(jobs(store, token, first)[A]["id"], error="failure")
+    store.finish_job(store.claim_next()["id"], error="failure")
     store.set_evaluations([A, B], backfill=True)
     assert store.get(token, first)["status"] == "queued"
     second = submit(store, token)  # Pending jobs allow another upload when quota remains.
@@ -206,6 +217,7 @@ def test_upload_quota_counts_accepted_uploads_independently_of_jobs(store):
     assert store.get(token, first)["status"] == "done"
     second_jobs = jobs(store, token, second)
     for job in second_jobs.values():
+        start_job(store, job["id"])
         store.finish_job(job["id"], error="failure")
     assert store.get(token, second)["status"] == "failed"
     with pytest.raises(Refused, match="quota"):
@@ -218,7 +230,7 @@ def test_upload_quota_counts_accepted_uploads_independently_of_jobs(store):
 
 
 def test_concurrent_uploads_cannot_exceed_the_daily_quota(store):
-    store.config = replace(store.config, daily_quota=2)
+    store.set_config(replace(store.config, uploads=replace(store.config.uploads, daily_quota=2)))
     token = store.add_team("team")
     barrier = Barrier(6)
 
@@ -272,12 +284,16 @@ def test_aggregates_pool_unequal_frame_distributions_and_follow_current_selectio
 def test_wrong_hash_and_duplicate_completion_do_not_mutate_the_job(store):
     token = store.add_team("team")
     submission_id = submit(store, token)
+    queued = jobs(store, token, submission_id)[A]
+    with pytest.raises(ValueError, match="running"):
+        store.finish_job(queued["id"], error="not claimed")
+    assert jobs(store, token, submission_id)[A] == queued
     running = store.claim_next()
     with pytest.raises(ValueError, match="hash"):
         store.finish_job(running["id"], result={"hash": B})
     assert jobs(store, token, submission_id)[A]["status"] == "running"
     store.finish_job(running["id"], error="failure")
     finished = jobs(store, token, submission_id)[A]
-    with pytest.raises(ValueError, match="pending"):
+    with pytest.raises(ValueError, match="running"):
         store.finish_job(running["id"], error="different failure")
     assert jobs(store, token, submission_id)[A] == finished

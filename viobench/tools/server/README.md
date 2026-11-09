@@ -4,8 +4,9 @@ The app queues uploads in SQLite and shows each team its own submissions; admins
 Each submission has one job per requested episode. One worker supervises evaluation subprocesses, downloading
 uncached archives as needed. Both processes use `VIOBENCH_SERVER_DIR` (default `./server-data`).
 
-This schema requires a fresh database; older submission databases are not migrated. Use an empty server-data
-directory or a new Compose server-data volume, retaining the old data separately. Run fresh evaluations for the
+This schema, including saved competition settings and team allowances, requires a fresh database; older submission
+databases are not migrated. Existing deployments must explicitly choose an empty server-data directory or a new
+Compose server-data volume, retaining the old data and a backup separately. Run fresh evaluations for the
 zero-prediction scoring rule; results computed with the previous held-pose rule are not converted.
 
 ```bash
@@ -35,6 +36,7 @@ the evaluation subprocesses; interrupted running jobs are requeued at the next w
 Each evaluator reads its archive through conta (`CONTA_CACHE`, default
 `~/.cache/conta`), downloading it if absent. A download failure fails that job with a sanitized public error;
 details stay in the private log. Saving or scheduling again does not rerun existing jobs, including failed ones.
+**Rerun outdated for current set** is the explicit exception described below.
 
 For additional local archives, set `CONTA_SEARCH_PATHS` to directories containing `<hash>` or `<hash>.gz` files
 (for a shard checkout, use its `data` directory). Separate directories with `:` on Unix or `;` on Windows.
@@ -65,6 +67,21 @@ docker compose -f viobench/tools/server/compose.yaml exec app python -m viobench
 Use the printed token in the same sign-in form. Admins see all submissions and their results, with the submitting
 team's name and account type in the list and details. Admin accounts cannot upload (`POST /submissions` returns 403).
 `teams list` shows each account's type and quota exemption. Naming a team "admin" alone does not grant admin access.
+
+Admins edit **Competition settings** in the browser: the global daily quota, reset time zone, upload size,
+episode timeout and guest limits. Settings persist in SQLite; saving needs no restart. The checked-in
+[`config.json`](../config.json) seeds a fresh server and supplies local CLI defaults, rather than overriding saved
+server settings on restart. These controls do not change deployment settings such as worker concurrency or container memory.
+Forms initialize at sign-in; polling updates the saved values beside them without replacing local edits.
+To reproduce server limits locally, save the `evaluation.limits` object as JSON and pass it to
+`viobench evaluate solution.wasm --limits limits.json`. `viobench check` always uses the packaged defaults.
+
+**Team allowances** lists account names/types and usage without exposing tokens. Set a daily override (blank means
+the global quota), unlimited uploads, or extra uploads for the current quota day, then save that team's form.
+Extra uploads is the day's total extra allowance, not an increment; it expires at the next quota-day boundary.
+Changing the reset time zone recomputes today's counted uploads and applicable extras using the new local midnight.
+The saved status shows the effective base quota, extras, usage and remaining allowance. Teams see their own allowance
+beside the upload form. Unlimited accounts still obey the upload pause and size limit.
 
 Change an existing team's type using its token from `teams list`:
 
@@ -112,7 +129,7 @@ The fuel interval from `step_fuel` to `1.2 × step_fuel` still contributes `ln(1
 weight than on linear axes. The comparison table provides raw values and names. Baseline details, files, and
 historical jobs remain private.
 
-Only submissions with reports for every selected episode and finite scores appear. Guest errors still produce
+Only submissions with reports for every selected episode, finite scores and current evaluation settings appear. Guest errors still produce
 scores: the failed and remaining frames use zero position/twist and identity rotation, and alignment includes all
 frames. Infrastructure failures without a report remain unavailable. Selecting additional episodes hides points
 until the existing fill-missing workflow supplies those results. Comparison data refreshes every 15 seconds.
@@ -130,27 +147,40 @@ Submission responses include the submitting account's `team_name` and `team_type
 |---|---|
 | `GET /` (`/app.js`, `/style.css`) | the web UI; public files, strict Content-Security-Policy |
 | `POST /submissions` | multipart `file` (and `label`) → 201 |
-| `GET /submissions` | the team's submissions (all submissions for admins), newest first, with current-set `status`, `progress` and `summary` |
-| `GET /submissions/<id>` | current-set `results` (`summary`, `episodes`, `partial`) plus all scheduled `jobs`, including episodes outside the current set; admins can access any submission |
+| `GET /submissions` | the team's submissions (all submissions for admins), newest first, with current-set `status`, `progress`, `summary`, `partial` and `outdated` |
+| `GET /submissions/<id>` | current-set `results` (`summary`, `episodes`, `partial`, `outdated`) plus all scheduled `jobs`, including episodes outside the current set; admins can access any submission |
 | `DELETE /submissions/<id>` | baseline accounts' own submissions only: 200 `{"deleted": "<id>"}`; 403 for other account types, 404 if missing or not owned, 409 if any job is running |
-| `GET /config` | the rules below, `team_name`, `team_type`, `pause_message` (null when accepting uploads), and current `evaluation_hashes` |
+| `GET /config` | nested `uploads` and `evaluation` rules, `team_name`, `team_type`, `pause_message`, `evaluation_hashes`, and the caller's resolved `allowance` (base daily quota, used, extras, remaining, unlimited, day) |
+| `PUT /config` | admin only: complete `{uploads, evaluation}` settings; returns the same shape as `GET /config` |
+| `GET /teams` | admin only: account id/name/type, nullable daily override, unlimited flag, today's extras/usage/remaining, effective daily base quota and day; no tokens |
+| `PUT /teams/<id>/allowance` | admin only: `{daily_quota: null or nonnegative integer, unlimited: boolean, extra_uploads: nonnegative integer}`; sets today's total extras and returns the team row |
 | `GET /comparison` | current `evaluation_hashes`, one aggregate point per eligible submission from the viewer or shared baselines, baseline and combined frontiers, and improvement area; no other teams' private submissions |
 | `PUT /submission-pause` | admin only: JSON `{"message": "reason"}` pauses or updates the message; `{"message": null}` resumes; returns `pause_message` |
-| `GET /evaluations` | admin only: current `hashes` and named `presets` |
+| `GET /evaluations` | admin only: current `hashes`, named `presets`, and current-set `outdated_jobs` (finished) / `outdated_running` counts across all teams |
 | `PUT /evaluations` | admin only: `{"hashes": ["<sha1>", "..."], "backfill": true}` saves the set and optionally schedules missing jobs for all submissions; returns selection and `scheduled` count |
 | `POST /evaluations/schedule` | admin only: optional `submission_id` and `hashes`; defaults to all submissions and the current set; returns `scheduled` count |
+| `POST /evaluations/rerun-outdated` | admin only: replaces outdated done/failed jobs for the current set across all teams, including baselines; returns `scheduled` and `skipped_running`; queued jobs stay unchanged |
 
-Rules: [`viobench/tools/config.json`](../config.json), checked in; every key is required, and its `limits` are what
-`viobench check` and `evaluate` apply locally too (restart app and worker after editing).
+`uploads` contains `daily_quota`, `quota_time_zone` and `max_upload_mib`. `evaluation` contains
+`episode_timeout_seconds` and `limits` (`init_fuel`, `step_fuel`, `memory_bytes`, `table_elements`,
+`init_wall_seconds`, `step_wall_seconds`). Each settings update supplies every key; quotas may be zero,
+while sizes, timeouts and guest limits must be positive.
 
-A new upload schedules jobs for the current set. Every accepted upload counts toward `daily_quota`, resetting at
-midnight in `quota_time_zone`; failed evaluations do not refund uploads. Queued or running jobs do not block another
-upload. Accounts created with `teams add --unlimited` have no daily quota. Scheduling more jobs for existing uploads
-does not affect the quota. Each episode job has a 24-minute timeout (`episode_timeout_seconds: 1440`), including
-any archive download.
+A new upload schedules jobs for the current set. Every accepted upload counts toward the team's daily quota plus
+today's extras, resetting at midnight in `uploads.quota_time_zone`; failed evaluations do not refund uploads.
+Queued or running jobs do not block another upload. Unlimited accounts have no daily quota; their `remaining` is null.
+Scheduling or rerunning jobs for existing uploads does not affect the quota. The default episode timeout is
+24 minutes (`evaluation.episode_timeout_seconds: 1440`), including any archive download.
+
+Each job snapshots the evaluation settings when it starts. Running jobs finish under their snapshot; queued jobs
+use the saved settings when claimed. Results computed with different settings remain readable and are marked
+**outdated**, but neither they nor outdated baselines enter comparison points or claimed area. The list and details
+show the outdated count; each job's `evaluation_config` snapshot and `outdated` flag appear in Raw JSON.
+**Rerun outdated for current set** replaces outdated finished jobs and skips running ones; repeat after those finish
+if needed. Upload-only settings and team allowances do not make results outdated.
 
 Displayed status and summaries always use the current set: `queued`, `running`, `incomplete` (missing jobs), `done`
-or `failed`. Progress counts finished, completed, failed, queued, running and missing episodes.
+or `failed`. Progress counts finished, completed, failed, queued, running, missing and terminal outdated episodes.
 Partial summaries update as selected episodes finish. Submissions have upload timestamps; start/finish times belong
 to individual jobs and remain available in the details JSON. The job table marks jobs in the current set.
 

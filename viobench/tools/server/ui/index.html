@@ -58,8 +58,25 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
       <label class="inline"><input id="evaluation-backfill" type="checkbox"> Also evaluate all existing submissions</label>
       <button id="evaluation-save" type="submit">Save</button>
       <button id="evaluation-fill" type="button">Fill missing for current set</button>
+      <button id="evaluation-rerun" type="button">Rerun outdated for current set</button>
     </form>
     <p class="hint">New uploads use the saved set. Filling missing evaluations includes all submissions and keeps existing results.</p>
+    <p id="evaluation-outdated" class="hint"></p>
+  </section>
+
+  <section id="settings-controls" hidden>
+    <h2>Competition settings</h2>
+    <p class="hint">Saved evaluation settings apply when a job starts. Existing results stay visible but become outdated when their settings differ; rerun them to restore comparison points. Polling keeps your edits.</p>
+    <form id="settings-form">
+      <div id="settings-fields"></div>
+      <button id="settings-save" type="submit">Save competition settings</button>
+    </form>
+  </section>
+
+  <section id="teams-controls" hidden>
+    <h2>Team allowances</h2>
+    <p class="hint">Leave the daily override blank to use the global quota. Extra uploads apply only to today; Save sets the extra allowance to the entered total. Polling updates saved values without changing your edits.</p>
+    <div id="team-allowances"></div>
   </section>
 
   <section id="upload-section">
@@ -77,7 +94,7 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
 
   <section>
     <h2>Comparison with baselines</h2>
-    <p class="hint">Current-set results: maximum fuel per frame and mean Sim(3) ATE across all selected episodes, with equal weight per episode. Lower is better on both axes. Only submissions with all reports appear.</p>
+    <p class="hint">Current-set results: maximum fuel per frame and mean Sim(3) ATE across all selected episodes, with equal weight per episode. Lower is better on both axes. Only submissions with all reports evaluated under the current settings appear.</p>
     <p class="comparison-legend"><span class="own-key">● Your submissions</span> <span>■ Baselines</span> <span>┄ Baseline frontier</span> <span class="own-key">━ Pareto frontier (baselines + yours)</span></p>
     <p class="hint">Shading shows your extra area beyond the baselines. Both axes and the area use logarithmic scales, rewarding proportional improvements. Values below 1 fuel/frame or 1 mm ATE are clamped for the plot and area; Exact values keeps the raw scores. The upper reference uses 1.2× the fuel limit and 1.2× the worst baseline mean ATE after clamping.</p>
     <p class="hint">The displayed lower bounds follow the lowest points with a 10× margin, limited by the log floors. This zoom does not change the claimed-area score.</p>

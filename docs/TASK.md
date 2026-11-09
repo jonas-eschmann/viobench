@@ -56,7 +56,10 @@ Reports produced with the previous last-pose rule must be reevaluated before com
 | wall clock per step | 60 s |
 | submission size | 128 MiB (the Python runtime is 48 MiB) |
 
-Set in `viobench/tools/config.json`; `viobench check` and `evaluate` apply the same limits as the server.
+These are the defaults in `viobench/tools/config.json`, used by local `viobench check` and `evaluate`.
+Instructors can change the server's saved limits and timeout; its **Rules** and `GET /config` show the current values.
+Jobs record the settings used. Older results remain readable but are excluded from comparisons until rerun under
+the current evaluation settings.
 
 ## Data
 

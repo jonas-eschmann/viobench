@@ -63,11 +63,15 @@ curl -H "Authorization: Bearer $TOKEN" https://<server>/config               # t
 ```
 
 The instructors select the server's episode set, initially the public set; `/config` lists its `evaluation_hashes`.
-Results and progress use the current set and update as episodes finish. The server returns metrics only, no logs;
-`viobench evaluate` applies the same guest limits, so reproduce failures locally. Each server episode job has a
-24-minute timeout, including any archive download. Quota (see `/config`): one accepted upload per day, resetting at
-midnight Pacific time. Failed evaluations do not refund uploads. Queued or running evaluations do not block another
-upload; additional evaluations of an existing submission do not count as uploads.
+Results and progress use the current set and update as episodes finish. The server returns metrics only, no logs.
+Instructors can change competition settings without restarting the server; check the page's **Rules** or `/config`
+(`uploads` and `evaluation`). Local `viobench evaluate` uses the checked-in defaults, which may differ from the saved
+server settings. To match server limits, save `/config`'s `evaluation.limits` object to `limits.json` and run
+`viobench evaluate solution.wasm --limits limits.json`. `viobench check` uses the packaged defaults.
+The default server episode timeout is 24 minutes, including any archive download.
+Your upload form shows today's usage and remaining allowance, including any team override or extra uploads.
+The default is one upload per day, resetting at midnight Pacific time. Failed evaluations do not refund uploads.
+Queued or running evaluations do not block another upload; extra evaluations of an existing submission do not count as uploads.
 
 The comparison plot shows your submissions alongside shared baselines. Lower **Sim(3)-aligned ATE** and lower
 **maximum fuel per frame** are better. Each submission uses the mean ATE (equal weight per episode) and maximum fuel over the
@@ -82,6 +86,9 @@ The full scoring reference and percentage denominator stay unchanged, as does th
 The fuel interval above `step_fuel` still earns area, but has less relative weight than on linear axes.
 Points appear once every selected episode has a scored report, and update when the instructors change the set and
 fill in the missing evaluations.
+If evaluation settings change, older results remain visible with an **outdated** warning but leave the plot and area
+calculation until rerun. Running evaluations finish with their original settings; the details' Raw JSON records
+each job's settings. Upload quotas and allowances do not affect result validity.
 
 After a solution error, the failed and remaining frames are scored with zero position, identity rotation, and zero
 twist. Sim(3) alignment and ATE include every frame. Fuel counts actual attempted steps, including a failing step;

@@ -56,6 +56,7 @@ def test_delete_removes_all_jobs_and_artifacts_and_baseline_comparison_point(api
     with store._connect() as connection:
         failed_id = connection.execute("SELECT id FROM evaluation_jobs WHERE submission_id = ? AND episode_hash = ?",
                                        (submission_id, B)).fetchone()[0]
+    assert store.claim_next()["id"] == failed_id
     store.finish_job(failed_id, error="download failed")
     for digest in (B, C):
         directory = store.report_dir(submission_id, digest)

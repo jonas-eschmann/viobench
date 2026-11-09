@@ -61,7 +61,11 @@ form {
 
 form button, form progress, form .inline, form .hint { grid-column: 2; justify-self: start; }
 form progress { width: 100%; }
-input:not([type]), input[type=text], textarea, select { width: 100%; padding: 0.35rem 0.45rem; font: inherit; }
+input:not([type]), input[type=text], input[type=number], textarea, select { width: 100%; padding: 0.35rem 0.45rem; font: inherit; }
+#settings-fields { display: contents; }
+.setting-value .hint { display: block; }
+.allowance-card { border-top: 1px solid var(--line); padding: 0.5rem 0 1rem; }
+.outdated { color: var(--wait); }
 textarea { resize: vertical; }
 #token { font-family: ui-monospace, monospace; }  /* tokens mix l, 1, I, O and 0 */
 

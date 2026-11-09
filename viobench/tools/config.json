@@ -1,14 +1,18 @@
 {
- "daily_quota": 1,
- "quota_time_zone": "America/Los_Angeles",
- "max_upload_mib": 128,
- "episode_timeout_seconds": 1440,
- "limits": {
-  "init_fuel": 200000000000,
-  "step_fuel": 20000000000,
-  "memory_bytes": 2147483648,
-  "table_elements": 1048576,
-  "init_wall_seconds": 300,
-  "step_wall_seconds": 60
+ "uploads": {
+  "daily_quota": 1,
+  "quota_time_zone": "America/Los_Angeles",
+  "max_upload_mib": 128
+ },
+ "evaluation": {
+  "episode_timeout_seconds": 1440,
+  "limits": {
+   "init_fuel": 200000000000,
+   "step_fuel": 20000000000,
+   "memory_bytes": 2147483648,
+   "table_elements": 1048576,
+   "init_wall_seconds": 300,
+   "step_wall_seconds": 60
+  }
  }
 }

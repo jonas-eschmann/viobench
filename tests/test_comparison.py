@@ -12,13 +12,14 @@ from fastapi.testclient import TestClient
 from viobench.tools.server import app as server
 from viobench.tools.server.evaluations import dominated_area
 from viobench.tools.server.store import Store
-from tests.test_evaluation_jobs import A, B, C, MODULE, succeed
+from tests.test_evaluation_jobs import A, B, C, MODULE, start_job, succeed
 
 
 @pytest.fixture
 def comparison(tmp_path, monkeypatch):
     store = Store(tmp_path)
-    store.config = replace(store.config, limits=replace(store.config.limits, step_fuel=10))
+    store.set_config(replace(store.config, evaluation=replace(store.config.evaluation,
+                             limits=replace(store.config.evaluation.limits, step_fuel=10))))
     store.set_evaluations([A, B])
     monkeypatch.setattr(server, "_store", store)
     return store, TestClient(server.app)
@@ -135,6 +136,7 @@ def test_comparison_excludes_unscored_or_invalid_selected_reports(comparison):
     failed = submit(store, token, scores=(1,))
     with store._connect() as connection:
         job_id = connection.execute("SELECT id FROM evaluation_jobs WHERE submission_id = ? AND episode_hash = ?", (failed, B)).fetchone()[0]
+    start_job(store, job_id)
     store.finish_job(job_id, error="download failed")
     for score in (float("nan"), float("inf"), -1, None):
         submit(store, token, scores=(1, score))

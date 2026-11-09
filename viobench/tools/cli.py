@@ -132,10 +132,25 @@ def run_on_episodes(arguments, function):
 
 
 def command_evaluate(arguments):
+    import json
+    from pathlib import Path
+
     from .runner.run import evaluate
+    from .runner.sandbox import Limits
+
+    try:
+        limits = None
+        if arguments.limits:
+            values = json.loads(Path(arguments.limits).read_text())
+            if not isinstance(values, dict):
+                raise ValueError("limits must be a JSON object")
+            limits = Limits.from_dict(values)
+    except (OSError, ValueError, TypeError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
 
     def run(episodes):
-        result = evaluate(arguments.wasm, episodes, output_dir=arguments.output, max_episodes=arguments.max_episodes)
+        result = evaluate(arguments.wasm, episodes, output_dir=arguments.output, max_episodes=arguments.max_episodes, limits=limits)
         summary = result["summary"]
         print(f"summary: {summary['completed']}/{summary['episodes']} episodes completed, Sim(3) ATE mean {summary['sim3_ate_rmse_mean']:.3f} m, "
               f"fuel/frame max {summary['fuel_per_frame_max']:,.0f} "
@@ -304,6 +319,7 @@ def main(argv=None):
     add_episodes_argument(evaluate)
     evaluate.add_argument("-o", "--output", help="report directory; also write trajectory.mp4 per episode (default: ./report-<name>, without video)")
     evaluate.add_argument("--max-episodes", type=int)
+    evaluate.add_argument("--limits", help="JSON file with sandbox limits (default: local config.json)")
     evaluate.set_defaults(function=command_evaluate)
 
     debug = commands.add_parser("debug", help="[runner] run a Python solution directory in this process (no sandbox): breakpoints, prints, plots")

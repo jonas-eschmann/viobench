@@ -22,12 +22,12 @@ STDOUT_FILE = "stdout.txt"  # in the log directory
 STDERR_FILE = "stderr.txt"
 
 
-CHALLENGE_LIMITS = json.loads((Path(__file__).parents[1] / "config.json").read_text())["limits"]  # the server's too
+CHALLENGE_LIMITS = json.loads((Path(__file__).parents[1] / "config.json").read_text())["evaluation"]["limits"]
 
 
 @dataclass
 class Limits:
-    """Defaults: the challenge's limits (viobench/tools/config.json), so local runs and the server apply the same."""
+    """Defaults for local runs: viobench/tools/config.json. Server jobs pass their captured limits explicitly."""
     init_fuel: int = int(CHALLENGE_LIMITS["init_fuel"])  # covers _initialize and init (interpreter start + imports)
     step_fuel: int = int(CHALLENGE_LIMITS["step_fuel"])  # per step; exceeding it traps and ends the episode
     memory_bytes: int = int(CHALLENGE_LIMITS["memory_bytes"])  # the module's one linear memory

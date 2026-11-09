@@ -23,6 +23,9 @@ let uploading = false;
 let deletingSubmission = false;
 let adminSaving = false;
 let evaluationPresets = null;
+let settingsInputs = null;
+const teamForms = new Map();
+let outdatedJobs = 0;
 let detailGeneration = 0;
 let detailPending = false;
 let shown = null;  // {id} of the submission in the details section; results change as jobs finish
@@ -173,7 +176,7 @@ function episodeHash(hash) {
 function progressText(progress) {
   if (!progress) return DASH;
   const counts = [["completed", "completed"], ["failed", "failed"], ["queued", "queued"], ["running", "running"],
-                  ["missing", "not scheduled"]];
+                  ["missing", "not scheduled"], ["outdated", "outdated"]];
   return `${progress.finished}/${progress.total} finished` + counts.filter(([key]) => progress[key]).map(([key, label]) => `; ${progress[key]} ${label}`).join("");
 }
 
@@ -225,6 +228,9 @@ function showSignIn(message, kind = "error") {
   adminSaving = false;
   deletingSubmission = false;
   evaluationPresets = null;
+  settingsInputs = null;
+  teamForms.clear();
+  outdatedJobs = 0;
   detailGeneration++;
   detailPending = false;
   $("pause-message").value = "";
@@ -233,8 +239,10 @@ function showSignIn(message, kind = "error") {
   shown = null;
   $("submissions").tBodies[0].replaceChildren();
   for (const id of ["details-title", "details-facts", "details-results", "details-jobs", "details-progress", "details-json", "updated", "rules",
-                    "team-name", "evaluation-preset", "evaluation-status", "evaluation-summary", "comparison-charts"]) $(id).replaceChildren();
-  for (const id of ["team", "account", "details", "connection", "pause-controls", "pause-banner", "evaluation-controls", "schedule-form"]) $(id).hidden = true;
+                    "team-name", "evaluation-preset", "evaluation-status", "evaluation-outdated", "evaluation-summary", "comparison-charts",
+                    "settings-fields", "team-allowances"]) $(id).replaceChildren();
+  for (const id of ["team", "account", "details", "connection", "pause-controls", "pause-banner", "evaluation-controls", "schedule-form",
+                    "settings-controls", "teams-controls"]) $(id).hidden = true;
   $("sign-in").hidden = false;
   notice(message, kind);
   $("token").focus();
@@ -274,14 +282,21 @@ async function signIn(value, remember) {
 function renderConfiguration(next) {
   if (config && config.team_type !== next.team_type) {
     session++;  // discard details requested with the previous permissions
+    adminSaving = false;
     shown = null;
     evaluationPresets = null;
+    settingsInputs = null;
+    teamForms.clear();
+    outdatedJobs = 0;
+    $("settings-fields").replaceChildren();
+    $("team-allowances").replaceChildren();
     detailGeneration++;
     detailPending = false;
     $("submissions").tBodies[0].replaceChildren();
     $("details").hidden = true;
     $("comparison-charts").replaceChildren();
-  } else if (config && JSON.stringify(config.evaluation_hashes) !== JSON.stringify(next.evaluation_hashes)) {
+  } else if (config && (JSON.stringify(config.evaluation_hashes) !== JSON.stringify(next.evaluation_hashes) ||
+                        JSON.stringify(config.evaluation) !== JSON.stringify(next.evaluation))) {
     detailGeneration++;
     detailPending = false;
     $("details").hidden = true;
@@ -293,6 +308,8 @@ function renderConfiguration(next) {
   $("upload-section").hidden = admin;
   $("pause-controls").hidden = !admin;
   $("evaluation-controls").hidden = !admin;
+  $("settings-controls").hidden = !admin;
+  $("teams-controls").hidden = !admin;
   $("schedule-form").hidden = !admin;
   $("delete-submission").hidden = config.team_type !== "baseline";
   $("team-column").hidden = !admin;
@@ -301,6 +318,7 @@ function renderConfiguration(next) {
   $("evaluation-summary").textContent = `Results and progress use the current set of ${config.evaluation_hashes.length} episode(s).`;
   renderPause();
   renderRules(config);
+  if (admin) renderSettings();
 }
 
 function renderPause() {
@@ -347,6 +365,9 @@ function renderAdminButtons() {
   $("resume-button").disabled = adminSaving || !config.pause_message;
   $("evaluation-save").disabled = adminSaving || !evaluationPresets || !$("evaluation-preset").value;
   $("evaluation-fill").disabled = adminSaving || !evaluationPresets;
+  $("evaluation-rerun").disabled = adminSaving || !outdatedJobs;
+  $("settings-save").disabled = adminSaving;
+  for (const form of teamForms.values()) form.button.disabled = adminSaving;
   $("schedule-button").disabled = adminSaving;
 }
 
@@ -371,6 +392,9 @@ function renderEvaluations(state) {
     select.value = current?.name || "";
   }
   $("evaluation-status").textContent = `Current set: ${current?.name || "custom"}, ${state.hashes.length} episode(s).`;
+  outdatedJobs = state.outdated_jobs;
+  $("evaluation-outdated").textContent = `${state.outdated_jobs} finished evaluation(s) are outdated; ${state.outdated_running} running with older settings. ` +
+    "Rerun replaces outdated finished jobs for all teams, including baselines. Running jobs are skipped; queued jobs use the settings in effect when they start.";
   renderAdminButtons();
 }
 
@@ -386,7 +410,8 @@ async function updateEvaluations(path, method, body, savedSet = false) {
   try {
     const result = await api(path, {method, headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
     if (mine !== session) return;
-    notice(`${savedSet ? "Evaluation set saved. " : ""}${result.scheduled} evaluation(s) scheduled.`, "info");
+    notice(`${savedSet ? "Evaluation set saved. " : ""}${result.scheduled} evaluation(s) scheduled.` +
+           (result.skipped_running === undefined ? "" : ` ${result.skipped_running} running job(s) skipped.`), "info");
   } catch (error) {
     if (mine !== session) return;
     if (error.status === 401) return showSignIn("The token is no longer valid.");
@@ -415,6 +440,135 @@ function scheduleSubmission(event) {
   return updateEvaluations("evaluations/schedule", "POST", body);
 }
 
+// --- competition settings and team allowances -----------------------------------------------------------------
+
+const SETTINGS_FIELDS = [
+  ["daily_quota", "uploads", 0], ["quota_time_zone", "uploads"], ["max_upload_mib", "uploads", 1],
+  ["episode_timeout_seconds", "evaluation", 0, "any"],
+  ["init_fuel", "limits", 1], ["step_fuel", "limits", 1], ["memory_bytes", "limits", 1],
+  ["table_elements", "limits", 1], ["init_wall_seconds", "limits", 0, "any"], ["step_wall_seconds", "limits", 0, "any"],
+];
+
+function competitionValues(settings) {
+  return {...settings.uploads, episode_timeout_seconds: settings.evaluation.episode_timeout_seconds, ...settings.evaluation.limits};
+}
+
+function renderSettings() {
+  const values = competitionValues(config);
+  if (settingsInputs === null) {
+    settingsInputs = {};
+    for (const [key, , minimum, step = "1"] of SETTINGS_FIELDS) {
+      const unit = key === "memory_bytes" ? " (bytes)" : key.endsWith("_seconds") ? " (seconds)" : key === "max_upload_mib" ? " (MiB)" : "";
+      const label = node("label", RULES[key][0] + unit);
+      label.htmlFor = `setting-${key}`;
+      const input = node("input");
+      input.id = label.htmlFor;
+      input.type = minimum === undefined ? "text" : "number";
+      input.required = true;
+      if (minimum !== undefined) {
+        input.min = minimum;
+        input.step = step;
+        if (input.step === "1") input.max = Number.MAX_SAFE_INTEGER;
+      }
+      input.value = values[key];
+      const saved = node("span", "", "hint");
+      const wrapper = node("div", null, "setting-value");
+      wrapper.append(input, saved);
+      $("settings-fields").append(label, wrapper);
+      settingsInputs[key] = {input, saved};
+    }
+  }
+  for (const [key] of SETTINGS_FIELDS) settingsInputs[key].saved.textContent = `Saved: ${values[key]}`;
+}
+
+function renderTeams(teams) {
+  for (const team of teams) {
+    let controls = teamForms.get(team.id);
+    if (!controls) {
+      const card = node("div", null, "allowance-card");
+      const heading = node("h3");
+      const saved = node("p", "", "hint");
+      const form = node("form");
+      controls = {heading, saved, button: node("button", "Save allowance")};
+      for (const [key, text, type] of [["daily_quota", "Daily override (blank = global)", "number"],
+                                      ["unlimited", "Unlimited uploads", "checkbox"], ["extra_uploads", "Extra uploads today", "number"]]) {
+        const label = node("label", text);
+        label.htmlFor = `team-${team.id}-${key}`;
+        const input = node("input");
+        input.id = label.htmlFor;
+        input.type = type;
+        if (type === "checkbox") input.checked = team[key];
+        else {
+          input.min = 0;
+          input.step = 1;
+          input.max = Number.MAX_SAFE_INTEGER;
+          input.required = key === "extra_uploads";
+          input.value = team[key] ?? "";
+        }
+        form.append(label, input);
+        controls[key] = input;
+      }
+      controls.button.type = "submit";
+      controls.button.disabled = adminSaving;
+      form.append(controls.button);
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        saveAdministration(`teams/${encodeURIComponent(team.id)}/allowance`, {
+          daily_quota: controls.daily_quota.value === "" ? null : Number(controls.daily_quota.value),
+          unlimited: controls.unlimited.checked,
+          extra_uploads: Number(controls.extra_uploads.value),
+        });
+      });
+      card.append(heading, saved, form);
+      $("team-allowances").append(card);
+      teamForms.set(team.id, controls);
+    }
+    controls.heading.textContent = `${team.name} (${team.type})`;
+    controls.saved.textContent = `Saved: ${team.daily_quota === null ? "global quota" : "daily override"} (${team.effective_daily_quota}/day), ` +
+      `${team.extra_uploads} extra; ${team.used} used, ${team.unlimited ? "unlimited" : team.remaining} remaining on ${team.day}.`;
+  }
+}
+
+async function saveAdministration(path, body) {
+  if (adminSaving || config.team_type !== "admin") return;
+  const mine = session;
+  adminSaving = true;
+  clearTimeout(pollTimer);
+  generation++;
+  detailGeneration++;
+  detailPending = false;
+  renderAdminButtons();
+  try {
+    const result = await api(path, {method: "PUT", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+    if (mine !== session) return;
+    if (path === "config") {
+      renderConfiguration(result);
+      if (mine !== session) refresh();
+    } else renderTeams([result]);
+    notice(path === "config" ? "Competition settings saved." : "Team allowance saved.", "info");
+  } catch (error) {
+    if (mine !== session) return;
+    if (error.status === 401) return showSignIn("The token is no longer valid.");
+    notice(`Cannot save settings: ${error.message}`);
+  } finally {
+    if (mine === session) {
+      adminSaving = false;
+      renderAdminButtons();
+      refresh();
+    }
+  }
+}
+
+function saveSettings(event) {
+  event.preventDefault();
+  const body = {uploads: {}, evaluation: {limits: {}}};
+  for (const [key, group, minimum] of SETTINGS_FIELDS) {
+    const target = group === "limits" ? body.evaluation.limits : body[group];
+    target[key] = minimum === undefined ? settingsInputs[key].input.value.trim() : Number(settingsInputs[key].input.value);
+  }
+  return saveAdministration("config", body);
+}
+
 // --- the list of submissions -----------------------------------------------------------------------------------
 
 function schedule(ms) {
@@ -429,12 +583,13 @@ async function refresh() {
   if (token === null || adminSaving || deletingSubmission) return;
   clearTimeout(pollTimer);
   const mine = ++generation;
-  let rows, evaluations, comparison;
+  let rows, evaluations, comparison, teams;
   try {
     const next = await api("config");
     if (mine !== generation) return;
     renderConfiguration(next);
-    [rows, evaluations, comparison] = await Promise.all([api("submissions"), config.team_type === "admin" ? api("evaluations") : null, api("comparison")]);
+    [rows, evaluations, comparison, teams] = await Promise.all([api("submissions"), config.team_type === "admin" ? api("evaluations") : null,
+                                                              api("comparison"), config.team_type === "admin" ? api("teams") : null]);
     if (!Array.isArray(rows)) throw new ApiError(200, "the server sent an unreadable answer");
   } catch (error) {
     if (mine !== generation) return;
@@ -450,6 +605,7 @@ async function refresh() {
   retryMs = POLL_MS;
   $("connection").hidden = true;
   if (evaluations) renderEvaluations(evaluations);
+  if (teams) renderTeams(teams);
   renderList(rows);
   renderComparison(comparison);
   $("updated").textContent = `updated ${new Date().toLocaleTimeString()}`;
@@ -465,7 +621,8 @@ function renderList(rows) {
     if (!row || typeof row !== "object") continue;
     const summary = row.summary || {};
     const statusText = row.status === "failed" && row.error ? `failed: ${row.error}` : row.status;
-    const status = node("span", statusText + (row.partial && row.summary ? " (partial results)" : ""), `status ${row.status}`);
+    const status = node("span", statusText + (row.partial && row.summary ? " (partial results)" : "") +
+                        (row.outdated ? ` (${row.progress.outdated} outdated)` : ""), `status ${row.outdated ? "outdated" : row.status}`);
     const button = node("button", "Details");
     button.type = "button";
     button.setAttribute("aria-label", `Details of ${row.label || row.id}`);
@@ -614,13 +771,11 @@ function renderComparison(comparison) {
 function renderUploadState() {
   $("upload-button").disabled = uploading || Boolean(config.pause_message);
   const hint = $("upload-hint");
-  if (isNumber(get(config, "daily_quota"))) {
-    hint.textContent = `${config.daily_quota} accepted upload(s) per day (from midnight, ${config.quota_time_zone}; unlimited accounts exempt); ` +
-                       `up to ${config.max_upload_mib} MiB.`;
-  } else {
-    hint.textContent = "";
-  }
-  hint.hidden = !hint.textContent;
+  const allowance = config.allowance;
+  hint.textContent = `${allowance.used} used; ${allowance.unlimited ? "unlimited uploads" : `${allowance.remaining} remaining`} on ${allowance.day} ` +
+    `(${config.uploads.quota_time_zone}). Daily allowance: ${allowance.daily_quota} + ${allowance.extra_uploads} extra; ` +
+    `up to ${config.uploads.max_upload_mib} MiB per upload.`;
+  hint.hidden = false;
 }
 
 async function submit(event) {
@@ -628,7 +783,7 @@ async function submit(event) {
   if (config.pause_message) return notice(config.pause_message);
   const file = $("file").files[0];
   if (!file) return;
-  const limit = get(config, "max_upload_mib");
+  const limit = config.uploads.max_upload_mib;
   if (isNumber(limit) && file.size > limit * 2 ** 20) return notice(`${file.name} is ${size(file.size)}; the limit is ${limit} MiB.`);
   if (file.size === 0) return notice(`${file.name} is empty.`);
   uploading = true;
@@ -677,7 +832,7 @@ const EPISODE_COLUMNS = [
 ];
 
 async function showDetails(id, scroll) {
-  if (deletingSubmission) return;
+  if (deletingSubmission || adminSaving) return;
   const mine = session;
   const request = ++detailGeneration;
   detailPending = true;
@@ -755,6 +910,9 @@ function renderDetails(submission) {
   results.replaceChildren();
   $("details-progress").textContent = `Current set: ${progressText(submission.progress)}.`;
   $("schedule-form").hidden = config.team_type !== "admin";
+  if (get(submission, "results", "outdated")) {
+    results.append(node("p", "Outdated results: some selected evaluations used different settings. These metrics remain visible but are excluded from comparison until rerun.", "outdated"));
+  }
   if (get(submission, "results", "partial")) {
     results.append(node("p", "Partial results for the current set. Summary numbers will update as more episodes finish.", "hint"));
   }
@@ -771,7 +929,7 @@ function renderDetails(submission) {
   const jobs = $("details-jobs");
   jobs.replaceChildren();
   jobs.append(table(["Episode", "Status", "Current set", "Sim(3) ATE (m)", "Max fuel/frame", "Error"],
-                    submission.jobs.map((job) => [episodeHash(job.episode_hash), node("span", job.status, `status ${job.status}`),
+                    submission.jobs.map((job) => [episodeHash(job.episode_hash), node("span", job.status + (job.outdated ? " (outdated settings)" : ""), `status ${job.outdated ? "outdated" : job.status}`),
                       job.selected ? "yes" : "no",
                       decimal(get(job, "result", "metrics", "sim3_ate_rmse")), fuel(get(job, "result", "fuel_per_frame_max")), job.error || DASH])));
   $("details-json").textContent = JSON.stringify(submission, null, 2);
@@ -796,9 +954,7 @@ const RULES = {
 function renderRules(rules) {
   const list = $("rules");
   list.replaceChildren();
-  const flat = Object.entries(rules || {}).filter(([key]) => !["team_type", "pause_message", "team_name", "evaluation_hashes"].includes(key))
-    .flatMap(([key, value]) => (value && typeof value === "object" ? Object.entries(value) : [[key, value]]));
-  for (const [key, value] of flat) {
+  for (const [key, value] of Object.entries(competitionValues(rules))) {
     const [label, format] = RULES[key] || [key, String];
     list.append(node("dt", label), node("dd", isNumber(value) ? format(value) : String(value)));
   }
@@ -826,7 +982,9 @@ $("pause-form").addEventListener("submit", (event) => {
 $("resume-button").addEventListener("click", () => setPause(null));
 $("evaluation-form").addEventListener("submit", saveEvaluations);
 $("evaluation-fill").addEventListener("click", () => updateEvaluations("evaluations/schedule", "POST", {}));
+$("evaluation-rerun").addEventListener("click", () => updateEvaluations("evaluations/rerun-outdated", "POST", {}));
 $("evaluation-preset").addEventListener("change", renderAdminButtons);
+$("settings-form").addEventListener("submit", saveSettings);
 $("schedule-form").addEventListener("submit", scheduleSubmission);
 $("refresh").addEventListener("click", () => {
   retryMs = POLL_MS;

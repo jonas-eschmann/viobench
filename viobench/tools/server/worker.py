@@ -27,6 +27,7 @@ import numpy as np
 
 from ..datasets.sources import argument
 from ..runner.logs import MAX_LOG_BYTES
+from .config import EvaluationConfig
 from .evaluations import public_episode
 from .store import Store
 
@@ -86,8 +87,13 @@ def evaluate_job(store, job, log=print, stop=None):
     if report_dir.exists():
         shutil.rmtree(report_dir)  # a retry must never accept a report or fuel samples from the previous attempt
     report_dir.mkdir(parents=True, exist_ok=True)
-    config = store.config
-    command = [sys.executable, "-m", "viobench", "evaluate", str(wasm), argument(digest), "-o", str(report_dir)]  # limits: config.json
+    config = EvaluationConfig.from_dict(job["evaluation_config"])
+    settings = config.as_dict()
+    (report_dir / "evaluation-config.json").write_text(json.dumps(settings, indent=1))
+    limits_path = report_dir / "limits.json"
+    limits_path.write_text(json.dumps(settings["limits"], indent=1))
+    command = [sys.executable, "-m", "viobench", "evaluate", str(wasm), argument(digest), "-o", str(report_dir),
+               "--limits", str(limits_path)]
     log(f"job {job['id']}, submission {job['submission_id']} by {job['name']}: {' '.join(command)}")
     try:
         completed = run_evaluation(command, report_dir / "worker.txt", config.episode_timeout_seconds, stop=stop)
@@ -100,6 +106,8 @@ def evaluate_job(store, job, log=print, stop=None):
         return
     try:
         report = json.loads(report_path.read_text())
+        if report.get("limits") != settings["limits"]:
+            raise ValueError("the report limits do not match the claimed settings")
         [episode] = report["episodes"]
         if episode["hash"] != digest:
             raise ValueError("the report does not match the requested episode")

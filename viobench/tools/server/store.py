@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from .config import load as load_config
+from .config import Config, load as load_config
 from .evaluations import comparison_for, default_hashes, normalize_hashes, presets, public_episode, results_for
 
 DEFAULT_DIR = Path(os.environ.get("VIOBENCH_SERVER_DIR", "server-data"))
@@ -26,8 +26,10 @@ COLUMNS = ("submissions.id, label, filename, sha256, bytes, submissions.created,
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS teams (
-    token TEXT PRIMARY KEY, name TEXT NOT NULL, created REAL NOT NULL,
+    id INTEGER PRIMARY KEY, token TEXT NOT NULL UNIQUE, name TEXT NOT NULL, created REAL NOT NULL,
     unlimited INTEGER NOT NULL DEFAULT 0,
+    daily_quota INTEGER CHECK (daily_quota >= 0),
+    extra_uploads INTEGER NOT NULL DEFAULT 0 CHECK (extra_uploads >= 0), extra_day REAL,
     type TEXT NOT NULL DEFAULT 'test' CHECK (type IN ('test', 'participant', 'baseline', 'admin'))
 );
 CREATE TABLE IF NOT EXISTS submissions (
@@ -36,14 +38,14 @@ CREATE TABLE IF NOT EXISTS submissions (
 );
 CREATE INDEX IF NOT EXISTS submissions_token ON submissions(token, created);
 CREATE TABLE IF NOT EXISTS submission_control (
-    id INTEGER PRIMARY KEY CHECK (id = 1), pause_message TEXT, evaluation_hashes TEXT NOT NULL
+    id INTEGER PRIMARY KEY CHECK (id = 1), pause_message TEXT, evaluation_hashes TEXT NOT NULL, config TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS evaluation_jobs (
     id INTEGER PRIMARY KEY,
     submission_id TEXT NOT NULL REFERENCES submissions(id),
     episode_hash TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued', 'running', 'done', 'failed')),
-    created REAL NOT NULL, started REAL, finished REAL, result TEXT, error TEXT,
+    created REAL NOT NULL, started REAL, finished REAL, result TEXT, error TEXT, evaluation_config TEXT,
     UNIQUE (submission_id, episode_hash)
 );
 CREATE INDEX IF NOT EXISTS evaluation_queue ON evaluation_jobs(status, id);
@@ -56,6 +58,10 @@ class Refused(Exception):
 
 class Paused(Refused):
     """New submissions are paused by an admin."""
+
+
+class UploadTooLarge(Refused):
+    """The current upload size limit is exceeded."""
 
 
 def day_start(now, time_zone):
@@ -74,15 +80,42 @@ class Store:
         with self._connect() as connection:
             connection.executescript("BEGIN IMMEDIATE;" + SCHEMA)
             hashes = default_hashes()
-            connection.execute("INSERT OR IGNORE INTO submission_control (id, evaluation_hashes) VALUES (1, ?)",
-                               (json.dumps(hashes),))
-        self.config = load_config()
+            connection.execute("INSERT OR IGNORE INTO submission_control (id, evaluation_hashes, config) VALUES (1, ?, ?)",
+                               (json.dumps(hashes), json.dumps(load_config().as_dict())))
 
     def _connect(self):
         connection = sqlite3.connect(self.path, timeout=30)
         connection.row_factory = sqlite3.Row
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
+
+    # --- live rules ----------------------------------------------------------------------------------------
+
+    @staticmethod
+    def _config(connection):
+        return Config.from_dict(json.loads(connection.execute("SELECT config FROM submission_control WHERE id = 1").fetchone()[0]))
+
+    @property
+    def config(self):
+        with self._connect() as connection:
+            return self._config(connection)
+
+    def set_config(self, values):
+        config = Config.from_dict(values.as_dict() if isinstance(values, Config) else values)
+        with self._connect() as connection:
+            connection.execute("UPDATE submission_control SET config = ? WHERE id = 1", (json.dumps(config.as_dict()),))
+        return config
+
+    def configuration(self, token):
+        """The team's rules and allowance from one database snapshot."""
+        with self._connect() as connection:
+            connection.execute("BEGIN")
+            config = self._config(connection)
+            team = connection.execute("SELECT * FROM teams WHERE token = ?", (token,)).fetchone()
+            control = connection.execute("SELECT * FROM submission_control WHERE id = 1").fetchone()
+            return {**config.as_dict(), "team_name": team["name"], "team_type": team["type"],
+                    "pause_message": control["pause_message"], "evaluation_hashes": json.loads(control["evaluation_hashes"]),
+                    "allowance": self._allowance(connection, team, config.uploads, time.time())}
 
     # --- teams ----------------------------------------------------------------------------------------------
 
@@ -127,6 +160,45 @@ class Store:
     def is_admin(self, token):
         return self.team_type(token) == "admin"
 
+    @staticmethod
+    def _allowance(connection, team, uploads, now):
+        start = day_start(now, uploads.quota_time_zone)
+        used = connection.execute("SELECT COUNT(*) FROM submissions WHERE token = ? AND created >= ?",
+                                  (team["token"], start)).fetchone()[0]
+        quota = uploads.daily_quota if team["daily_quota"] is None else team["daily_quota"]
+        extra = team["extra_uploads"] if team["extra_day"] == start else 0
+        unlimited = bool(team["unlimited"])
+        return {"daily_quota": quota, "used": used, "extra_uploads": extra, "unlimited": unlimited,
+                "remaining": None if unlimited else max(0, quota + extra - used),
+                "day": datetime.fromtimestamp(now, ZoneInfo(uploads.quota_time_zone)).date().isoformat()}
+
+    def _team_allowance(self, connection, team, uploads, now):
+        allowance = self._allowance(connection, team, uploads, now)
+        return {**allowance, "id": team["id"], "name": team["name"], "type": team["type"],
+                "daily_quota": team["daily_quota"], "effective_daily_quota": allowance["daily_quota"]}
+
+    def team_allowances(self):
+        """Admin team list with public IDs, never authentication tokens."""
+        with self._connect() as connection:
+            connection.execute("BEGIN")
+            uploads, now = self._config(connection).uploads, time.time()
+            return [self._team_allowance(connection, team, uploads, now)
+                    for team in connection.execute("SELECT * FROM teams ORDER BY created, id")]
+
+    def set_team_allowance(self, team_id, *, daily_quota, unlimited, extra_uploads):
+        if daily_quota is not None and (type(daily_quota) is not int or not 0 <= daily_quota <= 2**53 - 1):
+            raise ValueError("daily quota must be a nonnegative integer or null")
+        if type(extra_uploads) is not int or not 0 <= extra_uploads <= 2**53 - 1 or type(unlimited) is not bool:
+            raise ValueError("extra uploads must be a nonnegative integer and unlimited must be a boolean")
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            uploads, now = self._config(connection).uploads, time.time()
+            if not connection.execute("UPDATE teams SET daily_quota = ?, unlimited = ?, extra_uploads = ?, extra_day = ? WHERE id = ?",
+                                      (daily_quota, unlimited, extra_uploads, day_start(now, uploads.quota_time_zone), team_id)).rowcount:
+                raise LookupError("no such team")
+            team = connection.execute("SELECT * FROM teams WHERE id = ?", (team_id,)).fetchone()
+            return self._team_allowance(connection, team, uploads, now)
+
     # --- submission availability ---------------------------------------------------------------------------
 
     def pause_message(self):
@@ -156,7 +228,31 @@ class Store:
     def evaluations(self):
         with self._connect() as connection:
             connection.execute("BEGIN")
-            return {"hashes": self._evaluation_hashes(connection), "presets": presets()}
+            hashes = self._evaluation_hashes(connection)
+            outdated = self._outdated_jobs(connection, hashes, self._config(connection).evaluation.as_dict())
+            return {"hashes": hashes, "presets": presets(),
+                    "outdated_jobs": sum(job["status"] != "running" for job in outdated),
+                    "outdated_running": sum(job["status"] == "running" for job in outdated)}
+
+    @staticmethod
+    def _outdated_jobs(connection, hashes, evaluation_config):
+        return [row for row in connection.execute(
+            "SELECT id, submission_id, episode_hash, status, evaluation_config FROM evaluation_jobs WHERE status != 'queued' ORDER BY id")
+            if row["episode_hash"] in hashes and
+            (json.loads(row["evaluation_config"]) if row["evaluation_config"] is not None else None) != evaluation_config]
+
+    def rerun_outdated(self):
+        """Replace outdated terminal jobs for the current set at the back of the ordinary FIFO queue."""
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            outdated = self._outdated_jobs(connection, self._evaluation_hashes(connection), self._config(connection).evaluation.as_dict())
+            terminal = [job for job in outdated if job["status"] != "running"]
+            now = time.time()
+            for job in terminal:
+                connection.execute("DELETE FROM evaluation_jobs WHERE id = ?", (job["id"],))
+                connection.execute("INSERT INTO evaluation_jobs (submission_id, episode_hash, created) VALUES (?, ?, ?)",
+                                   (job["submission_id"], job["episode_hash"], now))
+            return {"scheduled": len(terminal), "skipped_running": len(outdated) - len(terminal)}
 
     @staticmethod
     def _schedule(connection, hashes, submission_id=None):
@@ -191,18 +287,20 @@ class Store:
     def add(self, token, label, filename, data):
         """Atomically admit an upload and schedule its jobs for the current hashes."""
         submission_id = secrets.token_hex(ID_BYTES)
-        now, config = time.time(), self.config
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
+            now, uploads = time.time(), self._config(connection).uploads
             message = connection.execute("SELECT pause_message FROM submission_control WHERE id = 1").fetchone()[0]
             if message is not None:
                 raise Paused(message)
-            unlimited = connection.execute("SELECT unlimited FROM teams WHERE token = ?", (token,)).fetchone()[0]
-            count = connection.execute("SELECT COUNT(*) FROM submissions WHERE token = ? AND created >= ?",
-                                       (token, day_start(now, config.quota_time_zone))).fetchone()[0]
-            if count >= config.daily_quota and not unlimited:
-                raise Refused(f"today's quota of {config.daily_quota} upload(s) is used up; "
-                              f"it resets at midnight ({config.quota_time_zone})")
+            if len(data) > uploads.max_upload_mib << 20:
+                raise UploadTooLarge(f"file larger than {uploads.max_upload_mib} MiB")
+            team = connection.execute("SELECT * FROM teams WHERE token = ?", (token,)).fetchone()
+            allowance = self._allowance(connection, team, uploads, now)
+            if allowance["remaining"] == 0:
+                quota = allowance["daily_quota"] + allowance["extra_uploads"]
+                raise Refused(f"today's quota of {quota} upload(s) is used up; "
+                              f"it resets at midnight ({uploads.quota_time_zone})")
             connection.execute(
                 "INSERT INTO submissions (id, token, label, filename, sha256, bytes, created) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (submission_id, token, label, filename, hashlib.sha256(data).hexdigest(), len(data), now))
@@ -239,19 +337,21 @@ class Store:
     # --- visibility, progress and metrics for the current selection -----------------------------------------
 
     @staticmethod
-    def _jobs(connection, submission_id, hashes):
+    def _jobs(connection, submission_id, hashes, evaluation_config):
         jobs = {}
-        for job_row in connection.execute("SELECT id, episode_hash, status, created, started, finished, result, error "
+        for job_row in connection.execute("SELECT id, episode_hash, status, created, started, finished, result, error, evaluation_config "
                                           "FROM evaluation_jobs WHERE submission_id = ? ORDER BY id", (submission_id,)):
             job = dict(job_row)
             job["result"] = public_episode(json.loads(job["result"])) if job["result"] else None
+            job["evaluation_config"] = json.loads(job["evaluation_config"]) if job["evaluation_config"] is not None else None
+            job["outdated"] = job["status"] != "queued" and job["evaluation_config"] != evaluation_config
             job["selected"] = job["episode_hash"] in hashes
             jobs[job["episode_hash"]] = job
         return jobs
 
-    def _view(self, connection, row, hashes, details):
+    def _view(self, connection, row, hashes, evaluation_config, details):
         submission = dict(row)
-        jobs = self._jobs(connection, row["id"], hashes)
+        jobs = self._jobs(connection, row["id"], hashes, evaluation_config)
         selected = [jobs[digest] for digest in hashes if digest in jobs]
         terminal = [job for job in selected if job["status"] in ("done", "failed")]
         completed = sum(bool(job["result"] and job["result"]["completed"]) for job in terminal)
@@ -259,7 +359,7 @@ class Store:
         progress = {"total": len(hashes), "finished": len(terminal), "completed": completed,
                     "failed": len(terminal) - completed, "queued": len(queued),
                     "running": sum(job["status"] == "running" for job in selected),
-                    "missing": len(hashes) - len(selected)}
+                    "missing": len(hashes) - len(selected), "outdated": sum(job["outdated"] for job in terminal)}
         submission["progress"] = progress
         submission["status"] = ("running" if progress["running"] else "queued" if progress["queued"] else
                                 "incomplete" if progress["missing"] else "done" if completed else "failed")
@@ -275,28 +375,32 @@ class Store:
             connection.execute("BEGIN")
             row = connection.execute(f"SELECT {COLUMNS} FROM submissions JOIN teams USING (token) "
                                      "WHERE submissions.id = ? AND (submissions.token = ? OR ?)", (submission_id, token, is_admin)).fetchone()
-            return self._view(connection, row, self._evaluation_hashes(connection), details=True) if row else None
+            return self._view(connection, row, self._evaluation_hashes(connection), self._config(connection).evaluation.as_dict(),
+                              details=True) if row else None
 
     def submissions(self, token):
         is_admin = self.is_admin(token)
         with self._connect() as connection:
             connection.execute("BEGIN")
             hashes = self._evaluation_hashes(connection)
+            evaluation_config = self._config(connection).evaluation.as_dict()
             rows = connection.execute(f"SELECT {COLUMNS} FROM submissions JOIN teams USING (token) "
                                       "WHERE submissions.token = ? OR ? ORDER BY submissions.created DESC", (token, is_admin)).fetchall()
-            return [self._view(connection, row, hashes, details=False) for row in rows]
+            return [self._view(connection, row, hashes, evaluation_config, details=False) for row in rows]
 
     def comparison(self, token):
         """Own and baseline scores from one snapshot, including for admin viewers."""
         with self._connect() as connection:
             connection.execute("BEGIN")
             hashes = self._evaluation_hashes(connection)
+            evaluation_config = self._config(connection).evaluation.as_dict()
             rows = connection.execute(
                 "SELECT submissions.id, label, teams.name AS team_name, teams.type AS team_type, "
                 "submissions.token = ? AS own FROM submissions JOIN teams USING (token) "
                 "WHERE submissions.token = ? OR teams.type = 'baseline' ORDER BY submissions.created, submissions.id",
                 (token, token)).fetchall()
-            return comparison_for(self, hashes, [(dict(row), self._jobs(connection, row["id"], hashes)) for row in rows])
+            return comparison_for(self, hashes, [(dict(row), self._jobs(connection, row["id"], hashes, evaluation_config)) for row in rows],
+                                  evaluation_config)
 
     # --- single worker -----------------------------------------------------------------------------
 
@@ -311,12 +415,13 @@ class Store:
                 "ORDER BY evaluation_jobs.id LIMIT 1").fetchone()
             if row is None:
                 return None
-            now = time.time()
-            connection.execute("UPDATE evaluation_jobs SET status = 'running', started = ? WHERE id = ?", (now, row["id"]))
-            return dict(row) | {"status": "running", "started": now}
+            now, evaluation_config = time.time(), self._config(connection).evaluation.as_dict()
+            connection.execute("UPDATE evaluation_jobs SET status = 'running', started = ?, evaluation_config = ? WHERE id = ?",
+                               (now, json.dumps(evaluation_config), row["id"]))
+            return dict(row) | {"status": "running", "started": now, "evaluation_config": evaluation_config}
 
     def requeue_running(self):
-        """Only at startup of the single worker: finished jobs are immutable."""
+        """Only at startup of the single worker; interrupted attempts capture current settings when claimed again."""
         with self._connect() as connection:
             return connection.execute("UPDATE evaluation_jobs SET status = 'queued', started = NULL WHERE status = 'running'").rowcount
 
@@ -326,8 +431,8 @@ class Store:
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             job = connection.execute("SELECT * FROM evaluation_jobs WHERE id = ?", (job_id,)).fetchone()
-            if job is None or job["status"] not in ("queued", "running"):
-                raise ValueError("job is not pending")
+            if job is None or job["status"] != "running":
+                raise ValueError("job is not running")
             if result is not None and result["hash"] != job["episode_hash"]:
                 raise ValueError("result hash does not match job")
             now = time.time()

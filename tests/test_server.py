@@ -16,6 +16,7 @@ from viobench.tools.runner.run import fuel_statistics  # noqa: E402
 from viobench.tools.server import app as server  # noqa: E402
 from viobench.tools.server import teams  # noqa: E402
 from viobench.tools.server.store import Store  # noqa: E402
+from tests.test_evaluation_jobs import start_job  # noqa: E402
 
 MODULE = b"\0asm\x01\0\0\0" + bytes([1, 4, 1, 0x60, 0, 0])  # one empty function type: a module, not a Python bundle
 NAN = float("nan")
@@ -45,6 +46,7 @@ def finish_submission(store, submission_id, results=None, error=None):
         directory = store.report_dir(submission_id, job["episode_hash"]) / "logs" / job["episode_hash"]
         directory.mkdir(parents=True)
         np.save(directory / "fuel.npy", np.array([4.1e6]))
+    start_job(store, job["id"])
     store.finish_job(job["id"], result=results, error=error)
 
 
@@ -95,7 +97,7 @@ def test_unlimited_team_has_no_daily_quota(api):
     client, store = api
     unlimited = {"Authorization": f"Bearer {store.add_team('debug', unlimited=True)}"}
     for headers in ({}, unlimited):
-        for _ in range(store.config.daily_quota):
+        for _ in range(store.config.uploads.daily_quota):
             assert client.post("/submissions", files={"file": ("x.wasm", MODULE)}, headers=headers).status_code == 201
     assert client.post("/submissions", files={"file": ("x.wasm", MODULE)}).status_code == 429
     assert client.post("/submissions", files={"file": ("x.wasm", MODULE)}, headers=unlimited).status_code == 201
@@ -105,7 +107,7 @@ def test_unlimited_team_has_no_daily_quota(api):
 @pytest.mark.parametrize("running", [False, True])
 def test_daily_quota_allows_another_upload_while_jobs_are_pending(api, running):
     client, store = api
-    store.config = replace(store.config, daily_quota=2)
+    store.set_config(replace(store.config, uploads=replace(store.config.uploads, daily_quota=2)))
     first = client.post("/submissions", files={"file": ("first.wasm", MODULE)})
     assert first.status_code == 201
     if running:
@@ -359,11 +361,11 @@ def test_admin_selects_custom_hashes_and_schedules_missing_jobs(api):
     admin = {"Authorization": f"Bearer {store.add_team('instructors', team_type="admin")}"}
     submission = client.post("/submissions", files={"file": ("x.wasm", MODULE)}).json()["id"]
     catalog = client.get("/evaluations", headers=admin).json()
-    assert set(catalog) == {"hashes", "presets"}
+    assert set(catalog) == {"hashes", "presets", "outdated_jobs", "outdated_running"}
     assert catalog["presets"][0]["name"] == "public" and catalog["presets"][0]["hashes"]
     selected = client.put("/evaluations", json={"hashes": ["B" * 40]}, headers=admin)
     assert selected.status_code == 200 and selected.json()["hashes"] == ["b" * 40]
-    assert set(selected.json()) == {"hashes", "presets", "scheduled"}
+    assert set(selected.json()) == {"hashes", "presets", "scheduled", "outdated_jobs", "outdated_running"}
     assert selected.json()["scheduled"] == 0
     assert client.get("/config").json()["evaluation_hashes"] == ["b" * 40]
     detail = client.get(f"/submissions/{submission}").json()

@@ -1,4 +1,4 @@
-"""Server presets and aggregation of immutable per-episode results."""
+"""Server presets and aggregation of per-episode results for the current rules."""
 from math import isfinite, log
 from types import SimpleNamespace
 
@@ -46,7 +46,8 @@ def results_for(store, submission_id, hashes, jobs):
     fuels = [np.load(store.report_dir(submission_id, episode["hash"]) / "logs" / episode["hash"] / "fuel.npy",
                      allow_pickle=False) for episode in episodes]
     summary = summarize([SimpleNamespace(**episode) for episode in episodes], fuels) if episodes else None
-    return {"summary": summary, "episodes": episodes, "partial": len(episodes) != len(hashes)}
+    outdated = any(jobs[digest]["outdated"] for digest in hashes if digest in jobs and jobs[digest]["status"] in ("done", "failed"))
+    return {"summary": summary, "episodes": episodes, "partial": len(episodes) != len(hashes), "outdated": outdated}
 
 
 def dominated_area(points, max_fuel, max_error, *, min_fuel=FUEL_FLOOR, min_error=ERROR_FLOOR):
@@ -66,7 +67,7 @@ def dominated_area(points, max_fuel, max_error, *, min_fuel=FUEL_FLOOR, min_erro
     return area + (max_x - previous_x) * (max_y - best_y)
 
 
-def comparison_for(store, hashes, submissions):
+def comparison_for(store, hashes, submissions, evaluation_config):
     """Compare complete selected reports and measure additional dominated area beyond the baselines."""
     def valid(value):
         return isinstance(value, (int, float)) and isfinite(value) and value >= 0
@@ -74,7 +75,7 @@ def comparison_for(store, hashes, submissions):
     points = []
     for row, jobs in submissions:
         episodes = [jobs[digest]["result"] for digest in hashes if digest in jobs and jobs[digest]["result"] is not None]
-        if len(episodes) != len(hashes):
+        if len(episodes) != len(hashes) or any(jobs[digest]["outdated"] for digest in hashes):
             continue
         scores = [episode["metrics"].get("sim3_ate_rmse") for episode in episodes]
         if not all(valid(score) for score in scores):
@@ -89,7 +90,7 @@ def comparison_for(store, hashes, submissions):
             "team_type": row["team_type"], "own": bool(row["own"]),
             "fuel_per_frame_max": fuel, "sim3_ate_rmse_mean": score,
         })
-    fuel_reference = 1.2 * store.config.limits.step_fuel
+    fuel_reference = 1.2 * evaluation_config["limits"]["step_fuel"]
     baselines = [point for point in points if point["team_type"] == "baseline"]
     coordinates = [(max(point["fuel_per_frame_max"], FUEL_FLOOR), max(point["sim3_ate_rmse_mean"], ERROR_FLOOR))
                    for point in points]
