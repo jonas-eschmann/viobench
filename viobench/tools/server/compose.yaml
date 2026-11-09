@@ -44,9 +44,16 @@ services:
     <<: *server
     command: python -m viobench.tools.server.worker --jobs ${WORKER_JOBS:-1}  # one supervisor; requeues interrupted jobs on startup
     mem_limit: ${WORKER_MEMORY:-8g}  # total across all concurrent evaluations
+    environment:
+      CONTA_SEARCH_PATHS: /srv/private-episodes
     volumes:
       - server-data:/srv/server-data
       - conta-cache:/srv/conta
+      - type: bind
+        source: ./evaluation-data/viobench-private/data
+        target: /srv/private-episodes
+        read_only: true
+        bind: {create_host_path: false}
 
 volumes:
   server-data:

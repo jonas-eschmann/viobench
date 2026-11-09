@@ -167,6 +167,11 @@ Cloudflare terminates TLS) and the worker unprivileged. Set `WORKER_JOBS=2` for 
 The worker's memory limit (`WORKER_MEMORY`, default `8g`) is shared across all evaluations. The worker has network access and a writable
 `conta-cache` volume for archive downloads. Wasmtime sandboxes the guest, while each evaluation subprocess has a time
 limit and capped logs. New selections and scheduled jobs need no service restart.
+Compose mounts `evaluation-data/viobench-private/data` beside `compose.yaml` read-only at `/srv/private-episodes`
+and sets the worker's `CONTA_SEARCH_PATHS` to it. Provision this directory with `<hash>` or `<hash>.gz` archives
+readable by container UID `10001` before starting the worker; a missing directory fails startup.
+The entire `evaluation-data` directory is excluded from Git and Docker builds. The normal `conta-cache` volume
+remains writable for public downloads and gzip extraction.
 Keep the `server-data` volume private (the sqlite holds the tokens) and back it up. Behind a
 path prefix, serve the page with a trailing slash (`/prefix/`): its requests are relative to it.
 

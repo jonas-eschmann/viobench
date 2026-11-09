@@ -3,6 +3,7 @@
 !pyproject.toml
 !README.md
 !viobench
+viobench/tools/server/evaluation-data/
 **/__pycache__
 **/build
 # compose.yaml's secrets (TUNNEL_TOKEN): Compose copies them into the tunnel container, never into the image
