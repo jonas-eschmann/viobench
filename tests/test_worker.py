@@ -36,7 +36,7 @@ def report(completed=True, hashes=(HASH,)):
 
 @pytest.fixture
 def queued(tmp_path):
-    store = SimpleNamespace(finished=[])
+    store = SimpleNamespace(directory=tmp_path, finished=[])
     store.upload_path = lambda submission_id: tmp_path / f"{submission_id}.wasm"
     store.report_dir = lambda submission_id, digest: tmp_path / "reports" / submission_id / digest
     store.finish_job = lambda job_id, result=None, error=None: store.finished.append((job_id, result, error))
@@ -48,9 +48,9 @@ def queued(tmp_path):
 
 def fake_evaluate(monkeypatch, result, commands=None, fuels=(10, 20)):
     """An evaluation subprocess that writes its report and private attempted-frame fuel samples."""
-    def run(command, log_path, timeout, stop=None):
+    def run(command, log_path, timeout, stop=None, *, env=None):
         if commands is not None:
-            commands.append((command, timeout))
+            commands.append((command, timeout, env))
         output = Path(command[command.index("-o") + 1])
         (output / "report.json").write_text(json.dumps(result))
         if fuels is not None:
@@ -70,6 +70,15 @@ def test_worker_output_is_capped_and_drained(tmp_path):
     assert completed.returncode == 0
     assert output.stat().st_size == worker.MAX_LOG_BYTES
     assert output.read_bytes().startswith(b"prefix\n")
+
+
+def test_worker_passes_environment_to_evaluator(tmp_path):
+    output = tmp_path / "worker.txt"
+    environment = os.environ | {"VIOBENCH_COMPILE_LOCK": str(tmp_path / "compile.lock")}
+    command = [sys.executable, "-c", "import os; print(os.environ['VIOBENCH_COMPILE_LOCK'])"]
+    completed = worker.run_evaluation(command, output, timeout=10, env=environment)
+    assert completed.returncode == 0
+    assert output.read_text().strip() == environment["VIOBENCH_COMPILE_LOCK"]
 
 
 @pytest.mark.parametrize("body", ["time.sleep(30)", "os.close(1); os.close(2); time.sleep(30)", "while True: os.write(1, b'x' * 65536)"])
@@ -246,7 +255,7 @@ def test_worker_cancellation_keeps_claimed_job_for_restart(queued, monkeypatch):
     stop = threading.Event()
     store.claim_next = lambda: job
 
-    def cancel(command, log_path, timeout, stop=None):
+    def cancel(command, log_path, timeout, stop=None, *, env=None):
         assert stop is not None
         stop.set()
         raise worker.EvaluationStopped()
@@ -259,7 +268,7 @@ def test_worker_cancellation_keeps_claimed_job_for_restart(queued, monkeypatch):
 def test_worker_marks_timed_out_job_failed(queued, monkeypatch):
     store, job = queued
 
-    def timeout(command, log_path, timeout, stop=None):
+    def timeout(command, log_path, timeout, stop=None, *, env=None):
         raise subprocess.TimeoutExpired(command, timeout)
 
     monkeypatch.setattr(worker, "run_evaluation", timeout)
@@ -273,11 +282,12 @@ def test_worker_evaluates_one_episode_and_keeps_guest_failures_for_aggregation(q
     commands = []
     fake_evaluate(monkeypatch, report(completed), commands)
     worker.evaluate_job(store, job, log=lambda *a: None)
-    [(command, timeout)] = commands
+    [(command, timeout, environment)] = commands
     assert command[3:] == ["evaluate", str(store.upload_path(job["submission_id"])), "conta:" + HASH,
                            "-o", str(store.report_dir(job["submission_id"], HASH)),
                            "--limits", str(store.report_dir(job["submission_id"], HASH) / "limits.json")]
     assert timeout == job["evaluation_config"]["episode_timeout_seconds"]
+    assert environment == os.environ | {"VIOBENCH_COMPILE_LOCK": str((store.directory / "compile.lock").resolve())}
     output = store.report_dir(job["submission_id"], HASH)
     assert json.loads((output / "limits.json").read_text()) == job["evaluation_config"]["limits"]
     assert json.loads((output / "evaluation-config.json").read_text()) == job["evaluation_config"]

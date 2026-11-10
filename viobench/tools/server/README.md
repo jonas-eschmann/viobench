@@ -51,6 +51,12 @@ The worker's `--jobs N` option controls concurrent evaluations (default `1`), ea
 by a thread; for example, `python -m viobench.tools.server.worker --jobs 2`. Run exactly one worker process/container;
 do not scale worker replicas. Jobs are claimed in queue order but can finish out of order. SIGINT or SIGTERM stops
 the evaluation subprocesses; interrupted running jobs are requeued at the next worker startup.
+Evaluators share a Unix file lock at `<server-data>/compile.lock`, passed through `VIOBENCH_COMPILE_LOCK`.
+It serializes Wasmtime module compilation and cache loading across all submissions. Waiting evaluators reuse
+Wasmtime's disk cache after the first compilation; the lock is released before guest execution, so episodes
+still run concurrently. Lock waits count toward the episode timeout. Errors and process termination release
+the lock automatically; do not delete its file while the worker is running. This bounds simultaneous compilation,
+not total evaluator memory. Ordinary local evaluations do not use the lock unless the variable is set.
 Each evaluator reads its archive through conta (`CONTA_CACHE`, default
 `~/.cache/conta`), downloading it if absent. A download failure fails that job with a sanitized public error;
 details stay in the private log. Saving or scheduling again does not rerun existing jobs, including failed ones.

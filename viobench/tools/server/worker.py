@@ -3,7 +3,7 @@
     python -m viobench.tools.server.worker --jobs 2   # one supervisor, two concurrent evaluations
 
 Each job evaluates one episode. Conta resolves its hash when the evaluation reads it, downloading into the writable
-cache if needed. The subprocess timeout covers both downloading and evaluation.
+cache if needed. The subprocess timeout covers downloading, waiting for the shared compilation lock, and evaluation.
 
 Runs each evaluation in a subprocess (own process = own memory, killed on timeout). The worker and evaluation host
 have network access. Run as an unprivileged container user: wasmtime sandboxes the guest, not the evaluation host.
@@ -38,14 +38,14 @@ class EvaluationStopped(Exception):
     """The supervisor is stopping; leave the job unfinished for recovery on restart."""
 
 
-def run_evaluation(command, log_path, timeout, stop=None):
+def run_evaluation(command, log_path, timeout, stop=None, *, env=None):
     """Keep a bounded output prefix while draining the child, with a deadline even when it is silent."""
     stop = stop or Event()
     if stop.is_set():
         raise EvaluationStopped
     # Let the supervisor handle terminal signals, then stop the evaluator through the cancellation event.
     with open(log_path, "wb", buffering=0) as output, subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0, start_new_session=True
+        command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, bufsize=0, start_new_session=True, env=env
     ) as process:
         deadline = time.monotonic() + timeout
         remaining = MAX_LOG_BYTES
@@ -94,9 +94,11 @@ def evaluate_job(store, job, log=print, stop=None):
     limits_path.write_text(json.dumps(settings["limits"], indent=1))
     command = [sys.executable, "-m", "viobench", "evaluate", str(wasm), argument(digest), "-o", str(report_dir),
                "--limits", str(limits_path)]
+    environment = os.environ | {"VIOBENCH_COMPILE_LOCK": str((store.directory / "compile.lock").resolve())}
     log(f"job {job['id']}, submission {job['submission_id']} by {job['name']}: {' '.join(command)}")
     try:
-        completed = run_evaluation(command, report_dir / "worker.txt", config.episode_timeout_seconds, stop=stop)
+        completed = run_evaluation(command, report_dir / "worker.txt", config.episode_timeout_seconds,
+                                   stop=stop, env=environment)
     except subprocess.TimeoutExpired:
         store.finish_job(job["id"], error=f"episode evaluation exceeded {config.episode_timeout_seconds:.0f} s")
         return
