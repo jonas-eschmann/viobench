@@ -54,7 +54,7 @@ the evaluation subprocesses; interrupted running jobs are requeued at the next w
 Each evaluator reads its archive through conta (`CONTA_CACHE`, default
 `~/.cache/conta`), downloading it if absent. A download failure fails that job with a sanitized public error;
 details stay in the private log. Saving or scheduling again does not rerun existing jobs, including failed ones.
-**Rerun outdated for current set** is the explicit exception described below.
+Admins can explicitly rerun finished jobs using the controls described below.
 
 For additional local archives, set `CONTA_SEARCH_PATHS` to directories containing `<hash>` or `<hash>.gz` files
 (for a shard checkout, use its `data` directory). Separate directories with `:` on Unix or `;` on Windows.
@@ -180,6 +180,8 @@ Submission responses include the submitting account's `team_name` and `team_type
 | `PUT /evaluations` | admin only: `{"hashes": ["<sha1>", "..."], "backfill": true}` saves the set and optionally schedules missing jobs for all submissions; returns selection and `scheduled` count |
 | `POST /evaluations/schedule` | admin only: optional `submission_id` and `hashes`; defaults to all submissions and the current set; returns `scheduled` count |
 | `POST /evaluations/rerun-outdated` | admin only: replaces outdated done/failed jobs for the current set across all teams, including baselines; returns `scheduled` and `skipped_running`; queued jobs stay unchanged |
+| `POST /evaluations/rerun-failed` | admin only: requeues every job with status `failed`, across all teams and episodes (including outside the current set); returns `scheduled` |
+| `POST /evaluations/jobs/<id>/rerun` | admin only: requeues one `done` or `failed` job; returns `scheduled: 1`; 404 if missing, 409 if queued or running |
 
 `uploads` contains `daily_quota`, `quota_time_zone` and `max_upload_mib`. `evaluation` contains
 `episode_timeout_seconds` and `limits` (`init_fuel`, `step_fuel`, `memory_bytes`, `table_elements`,
@@ -198,6 +200,12 @@ use the saved settings when claimed. Results computed with different settings re
 show the outdated count; each job's `evaluation_config` snapshot and `outdated` flag appear in Raw JSON.
 **Rerun outdated for current set** replaces outdated finished jobs and skips running ones; repeat after those finish
 if needed. Upload-only settings and team allowances do not make results outdated.
+
+Admins can also use **Rerun** beside a finished job in submission details, or **Rerun all failed jobs** to retry
+every job with status `failed` across all teams and episodes, including outside the current set. Guest errors
+with a scored report have status `done`; use their individual **Rerun** button if needed. Reruns replace the
+previous result and append a fresh attempt to the queue, using the settings in effect when it starts.
+Queued and running jobs are left alone, and upload quotas are unaffected.
 
 Displayed status and summaries always use the current set: `queued`, `running`, `incomplete` (missing jobs), `done`
 or `failed`. Progress counts finished, completed, failed, queued, running, missing and terminal outdated episodes.

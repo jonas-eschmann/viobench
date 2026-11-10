@@ -59,9 +59,11 @@ curl -H "Authorization: Bearer $TOKEN" https://&lt;server&gt;/submissions</pre>
       <button id="evaluation-save" type="submit">Save</button>
       <button id="evaluation-fill" type="button">Fill missing for current set</button>
       <button id="evaluation-rerun" type="button">Rerun outdated for current set</button>
+      <button id="evaluation-rerun-failed" type="button">Rerun all failed jobs</button>
     </form>
     <p class="hint">New uploads use the saved set. Filling missing evaluations includes all submissions and keeps existing results.</p>
     <p id="evaluation-outdated" class="hint"></p>
+    <p class="hint">Rerun all failed jobs retries jobs marked failed across all submissions and episodes, including outside the current set.</p>
   </section>
 
   <section id="settings-controls" hidden>

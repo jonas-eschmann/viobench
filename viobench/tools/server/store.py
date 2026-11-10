@@ -255,12 +255,34 @@ class Store:
             connection.execute("BEGIN IMMEDIATE")
             outdated = self._outdated_jobs(connection, self._evaluation_hashes(connection), self._config(connection).evaluation.as_dict())
             terminal = [job for job in outdated if job["status"] != "running"]
-            now = time.time()
-            for job in terminal:
-                connection.execute("DELETE FROM evaluation_jobs WHERE id = ?", (job["id"],))
-                connection.execute("INSERT INTO evaluation_jobs (submission_id, episode_hash, created) VALUES (?, ?, ?)",
-                                   (job["submission_id"], job["episode_hash"], now))
-            return {"scheduled": len(terminal), "skipped_running": len(outdated) - len(terminal)}
+            return {"scheduled": self._rerun_jobs(connection, terminal), "skipped_running": len(outdated) - len(terminal)}
+
+    @staticmethod
+    def _rerun_jobs(connection, jobs):
+        """Replace terminal rows with fresh queued attempts. Call inside a write transaction."""
+        now = time.time()
+        for job in jobs:
+            connection.execute("DELETE FROM evaluation_jobs WHERE id = ?", (job["id"],))
+            connection.execute("INSERT INTO evaluation_jobs (submission_id, episode_hash, created) VALUES (?, ?, ?)",
+                               (job["submission_id"], job["episode_hash"], now))
+        return len(jobs)
+
+    def rerun_job(self, job_id):
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            job = connection.execute("SELECT * FROM evaluation_jobs WHERE id = ?", (job_id,)).fetchone()
+            if job is None:
+                raise LookupError("no such evaluation job")
+            if job["status"] not in ("done", "failed"):
+                raise Refused("only finished evaluation jobs can be rerun")
+            return self._rerun_jobs(connection, [job])
+
+    def rerun_failed(self):
+        """Rerun all failed jobs, including episodes outside the current selection."""
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            jobs = connection.execute("SELECT * FROM evaluation_jobs WHERE status = 'failed' ORDER BY id").fetchall()
+            return self._rerun_jobs(connection, jobs)
 
     @staticmethod
     def _schedule(connection, hashes, submission_id=None):

@@ -12,6 +12,8 @@
     GET/PUT /evaluations    admin: current hashes and presets; save a selection with optional backfill
     POST /evaluations/schedule  admin: schedule missing jobs for all/one submission and current/explicit hashes
     POST /evaluations/rerun-outdated admin: rerun outdated terminal jobs in the current set
+    POST /evaluations/rerun-failed admin: rerun all failed jobs across all submissions and episodes
+    POST /evaluations/jobs/{id}/rerun admin: rerun one done/failed job
     GET  /, /app.js, /style.css   the web UI (ui/): a page on top of the routes above
 
 Every API request carries "Authorization: Bearer <token>" (tokens: `python -m viobench.tools.server.teams`). Submission
@@ -195,6 +197,23 @@ def update_team_allowance(team_id: int, allowance: TeamAllowance, authorization:
 def rerun_outdated(authorization: str | None = Header(default=None)):
     require_admin(authorization)
     return get_store().rerun_outdated()
+
+
+@app.post("/evaluations/rerun-failed")
+def rerun_failed(authorization: str | None = Header(default=None)):
+    require_admin(authorization)
+    return {"scheduled": get_store().rerun_failed()}
+
+
+@app.post("/evaluations/jobs/{job_id}/rerun")
+def rerun_job(job_id: int, authorization: str | None = Header(default=None)):
+    require_admin(authorization)
+    try:
+        return {"scheduled": get_store().rerun_job(job_id)}
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from None
+    except Refused as error:
+        raise HTTPException(status_code=409, detail=str(error)) from None
 
 
 class EvaluationSelection(BaseModel):

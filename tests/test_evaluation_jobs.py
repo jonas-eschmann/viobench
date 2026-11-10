@@ -202,6 +202,76 @@ def test_jobs_run_fifo_including_backfills(store):
     assert second["submission_id"] == new
 
 
+@pytest.mark.parametrize("status", ["done", "failed"])
+def test_rerun_finished_job_clears_attempt_and_joins_queue_tail(store, status):
+    store.set_evaluations([A, B])
+    token = store.add_team("team")
+    submission_id = submit(store, token)
+    first = jobs(store, token, submission_id)[A]
+    if status == "done":
+        succeed(store, submission_id, first)
+    else:
+        start_job(store, first["id"])
+        store.finish_job(first["id"], error="evaluation timed out")
+    finished = jobs(store, token, submission_id)[A]
+    assert finished["started"] is not None and finished["finished"] is not None
+    allowance = store.configuration(token)["allowance"]
+    current = replace(store.config.evaluation, episode_timeout_seconds=store.config.evaluation.episode_timeout_seconds + 1)
+    store.set_config(replace(store.config, evaluation=current))
+
+    assert store.rerun_job(first["id"]) == 1
+    replacement = jobs(store, token, submission_id)[A]
+    assert replacement["status"] == "queued" and replacement["created"] >= finished["finished"]
+    assert all(replacement[key] is None for key in ("started", "finished", "result", "error", "evaluation_config"))
+    assert store.configuration(token)["allowance"] == allowance
+    assert store.upload_path(submission_id).read_bytes() == MODULE
+    assert store.evaluation_hashes() == [A, B]
+    assert len(store.submissions(token)) == 1
+    assert store.claim_next()["episode_hash"] == B
+    rerun = store.claim_next()
+    assert rerun["episode_hash"] == A and rerun["evaluation_config"] == current.as_dict()
+
+
+def test_rerun_failed_covers_all_submissions_and_hashes_without_touching_other_jobs(store):
+    store.set_evaluations([A, B, C, D])
+    tokens = [store.add_team("participant", team_type="participant"), store.add_team("baseline", team_type="baseline")]
+    submissions = [submit(store, token) for token in tokens]
+    original = [jobs(store, token, submission_id) for token, submission_id in zip(tokens, submissions)]
+    failed = {(submissions[0], A), (submissions[1], A), (submissions[1], B)}
+    for index, digest in ((0, A), (1, A), (1, B)):
+        job = original[index][digest]
+        start_job(store, job["id"])
+        store.finish_job(job["id"], error="worker failed")
+    succeed(store, submissions[0], original[0][B])
+    succeed(store, submissions[0], original[0][C], completed=False)  # Guest failure is a scored, done job.
+    start_job(store, original[1][C]["id"])
+    store.set_evaluations([B, C])  # Most failed jobs are outside the current set.
+    before = [jobs(store, token, submission_id) for token, submission_id in zip(tokens, submissions)]
+    barrier = Barrier(2)
+
+    def rerun(_):
+        barrier.wait(timeout=10)
+        return store.rerun_failed()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert sorted(pool.map(rerun, range(2))) == [0, 3]
+    assert store.rerun_failed() == 0
+    assert store.evaluation_hashes() == [B, C]
+    for index, (token, submission_id) in enumerate(zip(tokens, submissions)):
+        after = jobs(store, token, submission_id)
+        assert set(after) == {A, B, C, D}
+        for digest, job in after.items():
+            if (submission_id, digest) in failed:
+                assert job["status"] == "queued"
+                assert all(job[key] is None for key in ("started", "finished", "result", "error", "evaluation_config"))
+            else:
+                assert job == before[index][digest]
+    assert [store.claim_next()["episode_hash"] for _ in range(2)] == [D, D]
+    claimed = [store.claim_next() for _ in range(3)]
+    assert {(job["submission_id"], job["episode_hash"]) for job in claimed} == failed
+    assert store.claim_next() is None
+
+
 def test_upload_quota_counts_accepted_uploads_independently_of_jobs(store):
     store.set_config(replace(store.config, uploads=replace(store.config.uploads, daily_quota=2)))
     token = store.add_team("team")

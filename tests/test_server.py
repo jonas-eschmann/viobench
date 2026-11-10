@@ -179,7 +179,8 @@ def test_admin_cannot_upload(api, unlimited):
 @pytest.mark.parametrize("method,path", [("GET", "/config"), ("GET", "/comparison"), ("GET", "/submissions"),
                                          ("GET", "/submissions/missing"), ("POST", "/submissions"),
                                          ("PUT", "/submission-pause"), ("GET", "/evaluations"),
-                                         ("PUT", "/evaluations"), ("POST", "/evaluations/schedule")])
+                                         ("PUT", "/evaluations"), ("POST", "/evaluations/schedule"),
+                                         ("POST", "/evaluations/jobs/1/rerun"), ("POST", "/evaluations/rerun-failed")])
 def test_api_requires_a_valid_token(api, authorization, method, path):
     client, _ = api
     client.headers.pop("Authorization")
@@ -464,3 +465,57 @@ def test_invalid_evaluation_selection_does_not_change_state(api, body, status):
     assert store.evaluations() == before
     # A misspelled scope must not silently schedule jobs for every submission.
     assert client.post("/evaluations/schedule", json={"submission": "missing"}, headers=admin).status_code == 422
+
+
+@pytest.mark.parametrize("kind", ["test", "participant", "baseline"])
+def test_job_reruns_require_admin_even_for_own_submission(api, kind):
+    client, store = api
+    token = store.add_team("owner", team_type=kind)
+    submission_id = store.add(token, "v1", "x.wasm", MODULE)
+    finish_submission(store, submission_id, error="evaluation timed out")
+    before = store.get(token, submission_id)
+    [job] = before["jobs"]
+    for path in (f"/evaluations/jobs/{job['id']}/rerun", "/evaluations/rerun-failed"):
+        assert client.post(path, headers={"Authorization": f"Bearer {token}"}).status_code == 403
+        assert store.get(token, submission_id) == before
+
+
+@pytest.mark.parametrize("status", ["done", "failed"])
+def test_admin_can_rerun_one_finished_job(api, status):
+    client, store = api
+    admin = {"Authorization": f"Bearer {store.add_team('instructors', team_type='admin')}"}
+    submission_id = client.post("/submissions", files={"file": ("x.wasm", MODULE)}).json()["id"]
+    finish_submission(store, submission_id, results=results(0.1) if status == "done" else None,
+                      error="worker failed" if status == "failed" else None)
+    [job] = client.get(f"/submissions/{submission_id}").json()["jobs"]
+    response = client.post(f"/evaluations/jobs/{job['id']}/rerun", headers=admin)
+    assert response.status_code == 200 and response.json() == {"scheduled": 1}
+    [rerun] = client.get(f"/submissions/{submission_id}").json()["jobs"]
+    assert rerun["status"] == "queued" and rerun["result"] is None and rerun["error"] is None
+    assert client.post(f"/evaluations/jobs/{rerun['id']}/rerun", headers=admin).status_code == 409
+
+
+@pytest.mark.parametrize("running", [False, True])
+def test_admin_rerun_rejects_active_and_missing_jobs_without_changes(api, running):
+    client, store = api
+    admin = {"Authorization": f"Bearer {store.add_team('instructors', team_type='admin')}"}
+    submission_id = client.post("/submissions", files={"file": ("x.wasm", MODULE)}).json()["id"]
+    if running:
+        store.claim_next()
+    before = client.get(f"/submissions/{submission_id}").json()
+    [job] = before["jobs"]
+    assert client.post(f"/evaluations/jobs/{job['id']}/rerun", headers=admin).status_code == 409
+    assert client.post("/evaluations/jobs/0/rerun", headers=admin).status_code == 404
+    assert client.get(f"/submissions/{submission_id}").json() == before
+
+
+def test_admin_can_rerun_all_failed_jobs(api):
+    client, store = api
+    admin = {"Authorization": f"Bearer {store.add_team('instructors', team_type='admin')}"}
+    submission_id = client.post("/submissions", files={"file": ("x.wasm", MODULE)}).json()["id"]
+    finish_submission(store, submission_id, error="worker failed")
+    for expected in (1, 0):
+        response = client.post("/evaluations/rerun-failed", headers=admin)
+        assert response.status_code == 200 and response.json() == {"scheduled": expected}
+    [job] = client.get(f"/submissions/{submission_id}").json()["jobs"]
+    assert job["status"] == "queued"

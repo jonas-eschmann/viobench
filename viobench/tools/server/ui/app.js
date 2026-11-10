@@ -366,9 +366,11 @@ function renderAdminButtons() {
   $("evaluation-save").disabled = adminSaving || !evaluationPresets || !$("evaluation-preset").value;
   $("evaluation-fill").disabled = adminSaving || !evaluationPresets;
   $("evaluation-rerun").disabled = adminSaving || !outdatedJobs;
+  $("evaluation-rerun-failed").disabled = adminSaving;
   $("settings-save").disabled = adminSaving;
   for (const form of teamForms.values()) form.button.disabled = adminSaving;
   $("schedule-button").disabled = adminSaving;
+  for (const button of $("details-jobs").querySelectorAll(".rerun-job")) button.disabled = adminSaving;
 }
 
 function renderEvaluations(state) {
@@ -988,10 +990,26 @@ function renderDetails(submission) {
   }
   const jobs = $("details-jobs");
   jobs.replaceChildren();
-  jobs.append(table(["Episode", "Status", "Current set", "Sim(3) ATE (m)", "Max fuel/frame", "Error"],
-                    submission.jobs.map((job) => [episodeHash(job.episode_hash), node("span", job.status + (job.outdated ? " (outdated settings)" : ""), `status ${job.outdated ? "outdated" : job.status}`),
-                      job.selected ? "yes" : "no",
-                      decimal(get(job, "result", "metrics", "sim3_ate_rmse")), fuel(get(job, "result", "fuel_per_frame_max")), job.error || DASH])));
+  const admin = config.team_type === "admin";
+  const headers = ["Episode", "Status", "Current set", "Sim(3) ATE (m)", "Max fuel/frame", "Error"];
+  if (admin) headers.push("Actions");
+  jobs.append(table(headers, submission.jobs.map((job) => {
+    const cells = [episodeHash(job.episode_hash), node("span", job.status + (job.outdated ? " (outdated settings)" : ""), `status ${job.outdated ? "outdated" : job.status}`),
+                   job.selected ? "yes" : "no",
+                   decimal(get(job, "result", "metrics", "sim3_ate_rmse")), fuel(get(job, "result", "fuel_per_frame_max")), job.error || DASH];
+    if (admin) {
+      let action = DASH;
+      if (job.status === "done" || job.status === "failed") {
+        action = node("button", "Rerun", "rerun-job");
+        action.type = "button";
+        action.disabled = adminSaving;
+        action.title = "Rerun this evaluation using current settings";
+        action.addEventListener("click", () => updateEvaluations(`evaluations/jobs/${job.id}/rerun`, "POST", {}));
+      }
+      cells.push(action);
+    }
+    return cells;
+  })));
   $("details-json").textContent = JSON.stringify(submission, null, 2);
   $("details").hidden = false;
 }
@@ -1050,6 +1068,7 @@ $("resume-button").addEventListener("click", () => setPause(null));
 $("evaluation-form").addEventListener("submit", saveEvaluations);
 $("evaluation-fill").addEventListener("click", () => updateEvaluations("evaluations/schedule", "POST", {}));
 $("evaluation-rerun").addEventListener("click", () => updateEvaluations("evaluations/rerun-outdated", "POST", {}));
+$("evaluation-rerun-failed").addEventListener("click", () => updateEvaluations("evaluations/rerun-failed", "POST", {}));
 $("evaluation-preset").addEventListener("change", renderAdminButtons);
 $("settings-form").addEventListener("submit", saveSettings);
 $("schedule-form").addEventListener("submit", scheduleSubmission);
