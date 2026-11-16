@@ -629,8 +629,11 @@ function renderList(rows) {
     button.type = "button";
     button.setAttribute("aria-label", `Details of ${row.label || row.id}`);
     button.addEventListener("click", () => showDetails(row.id, true));
-    const episodes = row.progress ? `${row.progress.finished}/${row.progress.total} finished` : DASH;
+    const episodes = row.progress ? `${row.progress.completed}/${row.progress.total} completed` : DASH;
     const progress = node("span", episodes);
+    if (row.progress?.failed) {
+      progress.append(node("br"), node("span", `${row.progress.failed} failed`, "status failed"));
+    }
     progress.title = progressText(row.progress);
     body.append(tableRow([time(row.created), ...(config.team_type === "admin" ? [row.team_name || DASH, row.team_type] : []),
                           row.label || DASH, status, decimal(summary.sim3_ate_rmse_mean),
