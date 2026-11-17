@@ -18,6 +18,22 @@ those accounts to ordinary participants, preserving tokens, quota settings, subm
 jobs and reports. Other submissions start with `baseline = false`. Startup refuses the old schema instead of
 silently changing it. Older results from before the zero-prediction scoring rule are not converted by this migration.
 
+If you already have a backup, use `--in-place` to update the existing database in one transaction. Uploads and
+reports stay where they are, and a failed database migration rolls back. Both the API and worker must be stopped.
+From this directory, with the updated code on your Compose host:
+
+```bash
+docker compose build app worker
+docker compose stop app worker
+docker compose run --rm --no-deps app \
+    python -m viobench.tools.server.migrate --in-place /srv/server-data
+# After migration succeeds:
+docker compose up -d app worker
+```
+
+This uses the volume currently configured in `compose.yaml`; no volume rename or mount changes are needed.
+Outside Compose, run `python -m viobench.tools.server.migrate --in-place /path/to/server-data`.
+
 ```bash
 pip install -e ".[server]"
 python -m viobench.tools.server.teams add --type participant "team a" "team b"  # prints tokens; `teams list` repeats them
