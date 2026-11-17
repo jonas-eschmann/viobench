@@ -46,6 +46,16 @@ def view(client, token):
     return result
 
 
+def listed_best(store, client, token):
+    response = client.get("/submissions", headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    rows = response.json()
+    assert all(type(row["is_best"]) is bool for row in rows)
+    assert {row["id"]: row["is_best"] for row in rows} == {
+        row["id"]: row["is_best"] for row in store.submissions(token)}
+    return {row["id"] for row in rows if row["is_best"]}
+
+
 def test_comparison_shares_only_baseline_scores_even_with_admin_viewer(comparison):
     store, client = comparison
     own, other, test, baseline, admin = [store.add_team(name, team_type=kind, unlimited=True)
@@ -403,3 +413,82 @@ def test_best_submission_ignores_missing_failed_and_outdated_evaluations(compari
     assert result["best_submission_id"] == valid and result["best_frontier"] == [valid]
     assert not {missing, outdated, failed} & set(result["best_frontier"])
     assert result["claimed_area"] == pytest.approx(log(4) * log(4.8 / 3) - log(3) * log(1.2))
+
+
+def test_submission_list_marks_each_owners_best_individual_gain_without_grouping_by_name(comparison):
+    store, client = comparison
+    reference, first, second = [store.add_team("same name", unlimited=True) for _ in range(3)]
+    admin = store.add_team("instructors", team_type="admin")
+    baseline = submit(store, reference, scores=(4, 4), fuel=(4, 4), baseline=True)
+    first_best = submit(store, first, scores=(1.5, 1.5), fuel=(1, 1))
+    first_other = submit(store, first, scores=(1, 1), fuel=(3, 3))  # Lower ATE, smaller individual area gain.
+    second_other = submit(store, second, scores=(3, 3), fuel=(3, 3))
+    second_best = submit(store, second, scores=(2, 2), fuel=(2, 2))
+    assert listed_best(store, client, admin) == {baseline, first_best, second_best}
+    for token, expected, own_ids in ((reference, baseline, {baseline}),
+                                     (first, first_best, {first_best, first_other}),
+                                     (second, second_best, {second_best, second_other})):
+        assert listed_best(store, client, token) == {expected}
+        assert view(client, token)["best_submission_id"] == expected
+        response = client.get("/submissions", headers={"Authorization": f"Bearer {token}"})
+        assert {row["id"] for row in response.json()} == own_ids
+        assert all(secret not in response.text for secret in (reference, first, second, admin))
+    admin_response = client.get("/submissions", headers={"Authorization": f"Bearer {admin}"})
+    assert all(secret not in admin_response.text for secret in (reference, first, second, admin))
+    assert client.get(f"/submissions/{second_best}", headers={"Authorization": f"Bearer {first}"}).status_code == 404
+
+
+def test_submission_best_flags_follow_current_eligibility_selection_and_baselines(comparison):
+    store, client = comparison
+    reference = store.add_team("reference", unlimited=True)
+    viewer = store.add_team("viewer", unlimited=True)
+    baseline = submit(store, reference, scores=(4, 4), fuel=(4, 4))
+    valid = submit(store, viewer, scores=(3, 3), fuel=(3, 3))
+    assert listed_best(store, client, viewer) == set()  # Scores alone do not supply a baseline reference.
+    store.set_baseline(baseline, True)
+    assert listed_best(store, client, viewer) == {valid}
+    submit(store, reference, scores=(4, None), fuel=(4, 4), baseline=True)
+
+    partial = submit(store, viewer, scores=(0.1,), fuel=(1, 1))
+    failed = submit(store, viewer, scores=(0.2,), fuel=(1, 1))
+    for invalid in (-1, float("nan"), float("inf")):
+        submit(store, viewer, scores=(0.3, invalid), fuel=(1, 1))
+    outdated = submit(store, viewer, scores=(0.05, 0.05), fuel=(1, 1))
+    with store._connect() as connection:
+        connection.execute("UPDATE evaluation_jobs SET evaluation_config = NULL WHERE submission_id = ?", (outdated,))
+        failed_job = connection.execute("SELECT id FROM evaluation_jobs WHERE submission_id = ? AND episode_hash = ?",
+                                        (failed, B)).fetchone()[0]
+    start_job(store, failed_job)
+    store.finish_job(failed_job, error="no report")
+    assert listed_best(store, client, viewer) == {valid}
+    store.set_evaluations([A])
+    assert listed_best(store, client, viewer) == {partial}
+    assert view(client, viewer)["best_submission_id"] == partial
+    store.set_evaluations([A, B])
+    assert listed_best(store, client, viewer) == {valid}
+
+    original = store.config
+    store.set_config(replace(original, evaluation=replace(original.evaluation,
+                     limits=replace(original.evaluation.limits, step_fuel=11))))
+    assert listed_best(store, client, viewer) == set()  # Outdated references and candidates cannot select a winner.
+    store.set_config(original)
+    assert listed_best(store, client, viewer) == {valid}
+    store.set_baseline(baseline, False)
+    assert listed_best(store, client, viewer) == set()
+
+
+def test_submission_list_zero_gain_ties_include_owned_baselines_and_use_stable_order(comparison):
+    store, client = comparison
+    viewer = store.add_team("viewer", unlimited=True)
+    baseline = submit(store, viewer, scores=(4, 4), fuel=(4, 4), baseline=True)
+    dominated = submit(store, viewer, scores=(5, 5), fuel=(5, 5))
+    assert view(client, viewer)["claimed_area"] == 0
+    assert listed_best(store, client, viewer) == {baseline}
+    tied = [baseline, dominated]
+    with store._connect() as connection:
+        connection.executemany("UPDATE submissions SET created = 100 WHERE id = ?", [(sid,) for sid in tied])
+    assert listed_best(store, client, viewer) == {min(tied)}
+    with store._connect() as connection:
+        connection.execute("UPDATE submissions SET created = 99 WHERE id = ?", (max(tied),))
+    assert listed_best(store, client, viewer) == {max(tied)}
+    assert view(client, viewer)["best_submission_id"] == max(tied)

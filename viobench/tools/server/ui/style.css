@@ -95,6 +95,18 @@ th, td { padding: 0.35rem 0.6rem; border-bottom: 1px solid var(--line); text-ali
 th { color: var(--muted); font-weight: 600; }
 /* Team, label and status text wrap in both the team and admin tables. */
 #submissions td:nth-child(2), #submissions td:nth-last-child(6), #submissions td:nth-last-child(5) { white-space: normal; min-width: 8rem; overflow-wrap: anywhere; }
+#submissions .best-submission { background: var(--panel); }
+.baseline-badge, .best-solution-badge {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.baseline-badge { color: var(--muted); }
+.best-solution-badge { color: var(--ok); }
 
 .status.done { color: var(--ok); }
 .status.failed { color: var(--bad); }
@@ -134,8 +146,6 @@ th { color: var(--muted); font-weight: 600; }
 .comparison-tooltip strong { display: block; }
 .comparison-tooltip dl { grid-template-columns: minmax(0, 1fr) max-content; margin: 0.5rem 0; gap: 0.25rem 1rem; }
 .comparison-tooltip dd { margin: 0; text-align: right; font-variant-numeric: tabular-nums; }
-.comparison-values { margin: 0.5rem 0 1rem; }
-.comparison-values td:first-child, .comparison-values td:nth-child(2) { white-space: normal; overflow-wrap: anywhere; }
 
 dl { display: grid; grid-template-columns: max-content 1fr; gap: 0.2rem 1rem; }
 dt { color: var(--muted); }

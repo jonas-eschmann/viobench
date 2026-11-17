@@ -15,7 +15,8 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .config import Config, load as load_config
-from .evaluations import comparison_for, default_hashes, normalize_hashes, presets, public_episode, results_for
+from .evaluations import (area_gains, best_submission, comparison_for, comparison_point, comparison_point_for, default_hashes,
+                          normalize_hashes, presets, public_episode, results_for)
 
 DEFAULT_DIR = Path(os.environ.get("VIOBENCH_SERVER_DIR", "server-data"))
 TOKEN_BYTES = 24  # a token is 32 base64url characters
@@ -431,9 +432,26 @@ class Store:
             connection.execute("BEGIN")
             hashes = self._evaluation_hashes(connection)
             evaluation_config = self._config(connection).evaluation.as_dict()
-            rows = connection.execute(f"SELECT {COLUMNS} FROM submissions JOIN teams USING (token) "
-                                      "WHERE submissions.token = ? OR ? ORDER BY submissions.created DESC", (token, is_admin)).fetchall()
-            return [self._view(connection, row, hashes, evaluation_config, details=False) for row in rows]
+            rows = connection.execute(f"SELECT {COLUMNS}, teams.id AS team_id, submissions.token = ? AS own "
+                                      "FROM submissions JOIN teams USING (token) "
+                                      "WHERE submissions.token = ? OR ? OR submissions.baseline = 1 "
+                                      "ORDER BY submissions.created DESC", (token, token, is_admin)).fetchall()
+            submissions, points, teams = [], [], {}
+            for row in rows:
+                row = dict(row)
+                team_id, own = row.pop("team_id"), row.pop("own")
+                if own or is_admin:
+                    submission = self._view(connection, row, hashes, evaluation_config, details=False)
+                    point = comparison_point(row, submission["results"])
+                    submissions.append(submission)
+                    teams.setdefault(team_id, []).append((row["created"], row["id"]))
+                else:
+                    point = comparison_point_for(self, hashes, row, self._jobs(connection, row["id"], hashes, evaluation_config))
+                if point is not None:
+                    points.append(point)
+            _, gains = area_gains(points, 1.2 * evaluation_config["limits"]["step_fuel"])
+            winners = {best_submission((submission_id for _, submission_id in sorted(entries)), gains) for entries in teams.values()}
+            return [submission | {"is_best": submission["id"] in winners} for submission in submissions]
 
     def comparison(self, token):
         """Own and baseline scores from one snapshot, including for admin viewers."""
@@ -442,7 +460,7 @@ class Store:
             hashes = self._evaluation_hashes(connection)
             evaluation_config = self._config(connection).evaluation.as_dict()
             rows = connection.execute(
-                "SELECT submissions.id, label, submissions.baseline AS is_baseline, teams.name AS team_name, teams.type AS team_type, "
+                "SELECT submissions.id, label, submissions.baseline, teams.name AS team_name, teams.type AS team_type, "
                 "submissions.token = ? AS own FROM submissions JOIN teams USING (token) "
                 "WHERE submissions.token = ? OR submissions.baseline = 1 ORDER BY submissions.created, submissions.id",
                 (token, token)).fetchall()

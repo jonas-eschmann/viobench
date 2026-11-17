@@ -82,6 +82,9 @@ The comparison plot shows your submissions alongside shared baselines. Lower **S
 whole selected set. Your score is the largest individual area gain among your eligible submissions, each measured
 against the same baselines. The dashed frontier uses baselines; the solid frontier adds your best single solution.
 Shading shows that solution's gain. Your other points remain visible, but their areas do not combine into your score.
+Your submissions appear once in the submission list. A selected baseline has a **Baseline** badge, and your best
+eligible submission has a **Best solution** badge; both can appear on the same row. Other teams' shared baselines
+appear in the plot. Hover or focus a point to read its exact scores.
 Exact ties select the earliest submission, then its ID. Area uses logarithmic coordinates, so equal proportional
 improvements have equal weight. The plot, frontiers and area score use floors of `1` fuel/frame and `0.001 m` ATE; reported metrics
 and labels stay unchanged. The reference bounds are `1.2 × step_fuel` and `1.2 ×` the worst eligible baseline ATE

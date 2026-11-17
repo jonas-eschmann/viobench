@@ -640,9 +640,22 @@ function renderList(rows) {
       progress.append(node("br"), node("span", `${row.progress.failed} failed`, "status failed"));
     }
     progress.title = progressText(row.progress);
-    body.append(tableRow([time(row.created), ...(config.team_type === "admin" ? [row.team_name || DASH, row.team_type] : []),
-                          row.label || DASH, status, decimal(summary.sim3_ate_rmse_mean),
-                          fuel(summary.fuel_per_frame_max), progress, button]));
+    const label = node("span", row.label || DASH);
+    if (row.baseline) {
+      const badge = node("span", "Baseline", "baseline-badge");
+      badge.title = "Shared baseline for the current comparison";
+      label.append(" ", badge);
+    }
+    if (row.is_best) {
+      const badge = node("span", "Best solution", "best-solution-badge");
+      badge.title = "This team's largest individual area gain over the baselines";
+      label.append(" ", badge);
+    }
+    const entry = tableRow([time(row.created), ...(config.team_type === "admin" ? [row.team_name || DASH, row.team_type] : []),
+                            label, status, decimal(summary.sim3_ate_rmse_mean),
+                            fuel(summary.fuel_per_frame_max), progress, button]);
+    if (row.is_best) entry.className = "best-submission";
+    body.append(entry);
   }
   $("empty").hidden = body.rows.length > 0;
 }
@@ -690,8 +703,8 @@ function comparisonTooltip(container, chart) {
       hide();
       activeMark = mark;
       const metrics = node("dl");
-      metrics.append(node("dt", "Mean Sim(3) ATE"), node("dd", `${Number(point.sim3_ate_rmse_mean.toPrecision(6))} m`),
-                     node("dt", "Max fuel/frame"), node("dd", point.fuel_per_frame_max.toLocaleString()));
+      metrics.append(node("dt", "Mean Sim(3) ATE"), node("dd", `${point.sim3_ate_rmse_mean} m`),
+                     node("dt", "Max fuel/frame"), node("dd", String(point.fuel_per_frame_max)));
       tooltip.replaceChildren(node("strong", point.label || point.id),
         node("div", `${point.team_name}${point.own ? " · Your submission" : ""}${point.is_baseline ? " · Baseline" : ""}${isBest ? " · Best solution" : ""}${onFrontier ? " · Scoring frontier" : ""}`, "hint"), metrics);
       if (canOpen) tooltip.append(node("div", "Click the point or press Enter for details.", "hint"));
@@ -786,12 +799,12 @@ function renderComparison(comparison) {
       chart.append(svgNode("polyline", {points: svgPoints(steps(ids, maxY)), class: className}));
     }
   }
-  const rows = [], ownMarks = [];
+  const ownMarks = [];
   for (const point of points) {
     const name = point.label || point.id;
     const onFrontier = frontierIds.has(point.id);
     const isBest = point.id === comparison.best_submission_id;
-    const description = `${point.team_name}: ${name}; maximum fuel/frame ${point.fuel_per_frame_max}; mean Sim(3) ATE ${point.sim3_ate_rmse_mean} m${isBest ? "; best solution" : ""}${onFrontier ? "; on scoring frontier" : ""}`;
+    const description = `${point.team_name}: ${name}; maximum fuel/frame ${point.fuel_per_frame_max}; mean Sim(3) ATE ${point.sim3_ate_rmse_mean} m${point.is_baseline ? "; baseline" : ""}${isBest ? "; best solution" : ""}${onFrontier ? "; on scoring frontier" : ""}`;
     const canOpen = point.own || config.team_type === "admin";
     const mark = svgNode("g", {class: `comparison-point ${point.own ? "own" : "baseline"}${onFrontier ? " frontier" : ""}`,
                                role: canOpen ? "button" : "img", tabindex: 0, "aria-label": description});
@@ -799,7 +812,6 @@ function renderComparison(comparison) {
                 svgNode("rect", {x: x(point.fuel_per_frame_max) - 5, y: y(point.sim3_ate_rmse_mean) - 5, width: 10, height: 10}) :
                 svgNode("circle", {cx: x(point.fuel_per_frame_max), cy: y(point.sim3_ate_rmse_mean), r: 5}));
     attachTooltip(mark, point, onFrontier, canOpen, isBest);
-    let button = "";
     if (canOpen) {
       mark.addEventListener("click", () => showDetails(point.id, true));
       mark.addEventListener("keydown", (event) => {
@@ -808,18 +820,11 @@ function renderComparison(comparison) {
           showDetails(point.id, true);
         }
       });
-      button = node("button", "Details");
-      button.type = "button";
-      button.setAttribute("aria-label", `Details of ${point.team_name}: ${name}`);
-      button.addEventListener("click", () => showDetails(point.id, true));
     }
     if (point.fuel_per_frame_max <= maxX) {
       if (point.own) ownMarks.push(mark);
       else chart.append(mark);
     }
-    const role = point.own ? `Yours (${point.team_type})${point.is_baseline ? " · Baseline" : ""}` : "Baseline";
-    rows.push([point.team_name, name, role + (isBest ? " · Best solution" : ""),
-               point.fuel_per_frame_max, point.sim3_ate_rmse_mean, button]);
   }
   // SVG paints in document order: own submissions stay above baselines and all frontiers.
   chart.append(...ownMarks);
@@ -833,11 +838,8 @@ function renderComparison(comparison) {
       `Scoring reference: ${fuel(fuelFloor)}–${fuel(maxX)} fuel/frame and ${decimal(errorFloor)}–${decimal(comparison.error_reference)} m mean Sim(3) ATE.`, "hint"));
   }
   if (points.some((point) => point.fuel_per_frame_max > maxX)) {
-    container.append(node("p", "Submissions beyond the fuel axis are listed in Exact values below.", "hint"));
+    container.append(node("p", "Submissions beyond the fuel axis are outside the plot's scoring reference.", "hint"));
   }
-  const values = node("details", null, "comparison-values");
-  values.append(node("summary", "Exact values"), table(["Team", "Submission", "Account", "Max fuel/frame", "Mean Sim(3) ATE (m)", ""], rows));
-  container.append(values);
 }
 
 // --- submitting ------------------------------------------------------------------------------------------------

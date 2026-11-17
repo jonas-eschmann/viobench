@@ -170,7 +170,11 @@ both across the entire current evaluation set. The arithmetic mean gives each se
 regardless of its frame count. Baselines are squares, the viewer's other submissions are circles, and the dashed
 line marks the baseline Pareto frontier. The solid frontier combines baselines with the viewer's best single
 submission; shading shows that solution's additional area beyond the baselines (lower is better on both axes).
-All eligible submissions remain visible, and the best solution is identified beside the score and in Exact values.
+All eligible comparison points remain visible, and the best solution is identified beside the score and in its tooltip.
+There is one submission list: admins see all submissions, and teams see their own. Selected submissions have an
+inline **Baseline** badge. Each team's best eligible submission also has a **Best solution** badge (`is_best` in
+the API response), using the same individual-area ranking and tie rules. Both badges can appear on the same row.
+The list remains newest first; selecting a baseline does not duplicate or move its row.
 Both axes and the area calculation use logarithms, giving equal proportional improvements equal weight. For the
 plot, frontiers and area only, fuel is clamped to at least `1` per frame and ATE to `0.001 m`; labels and reported
 metrics keep their raw values. The fuel reference is `X = 1.2 × step_fuel`; the error reference is
@@ -184,8 +188,8 @@ Its percentage is `100 × claimed area / (ln(X / 1) × ln(Y / 0.001))`, unavaila
 The plot zooms each lower bound to one tenth of the visible minimum, never below its scoring floor.
 This changes only the display: the full scoring reference and denominator, and upper fuel bound `1.2 × step_fuel`, stay unchanged.
 The fuel interval from `step_fuel` to `1.2 × step_fuel` still contributes `ln(1.2)` width, with less relative
-weight than on linear axes. The comparison table provides raw values and names. Baseline details, files, and
-historical jobs remain private.
+weight than on linear axes. Hover or focus a plot point to read its name and exact scores. Other teams' baseline
+details, files, and historical jobs remain private; their shared comparison points do not add rows to a team's own list.
 
 Only submissions with reports for every selected episode, finite scores and current evaluation settings appear. Guest errors still produce
 scores: the failed and remaining frames use zero position/twist and identity rotation, and alignment includes all

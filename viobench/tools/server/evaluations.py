@@ -67,50 +67,77 @@ def dominated_area(points, max_fuel, max_error, *, min_fuel=FUEL_FLOOR, min_erro
     return area + (max_x - previous_x) * (max_y - best_y)
 
 
+def _valid_score(value):
+    return isinstance(value, (int, float)) and isfinite(value) and value >= 0
+
+
+def _scored_episodes(episodes):
+    return all(_valid_score(episode["metrics"].get("sim3_ate_rmse")) for episode in episodes)
+
+
+def comparison_point(row, results):
+    """A comparable point only when every selected episode has a current, finite score."""
+    if results["partial"] or results["outdated"]:
+        return None
+    if not _scored_episodes(results["episodes"]):
+        return None  # never compare an aggregate that silently omitted an unscored episode
+    summary = results["summary"]
+    if summary is None:
+        return None
+    fuel, score = summary["fuel_per_frame_max"], summary["sim3_ate_rmse_mean"]
+    if not _valid_score(fuel) or not _valid_score(score):
+        return None
+    return {"id": row["id"], "label": row["label"] or row["id"], "team_name": row["team_name"],
+            "team_type": row["team_type"], "own": bool(row.get("own", False)), "is_baseline": bool(row["baseline"]),
+            "fuel_per_frame_max": fuel, "sim3_ate_rmse_mean": score}
+
+
+def _coordinates(point):
+    return max(point["fuel_per_frame_max"], FUEL_FLOOR), max(point["sim3_ate_rmse_mean"], ERROR_FLOOR)
+
+
+def area_gains(points, fuel_reference):
+    """Use one baseline reference to score each eligible solution independently."""
+    baselines = [_coordinates(point) for point in points if point["is_baseline"]]
+    if not baselines:
+        return None, {}
+    error_reference = 1.2 * max(error for _, error in baselines)
+    baseline_area = dominated_area(baselines, fuel_reference, error_reference)
+    gains = {point["id"]: 0.0 if point["is_baseline"] else
+             max(0.0, dominated_area([*baselines, _coordinates(point)], fuel_reference, error_reference) - baseline_area)
+             for point in points}
+    return error_reference, gains
+
+
+def best_submission(ids, gains):
+    """Select the largest gain; callers supply creation/id order to break exact ties."""
+    return max((submission_id for submission_id in ids if submission_id in gains), key=gains.get, default=None)
+
+
+def comparison_point_for(store, hashes, row, jobs):
+    """Skip ineligible reports before loading and aggregating their fuel samples."""
+    episodes = [jobs[digest]["result"] for digest in hashes if digest in jobs and jobs[digest]["result"] is not None]
+    if len(episodes) != len(hashes) or any(jobs[digest]["outdated"] for digest in hashes) or not _scored_episodes(episodes):
+        return None
+    return comparison_point(row, results_for(store, row["id"], hashes, jobs))
+
+
 def comparison_for(store, hashes, submissions, evaluation_config):
     """Compare complete reports and credit the best single submission's gain beyond the baselines."""
-    def valid(value):
-        return isinstance(value, (int, float)) and isfinite(value) and value >= 0
-
     points = []
     for row, jobs in submissions:
-        episodes = [jobs[digest]["result"] for digest in hashes if digest in jobs and jobs[digest]["result"] is not None]
-        if len(episodes) != len(hashes) or any(jobs[digest]["outdated"] for digest in hashes):
-            continue
-        scores = [episode["metrics"].get("sim3_ate_rmse") for episode in episodes]
-        if not all(valid(score) for score in scores):
-            continue  # never compare an aggregate that silently omitted an unscored episode
-        summary = results_for(store, row["id"], hashes, jobs)["summary"]
-        fuel = summary["fuel_per_frame_max"]
-        score = summary["sim3_ate_rmse_mean"]
-        if not valid(fuel) or not valid(score):
-            continue
-        points.append({
-            "id": row["id"], "label": row["label"] or row["id"], "team_name": row["team_name"],
-            "team_type": row["team_type"], "own": bool(row["own"]), "is_baseline": bool(row["is_baseline"]),
-            "fuel_per_frame_max": fuel, "sim3_ate_rmse_mean": score,
-        })
+        point = comparison_point_for(store, hashes, row, jobs)
+        if point is not None:
+            points.append(point)
     fuel_reference = 1.2 * evaluation_config["limits"]["step_fuel"]
     baselines = [point for point in points if point["is_baseline"]]
-    coordinates = [(max(point["fuel_per_frame_max"], FUEL_FLOOR), max(point["sim3_ate_rmse_mean"], ERROR_FLOOR))
-                   for point in points]
-    baseline_coordinates = [(max(point["fuel_per_frame_max"], FUEL_FLOOR), max(point["sim3_ate_rmse_mean"], ERROR_FLOOR))
-                            for point in baselines]
-    error_reference = 1.2 * max(error for _, error in baseline_coordinates) if baselines else None
-    claimed_area, best_submission_id = None, None
-    if error_reference is not None:
-        baseline_area = dominated_area(baseline_coordinates, fuel_reference, error_reference)
-        claimed_area = 0.0
-        for point, coordinate in zip(points, coordinates):
-            if not point["own"]:
-                continue
-            gain = max(0.0, dominated_area([*baseline_coordinates, coordinate], fuel_reference, error_reference) - baseline_area)
-            # Store supplies creation/id order, so exact ties consistently select the earliest submission.
-            if best_submission_id is None or gain > claimed_area:
-                claimed_area, best_submission_id = gain, point["id"]
+    coordinates = [_coordinates(point) for point in points]
+    baseline_coordinates = [_coordinates(point) for point in baselines]
+    error_reference, gains = area_gains(points, fuel_reference)
+    best_submission_id = best_submission((point["id"] for point in points if point["own"]), gains)
+    claimed_area = gains.get(best_submission_id, 0.0) if error_reference is not None else None
     best_points = [point for point in points if point["is_baseline"] or point["id"] == best_submission_id]
-    best_coordinates = [(max(point["fuel_per_frame_max"], FUEL_FLOOR), max(point["sim3_ate_rmse_mean"], ERROR_FLOOR))
-                        for point in best_points]
+    best_coordinates = [_coordinates(point) for point in best_points]
     return {"evaluation_hashes": hashes, "fuel_floor": FUEL_FLOOR, "error_floor": ERROR_FLOOR,
             "fuel_reference": fuel_reference, "points": points,
             "baseline_frontier": [baselines[index]["id"] for index in pareto_front(baseline_coordinates)],
