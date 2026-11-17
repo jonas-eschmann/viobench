@@ -165,6 +165,68 @@ def test_admin_can_read_all_submissions_without_exposing_tokens(api):
     assert store.get("unknown", first) is None
 
 
+def test_admin_marks_individual_baselines_without_changing_ownership_or_privacy(api):
+    client, store = api
+    owner = store.add_team("reference", team_type="participant", unlimited=True)
+    own = {"Authorization": f"Bearer {owner}"}
+    admin = {"Authorization": f"Bearer {store.add_team('instructors', team_type='admin')}"}
+    submission_id = client.post("/submissions", headers=own, files={"file": ("reference.wasm", MODULE)}).json()["id"]
+    finish_submission(store, submission_id, results=results(0.1))
+    before = store.configuration(owner)
+    original = store.get(owner, submission_id)
+    assert original["baseline"] is False
+    assert client.get("/comparison").json()["points"] == []
+    path = f"/submissions/{submission_id}/baseline"
+    marked = client.put(path, headers=admin, json={"baseline": True})
+    assert marked.status_code == 200 and marked.json()["baseline"] is True
+    assert store.get(owner, submission_id) == original | {"baseline": True}
+    assert store.configuration(owner) == before
+    assert store.team_type(owner) == "participant"
+    assert [point["id"] for point in client.get("/comparison").json()["points"]] == [submission_id]
+    assert client.get(f"/submissions/{submission_id}").status_code == 404
+    assert client.get("/submissions").json() == []
+    assert client.get(f"/submissions/{submission_id}", headers=own).status_code == 200
+    next_upload = client.post("/submissions", headers=own, files={"file": ("new.wasm", MODULE)})
+    assert next_upload.status_code == 201 and next_upload.json()["baseline"] is False
+    assert client.put(path, headers=admin, json={"baseline": False}).status_code == 200
+    assert client.get("/comparison").json()["points"] == []
+    assert store.get(owner, submission_id)["results"] == original["results"]
+    assert store.upload_path(submission_id).read_bytes() == MODULE
+
+
+@pytest.mark.parametrize("authorization,status", [(None, 401), ("Bearer wrong", 401), ("owner", 403)])
+def test_baseline_selection_requires_admin(api, authorization, status):
+    client, store = api
+    owner = client.headers["Authorization"]
+    submission_id = client.post("/submissions", files={"file": ("solution.wasm", MODULE)}).json()["id"]
+    client.headers.pop("Authorization")
+    headers = {"Authorization": owner if authorization == "owner" else authorization} if authorization else {}
+    response = client.put(f"/submissions/{submission_id}/baseline", headers=headers, json={"baseline": True})
+    assert response.status_code == status
+    assert store.get(owner.removeprefix("Bearer "), submission_id)["baseline"] is False
+
+
+@pytest.mark.parametrize("body", [{}, {"baseline": "true"}, {"baseline": 1}, {"baseline": None},
+                                  {"baseline": True, "unexpected": True}])
+def test_baseline_selection_requires_a_strict_boolean_and_rejects_unknown_fields(api, body):
+    client, store = api
+    admin = {"Authorization": f"Bearer {store.add_team('instructors', team_type='admin')}"}
+    submission_id = client.post("/submissions", files={"file": ("solution.wasm", MODULE)}).json()["id"]
+    assert client.put(f"/submissions/{submission_id}/baseline", headers=admin, json=body).status_code == 422
+    assert client.get(f"/submissions/{submission_id}").json()["baseline"] is False
+    assert client.put("/submissions/missing/baseline", headers=admin, json={"baseline": True}).status_code == 404
+
+
+def test_baseline_is_no_longer_an_account_type(api):
+    _, store = api
+    token = store.add_team("ordinary", team_type="participant")
+    with pytest.raises(ValueError):
+        store.add_team("obsolete", team_type="baseline")
+    with pytest.raises(ValueError):
+        store.update_team(token, team_type="baseline")
+    assert store.team_type(token) == "participant"
+
+
 @pytest.mark.parametrize("unlimited", [False, True])
 def test_admin_cannot_upload(api, unlimited):
     client, store = api
@@ -198,7 +260,7 @@ def test_api_requires_a_valid_token(api, authorization, method, path):
     ([], "test", False),
     (["--type", "admin"], "admin", False),
     (["--type", "participant"], "participant", False),
-    (["--type", "baseline", "--unlimited"], "baseline", True),
+    (["--type", "participant", "--unlimited"], "participant", True),
 ])
 def test_cli_creates_and_lists_account_types(api, monkeypatch, capsys, flags, kind, unlimited):
     _, store = api
@@ -237,16 +299,17 @@ def test_invalid_explicit_tokens_create_no_accounts(api, token):
 
 def test_fixed_tokens_authenticate_with_their_configured_roles_and_allowances(api):
     client, store = api
-    for kind in ("participant", "baseline", "admin"):
-        token = f"test-{kind}"
-        assert store.add_team(kind, team_type=kind, unlimited=kind == "baseline", token=token) == token
+    for name, kind, unlimited in (("participant", "participant", False), ("reference", "participant", True),
+                                  ("admin", "admin", False)):
+        token = f"test-{name}"
+        assert store.add_team(name, team_type=kind, unlimited=unlimited, token=token) == token
         headers = {"Authorization": f"Bearer {token}"}
         config = client.get("/config", headers=headers)
         assert config.status_code == 200 and config.json()["team_type"] == kind
-        assert config.json()["allowance"]["unlimited"] is (kind == "baseline")
+        assert config.json()["allowance"]["unlimited"] is unlimited
         upload = client.post("/submissions", headers=headers, files={"file": ("solution.wasm", MODULE)})
         assert upload.status_code == (403 if kind == "admin" else 201)
-    assert client.post("/submissions", headers={"Authorization": "Bearer test-baseline"},
+    assert client.post("/submissions", headers={"Authorization": "Bearer test-reference"},
                        files={"file": ("again.wasm", MODULE)}).status_code == 201
     assert client.post("/submissions", headers={"Authorization": "Bearer test-participant"},
                        files={"file": ("again.wasm", MODULE)}).status_code == 429
@@ -255,11 +318,11 @@ def test_fixed_tokens_authenticate_with_their_configured_roles_and_allowances(ap
 def test_cli_explicit_token_is_printed_and_collision_never_updates_account(api, monkeypatch, capsys):
     _, store = api
     monkeypatch.setattr(teams, "Store", lambda: store)
-    monkeypatch.setattr(sys, "argv", ["teams", "add", "--type", "baseline", "--unlimited", "--token", "fixed-token", "reference"])
+    monkeypatch.setattr(sys, "argv", ["teams", "add", "--type", "participant", "--unlimited", "--token", "fixed-token", "reference"])
     teams.main()
     assert capsys.readouterr().out.split() == ["fixed-token", "reference"]
     before = store.teams()
-    assert before[-1] == ("fixed-token", "reference", True, "baseline")
+    assert before[-1] == ("fixed-token", "reference", True, "participant")
     with pytest.raises(ValueError, match="token already"):
         store.add_team("replacement", team_type="admin", token="fixed-token")
     assert store.teams() == before
@@ -310,7 +373,7 @@ def test_cli_updates_roles_and_access_without_changing_the_account(api, monkeypa
     unchanged_team = store.teams()[0]
     monkeypatch.setattr(teams, "Store", lambda: store)
 
-    for kind in ["participant", "admin", "baseline", "test"]:
+    for kind in ["participant", "admin", "test"]:
         admin = kind == "admin"
         monkeypatch.setattr(sys, "argv", ["teams", "update", "--type", kind, "--", token])
         teams.main()
@@ -467,7 +530,7 @@ def test_invalid_evaluation_selection_does_not_change_state(api, body, status):
     assert client.post("/evaluations/schedule", json={"submission": "missing"}, headers=admin).status_code == 422
 
 
-@pytest.mark.parametrize("kind", ["test", "participant", "baseline"])
+@pytest.mark.parametrize("kind", ["test", "participant"])
 def test_job_reruns_require_admin_even_for_own_submission(api, kind):
     client, store = api
     token = store.add_team("owner", team_type=kind)

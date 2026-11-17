@@ -4,10 +4,19 @@ The app queues uploads in SQLite and shows each team its own submissions; admins
 Each submission has one job per requested episode. One worker supervises evaluation subprocesses, downloading
 uncached archives as needed. Both processes use `VIOBENCH_SERVER_DIR` (default `./server-data`).
 
-This schema, including saved competition settings and team allowances, requires a fresh database; older submission
-databases are not migrated. Existing deployments must explicitly choose an empty server-data directory or a new
-Compose server-data volume, retaining the old data and a backup separately. Run fresh evaluations for the
-zero-prediction scoring rule; results computed with the previous held-pose rule are not converted.
+Existing databases using baseline account types require an explicit migration to submission-level baselines.
+Stop the API and worker, keep a full backup (see [`backup.sh`](backup.sh)), then migrate into a new directory:
+
+```bash
+python -m viobench.tools.server.migrate /path/to/server-data /path/to/server-data-migrated
+```
+
+Verify the migrated copy before switching `VIOBENCH_SERVER_DIR` (or the Compose data mount) to it and starting the
+new application and worker. The source directory is retained. The migration rejects an existing destination or
+an already migrated/unsupported schema. It marks every old baseline account's submission as a baseline and changes
+those accounts to ordinary participants, preserving tokens, quota settings, submission IDs, uploads, evaluation
+jobs and reports. Other submissions start with `baseline = false`. Startup refuses the old schema instead of
+silently changing it. Older results from before the zero-prediction scoring rule are not converted by this migration.
 
 ```bash
 pip install -e ".[server]"
@@ -23,8 +32,9 @@ To seed a fresh local server that is already running with its worker, activate t
 bash viobench/viobench/tools/server/seed.sh baselines
 ```
 
-It creates `participant`, `baseline` (unlimited uploads), and `admin`, prints their tokens, and uploads
-every `*.wasm` in the given directory through the baseline account. Labels are filenames without `.wasm`.
+It creates two ordinary participant accounts, `participant` and `baseline` (unlimited uploads), plus `admin`,
+prints their tokens, and uploads every `*.wasm` through the account named `baseline`. The admin API marks each
+upload as a baseline submission. Labels are filenames without `.wasm`.
 The directory defaults to `./baselines`; set `SERVER_URL` to override `http://localhost:8000`.
 Account creation uses the existing `python -m viobench.tools.server.teams add` CLI; uploads use curl.
 The script does not inspect, reset or edit the database directly. It keeps the current working directory, so the
@@ -76,7 +86,7 @@ restricted to their owner and admins; comparison plots also show shared baseline
 Teams can also open the server's root in a browser: a page ([`ui/`](ui/), no dependencies) that signs in with the token
 and uses the API below.
 
-Accounts have one type: `test` (the default), `participant`, `baseline`, or `admin`. Use `teams add --type participant`
+Accounts have one type: `test` (the default), `participant`, or `admin`. Use `teams add --type participant`
 for real participants. `--unlimited` independently removes the daily quota; for example,
 `python -m viobench.tools.server.teams add --unlimited debug` creates an unlimited test account.
 Tokens are random by default. For a single test account, `teams add --token test-participant --type participant participant`
@@ -114,40 +124,46 @@ Change an existing team's type using its token from `teams list`:
 ```bash
 python -m viobench.tools.server.teams update --type participant -- "$TOKEN"
 python -m viobench.tools.server.teams update --type admin -- "$TOKEN"
-python -m viobench.tools.server.teams update --type test -- "$TOKEN"  # also revokes admin/baseline status
+python -m viobench.tools.server.teams update --type test -- "$TOKEN"  # also revokes admin access
 ```
 
 Updates keep the token, submissions and quota setting. API permissions change immediately;
 the browser's account view updates on its next refresh. With Compose, run the same command through `exec app` as above.
 
-Create a baseline uploader and sign in with its token to upload labeled reference solutions:
+Create an ordinary uploader for instructor reference solutions:
 
 ```bash
-python -m viobench.tools.server.teams add --type baseline --unlimited "Baselines"
+python -m viobench.tools.server.teams add --type participant --unlimited "References"
 ```
 
-Every eligible upload from a baseline account appears in the comparison plots of all signed-in teams. Use the
-submission label for the method and configuration, such as `OpenVINS, 320px`; labels need not be unique. Changing an
-existing account to baseline publishes its previous eligible submissions too; changing it away removes them from
-other teams' plots. Baseline accounts have no admin permissions and use the same upload pause and job queue.
+An admin selects individual submissions through **Details → Use as a baseline → Save baseline selection**.
+Every eligible selected submission appears in all signed-in teams' comparison plots. Use the submission label for
+the method/configuration, such as `OpenVINS, 320px`; labels need not be unique. Baseline selection is independent
+of account type and applies immediately. Changing a team's type does not change any submission's baseline flag.
+Ownership, credentials, quotas, uploaded files and evaluation jobs stay intact. New uploads start unselected,
+even when the same team owns other baselines. Unmarking a submission removes its shared comparison point.
+The original owner continues to see its own submissions, including those selected as baselines.
 
-Baseline accounts can delete their own submissions through **Details → Delete submission**, with confirmation.
-Deletion permanently removes the submission, its queued/finished/failed jobs, uploaded WASM, reports and comparison
-points. Wait until every running job finishes, including jobs outside the current evaluation set. Other account
-types, including admins, cannot delete submissions. Deleting an upload counted in the current quota day frees its
-daily upload slot.
+Only admins can delete submissions, through **Details → Delete submission**, with confirmation. Deletion removes
+the upload, all its queued/finished/failed jobs, reports and comparison points. Wait until every running job
+finishes, including jobs outside the current evaluation set. Baseline selection grants no deletion permission.
+Deleting an upload counted in the current quota day frees its daily upload slot.
 
 One plot compares each submission's mean episode Sim(3)-aligned ATE (metres) with its maximum fuel per frame,
 both across the entire current evaluation set. The arithmetic mean gives each selected hash equal weight,
 regardless of its frame count. Baselines are squares, the viewer's other submissions are circles, and the dashed
-line marks the baseline Pareto frontier. The solid frontier combines baselines with the viewer's submissions;
-shading shows the additional area they cover beyond the baselines (lower is better on both axes).
+line marks the baseline Pareto frontier. The solid frontier combines baselines with the viewer's best single
+submission; shading shows that solution's additional area beyond the baselines (lower is better on both axes).
+All eligible submissions remain visible, and the best solution is identified beside the score and in Exact values.
 Both axes and the area calculation use logarithms, giving equal proportional improvements equal weight. For the
 plot, frontiers and area only, fuel is clamped to at least `1` per frame and ATE to `0.001 m`; labels and reported
 metrics keep their raw values. The fuel reference is `X = 1.2 × step_fuel`; the error reference is
 `Y = 1.2 ×` the worst eligible baseline's mean ATE after clamping. Thus all-zero baseline errors give `Y = 0.0012 m`,
 and fuel improvements can still earn area. Nonbaseline uploads do not change these references.
-The claimed area is the combined dominated area minus baseline dominated area in natural-log coordinates.
+For each owned submission `s`, its gain is `area(baselines + s) - area(baselines)` in natural-log coordinates,
+using the same baseline set and reference rectangle for every candidate. The team's claimed area is the largest
+individual gain. Complementary submissions do not combine their areas into the team score. Exact ties select the
+earliest submission, then its ID; no eligible owned submissions gives zero area when baselines are available.
 Its percentage is `100 × claimed area / (ln(X / 1) × ln(Y / 0.001))`, unavailable until a baseline exists.
 The plot zooms each lower bound to one tenth of the visible minimum, never below its scoring floor.
 This changes only the display: the full scoring reference and denominator, and upper fuel bound `1.2 × step_fuel`, stay unchanged.
@@ -163,11 +179,12 @@ until the existing fill-missing workflow supplies those results. Comparison data
 Admins can pause new submissions from **Submission access** by entering a message (up to 1000 characters), update
 that message while paused, or resume submissions. All teams see the saved message and their upload button is disabled.
 Visible browser tabs refresh every 15 seconds, including while idle. Paused uploads return 503 with the message;
-participant, test, baseline and unlimited accounts are all blocked. Queued/running evaluations continue, and submissions and
+participant, test and unlimited accounts are all blocked. Queued/running evaluations continue, and submissions and
 results remain readable. The pause survives server restarts until an admin resumes submissions; it does not stop
 admin scheduling or existing evaluation jobs.
 
-Submission responses include the submitting account's `team_name` and `team_type` for both teams and admins.
+Submission responses include the `baseline` flag and the submitting account's `team_name` and `team_type`.
+Comparison points expose `is_baseline` separately from `own`; both can be true for the same submission.
 
 | endpoint | |
 |---|---|
@@ -175,12 +192,13 @@ Submission responses include the submitting account's `team_name` and `team_type
 | `POST /submissions` | multipart `file` (and `label`) → 201 |
 | `GET /submissions` | the team's submissions (all submissions for admins), newest first, with current-set `status`, `progress`, `summary`, `partial` and `outdated` |
 | `GET /submissions/<id>` | current-set `results` (`summary`, `episodes`, `partial`, `outdated`) plus all scheduled `jobs`, including episodes outside the current set; admins can access any submission |
-| `DELETE /submissions/<id>` | baseline accounts' own submissions only: 200 `{"deleted": "<id>"}`; 403 for other account types, 404 if missing or not owned, 409 if any job is running |
+| `DELETE /submissions/<id>` | admin only: 200 `{"deleted": "<id>"}`; 403 for other account types, 404 if missing, 409 if any job is running |
+| `PUT /submissions/<id>/baseline` | admin only: `{"baseline": true/false}` marks/unmarks a submission; returns its details, 404 if missing; the boolean is strict |
 | `GET /config` | nested `uploads` and `evaluation` rules, `team_name`, `team_type`, `pause_message`, `evaluation_hashes`, and the caller's resolved `allowance` (base daily quota, used, extras, remaining, unlimited, day) |
 | `PUT /config` | admin only: complete `{uploads, evaluation}` settings; returns the same shape as `GET /config` |
 | `GET /teams` | admin only: account id/name/type, nullable daily override, unlimited flag, today's extras/usage/remaining, effective daily base quota and day; no tokens |
 | `PUT /teams/<id>/allowance` | admin only: `{daily_quota: null or nonnegative integer, unlimited: boolean, extra_uploads: nonnegative integer}`; sets today's total extras and returns the team row |
-| `GET /comparison` | current `evaluation_hashes`, one aggregate point per eligible submission from the viewer or shared baselines, baseline and combined frontiers, and improvement area; no other teams' private submissions |
+| `GET /comparison` | current `evaluation_hashes`, eligible own/baseline points, `baseline_frontier`, all-point `frontier`, `best_submission_id`, `best_frontier` (baselines plus the best owned submission), and best-single-submission `claimed_area`; no other teams' private submissions |
 | `PUT /submission-pause` | admin only: JSON `{"message": "reason"}` pauses or updates the message; `{"message": null}` resumes; returns `pause_message` |
 | `GET /evaluations` | admin only: current `hashes`, named `presets`, and current-set `outdated_jobs` (finished) / `outdated_running` counts across all teams |
 | `PUT /evaluations` | admin only: `{"hashes": ["<sha1>", "..."], "backfill": true}` saves the set and optionally schedules missing jobs for all submissions; returns selection and `scheduled` count |
@@ -245,7 +263,7 @@ path prefix, serve the page with a trailing slash (`/prefix/`): its requests are
 
 When upgrading an existing Compose deployment, remove the obsolete `episodes` container with
 `docker compose -f viobench/tools/server/compose.yaml up -d --build --remove-orphans` (from the repository root).
-Use the fresh database described above; this command does not migrate the old database.
+Run the explicit baseline migration described above for an existing database; Compose itself does not migrate it.
 
 [`backup.sh`](backup.sh) copies uploads, reports and SQLite (including team tokens) into a dated local snapshot.
 It uses the active Docker context and finds `compose.yaml` next to the script, so it can run from any directory.

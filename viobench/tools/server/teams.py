@@ -4,7 +4,7 @@
     python -m viobench.tools.server.teams add "test"              # a test account, not a participant
     python -m viobench.tools.server.teams add --unlimited "debug"  # a team without a daily upload quota
     python -m viobench.tools.server.teams add --type admin "admin"      # view all submissions and pause new uploads
-    python -m viobench.tools.server.teams add --type baseline "reference"  # share scores in comparisons
+    python -m viobench.tools.server.teams add --type participant --unlimited "reference"  # admin selects individual uploads as baselines
     python -m viobench.tools.server.teams add --type admin --token test-admin admin  # fixed token for local testing
     python -m viobench.tools.server.teams update --type participant -- "$TOKEN"  # change an existing account's type
     python -m viobench.tools.server.teams list                     # every team's token and name

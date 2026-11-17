@@ -3,7 +3,8 @@
     POST /submissions        multipart: file (the .wasm), label (optional)  -> 201 and the new submission
     GET  /submissions        the team's submissions (all for admins), newest first, with current-set summaries once evaluated
     GET  /submissions/{id}   one of them, with its results once evaluated
-    DELETE /submissions/{id} baseline: delete an own submission when none of its jobs is running
+    DELETE /submissions/{id} admin: delete a submission when none of its jobs is running
+    PUT /submissions/{id}/baseline admin: mark or unmark a shared baseline submission
     GET/PUT /config          current rules and own allowance; admin can update rules
     GET  /teams              admin: team allowances, without authentication tokens
     PUT  /teams/{id}/allowance admin: daily quota override, unlimited and today's extra uploads
@@ -157,8 +158,25 @@ def comparison(authorization: str | None = Header(default=None)):
 
 
 def require_admin(authorization):
-    if not get_store().is_admin(authenticate(authorization)):
+    token = authenticate(authorization)
+    if not get_store().is_admin(token):
         raise HTTPException(status_code=403, detail="admin access required")
+    return token
+
+
+class BaselineSelection(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    baseline: bool
+
+
+@app.put("/submissions/{submission_id}/baseline")
+def select_baseline(submission_id: str, selection: BaselineSelection, authorization: str | None = Header(default=None)):
+    token = require_admin(authorization)
+    try:
+        get_store().set_baseline(submission_id, selection.baseline)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from None
+    return public(get_store().get(token, submission_id))
 
 
 @app.put("/config")

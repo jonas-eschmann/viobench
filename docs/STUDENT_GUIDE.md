@@ -73,11 +73,17 @@ Your upload form shows today's usage and remaining allowance, including any team
 The default is one upload per day, resetting at midnight Pacific time. Failed evaluations do not refund uploads.
 Queued or running evaluations do not block another upload; extra evaluations of an existing submission do not count as uploads.
 
+The instructors select individual submissions as shared baselines. Selection keeps the original owner and
+shares comparison scores; files and detailed results remain private to the owner and admins. Your own selected
+submission can appear as both yours and a baseline.
+
 The comparison plot shows your submissions alongside shared baselines. Lower **Sim(3)-aligned ATE** and lower
 **maximum fuel per frame** are better. Each submission uses the mean ATE (equal weight per episode) and maximum fuel over the
-whole selected set. The dashed frontier uses baselines; the solid frontier combines baselines and your submissions.
-Shading marks your improvement beyond the baselines in logarithmic coordinates, so equal proportional improvements
-have equal weight. The plot, frontiers and area score use floors of `1` fuel/frame and `0.001 m` ATE; reported metrics
+whole selected set. Your score is the largest individual area gain among your eligible submissions, each measured
+against the same baselines. The dashed frontier uses baselines; the solid frontier adds your best single solution.
+Shading shows that solution's gain. Your other points remain visible, but their areas do not combine into your score.
+Exact ties select the earliest submission, then its ID. Area uses logarithmic coordinates, so equal proportional
+improvements have equal weight. The plot, frontiers and area score use floors of `1` fuel/frame and `0.001 m` ATE; reported metrics
 and labels stay unchanged. The reference bounds are `1.2 × step_fuel` and `1.2 ×` the worst eligible baseline ATE
 after applying the floor (`0.0012 m` when all baseline errors are zero). Improvement is the shaded area as a percentage
 of this log-space rectangle, unavailable without a baseline. Nonbaseline uploads do not change the references.

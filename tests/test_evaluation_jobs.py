@@ -234,7 +234,7 @@ def test_rerun_finished_job_clears_attempt_and_joins_queue_tail(store, status):
 
 def test_rerun_failed_covers_all_submissions_and_hashes_without_touching_other_jobs(store):
     store.set_evaluations([A, B, C, D])
-    tokens = [store.add_team("participant", team_type="participant"), store.add_team("baseline", team_type="baseline")]
+    tokens = [store.add_team("participant", team_type="participant"), store.add_team("reference", team_type="participant")]
     submissions = [submit(store, token) for token in tokens]
     original = [jobs(store, token, submission_id) for token, submission_id in zip(tokens, submissions)]
     failed = {(submissions[0], A), (submissions[1], A), (submissions[1], B)}

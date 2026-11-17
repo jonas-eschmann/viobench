@@ -159,8 +159,9 @@ def test_evaluation_snapshots_survive_settings_changes_and_exclude_outdated_scor
     own = upload(client)
     own_job = store.claim_next()
     succeed(store, own, own_job)
-    baseline = store.add_team("reference", team_type="baseline")
+    baseline = store.add_team("reference", team_type="participant")
     baseline_id = store.add(baseline, "", "solution.wasm", MODULE)
+    store.set_baseline(baseline_id, True)
     baseline_job = store.claim_next()
     succeed(store, baseline_id, baseline_job)
     original = store.config.as_dict()
@@ -198,8 +199,9 @@ def test_evaluation_snapshots_survive_settings_changes_and_exclude_outdated_scor
 def test_bulk_rerun_replaces_only_selected_outdated_terminal_jobs_at_queue_tail(settings):
     client, store, admin = settings
     tokens = [store.add_team(name, team_type=kind) for name, kind in
-              [("reference", "baseline"), ("failed", "test"), ("running", "participant"), ("queued", "test")]]
+              [("reference", "participant"), ("failed", "test"), ("running", "participant"), ("queued", "test")]]
     baseline, failed, running, queued = [store.add(token, "", "solution.wasm", MODULE) for token in tokens]
+    store.set_baseline(baseline, True)
     done_job = store.claim_next()
     succeed(store, baseline, done_job)
     failed_job = store.claim_next()

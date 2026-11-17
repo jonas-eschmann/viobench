@@ -236,13 +236,16 @@ function showSignIn(message, kind = "error") {
   $("pause-message").value = "";
   $("evaluation-backfill").checked = false;
   $("schedule-hashes").value = "";
+  $("submission-baseline").checked = false;
+  delete $("submission-baseline").dataset.submission;
+  delete $("submission-baseline").dataset.saved;
   shown = null;
   $("submissions").tBodies[0].replaceChildren();
   for (const id of ["details-title", "details-facts", "details-results", "details-jobs", "details-progress", "details-json", "updated", "rules",
                     "team-name", "evaluation-preset", "evaluation-status", "evaluation-outdated", "evaluation-summary", "comparison-charts",
                     "settings-fields", "team-allowances"]) $(id).replaceChildren();
   for (const id of ["team", "account", "details", "connection", "pause-controls", "pause-banner", "evaluation-controls", "schedule-form",
-                    "settings-controls", "teams-controls"]) $(id).hidden = true;
+                    "settings-controls", "teams-controls", "baseline-form"]) $(id).hidden = true;
   $("sign-in").hidden = false;
   notice(message, kind);
   $("token").focus();
@@ -311,7 +314,8 @@ function renderConfiguration(next) {
   $("settings-controls").hidden = !admin;
   $("teams-controls").hidden = !admin;
   $("schedule-form").hidden = !admin;
-  $("delete-submission").hidden = config.team_type !== "baseline";
+  $("delete-submission").hidden = !admin;
+  $("baseline-form").hidden = !admin;
   $("team-column").hidden = !admin;
   $("account-column").hidden = !admin;
   $("submissions-title").textContent = admin ? "All submissions" : "Submissions";
@@ -368,6 +372,7 @@ function renderAdminButtons() {
   $("evaluation-rerun").disabled = adminSaving || !outdatedJobs;
   $("evaluation-rerun-failed").disabled = adminSaving;
   $("settings-save").disabled = adminSaving;
+  $("baseline-save").disabled = adminSaving;
   for (const form of teamForms.values()) form.button.disabled = adminSaving;
   $("schedule-button").disabled = adminSaving;
   for (const button of $("details-jobs").querySelectorAll(".rerun-job")) button.disabled = adminSaving;
@@ -680,7 +685,7 @@ function comparisonTooltip(container, chart) {
   };
   tooltip.addEventListener("pointerenter", () => clearTimeout(hideTimer));
   tooltip.addEventListener("pointerleave", leave);
-  return (mark, point, onFrontier, canOpen) => {
+  return (mark, point, onFrontier, canOpen, isBest) => {
     const show = () => {
       hide();
       activeMark = mark;
@@ -688,7 +693,7 @@ function comparisonTooltip(container, chart) {
       metrics.append(node("dt", "Mean Sim(3) ATE"), node("dd", `${Number(point.sim3_ate_rmse_mean.toPrecision(6))} m`),
                      node("dt", "Max fuel/frame"), node("dd", point.fuel_per_frame_max.toLocaleString()));
       tooltip.replaceChildren(node("strong", point.label || point.id),
-        node("div", `${point.team_name} · ${point.own ? "Your submission" : "Baseline"}${onFrontier ? " · Pareto frontier" : ""}`, "hint"), metrics);
+        node("div", `${point.team_name}${point.own ? " · Your submission" : ""}${point.is_baseline ? " · Baseline" : ""}${isBest ? " · Best solution" : ""}${onFrontier ? " · Scoring frontier" : ""}`, "hint"), metrics);
       if (canOpen) tooltip.append(node("div", "Click the point or press Enter for details.", "hint"));
       mark.setAttribute("aria-describedby", tooltip.id);
       tooltip.hidden = false;
@@ -737,8 +742,9 @@ function renderComparison(comparison) {
   const maxY = Math.max(errorFloor * 1.2, comparison.error_reference || 0, ...visiblePoints.map((point) => point.sim3_ate_rmse_mean * 1.1));
   const x = (used) => 76 + Math.log(Math.max(fuelFloor, used) / minX) / Math.log(maxX / minX) * 580;
   const y = (error) => 280 - Math.log(Math.max(errorFloor, error) / minY) / Math.log(maxY / minY) * 256;
-  const frontierIds = new Set(comparison.frontier);
+  const frontierIds = new Set(comparison.best_frontier);
   const baselineIds = new Set(comparison.baseline_frontier);
+  const best = points.find((point) => point.id === comparison.best_submission_id);
   // The envelope begins at its ceiling and drops only when a submission improves it.
   // Include the final horizontal segment through the fixed fuel reference.
   const steps = (ids, ceiling) => {
@@ -784,14 +790,15 @@ function renderComparison(comparison) {
   for (const point of points) {
     const name = point.label || point.id;
     const onFrontier = frontierIds.has(point.id);
-    const description = `${point.team_name}: ${name}; maximum fuel/frame ${point.fuel_per_frame_max}; mean Sim(3) ATE ${point.sim3_ate_rmse_mean} m${onFrontier ? "; on Pareto frontier" : ""}`;
+    const isBest = point.id === comparison.best_submission_id;
+    const description = `${point.team_name}: ${name}; maximum fuel/frame ${point.fuel_per_frame_max}; mean Sim(3) ATE ${point.sim3_ate_rmse_mean} m${isBest ? "; best solution" : ""}${onFrontier ? "; on scoring frontier" : ""}`;
     const canOpen = point.own || config.team_type === "admin";
     const mark = svgNode("g", {class: `comparison-point ${point.own ? "own" : "baseline"}${onFrontier ? " frontier" : ""}`,
                                role: canOpen ? "button" : "img", tabindex: 0, "aria-label": description});
-    mark.append(svgNode("circle", {cx: x(point.fuel_per_frame_max), cy: y(point.sim3_ate_rmse_mean), r: 12, class: "comparison-hit"}), point.team_type === "baseline" ?
+    mark.append(svgNode("circle", {cx: x(point.fuel_per_frame_max), cy: y(point.sim3_ate_rmse_mean), r: 12, class: "comparison-hit"}), point.is_baseline ?
                 svgNode("rect", {x: x(point.fuel_per_frame_max) - 5, y: y(point.sim3_ate_rmse_mean) - 5, width: 10, height: 10}) :
                 svgNode("circle", {cx: x(point.fuel_per_frame_max), cy: y(point.sim3_ate_rmse_mean), r: 5}));
-    attachTooltip(mark, point, onFrontier, canOpen);
+    attachTooltip(mark, point, onFrontier, canOpen, isBest);
     let button = "";
     if (canOpen) {
       mark.addEventListener("click", () => showDetails(point.id, true));
@@ -810,7 +817,8 @@ function renderComparison(comparison) {
       if (point.own) ownMarks.push(mark);
       else chart.append(mark);
     }
-    rows.push([point.team_name, name, point.own ? `Yours (${point.team_type})` : "Baseline",
+    const role = point.own ? `Yours (${point.team_type})${point.is_baseline ? " · Baseline" : ""}` : "Baseline";
+    rows.push([point.team_name, name, role + (isBest ? " · Best solution" : ""),
                point.fuel_per_frame_max, point.sim3_ate_rmse_mean, button]);
   }
   // SVG paints in document order: own submissions stay above baselines and all frontiers.
@@ -820,7 +828,8 @@ function renderComparison(comparison) {
     container.append(node("p", "Claimed area is unavailable until baseline results are available for the current set.", "hint"));
   } else {
     const fraction = comparison.claimed_area / (Math.log(maxX / fuelFloor) * Math.log(comparison.error_reference / errorFloor));
-    container.append(node("p", `Claimed area: ${decimal(fraction * 100)}% of the log–log reference rectangle. ` +
+    const winner = best ? `Best solution: “${best.label || best.id}”. ` : "No eligible submission of your own. ";
+    container.append(node("p", winner + `Claimed area: ${decimal(fraction * 100)}% of the log–log reference rectangle. ` +
       `Scoring reference: ${fuel(fuelFloor)}–${fuel(maxX)} fuel/frame and ${decimal(errorFloor)}–${decimal(comparison.error_reference)} m mean Sim(3) ATE.`, "hint"));
   }
   if (points.some((point) => point.fuel_per_frame_max > maxX)) {
@@ -921,8 +930,37 @@ async function showDetails(id, scroll) {
   }
 }
 
+async function saveBaseline(event) {
+  event.preventDefault();
+  if (adminSaving || deletingSubmission || config?.team_type !== "admin" || !shown) return;
+  const mine = session;
+  adminSaving = true;
+  clearTimeout(pollTimer);
+  generation++;
+  detailGeneration++;
+  detailPending = false;
+  renderAdminButtons();
+  try {
+    const result = await api(`submissions/${encodeURIComponent(shown.id)}/baseline`, {method: "PUT",
+      headers: {"Content-Type": "application/json"}, body: JSON.stringify({baseline: $("submission-baseline").checked})});
+    if (mine !== session) return;
+    renderDetails(result);
+    notice(result.baseline ? "Submission selected as a shared baseline." : "Submission removed from shared baselines.", "info");
+  } catch (error) {
+    if (mine !== session) return;
+    if (error.status === 401) return showSignIn("The token is no longer valid.");
+    notice(`Cannot save baseline selection: ${error.message}`);
+  } finally {
+    if (mine === session) {
+      adminSaving = false;
+      renderAdminButtons();
+      refresh();
+    }
+  }
+}
+
 async function deleteSubmission(submission) {
-  if (deletingSubmission || config?.team_type !== "baseline") return;
+  if (deletingSubmission || adminSaving || config?.team_type !== "admin") return;
   if (!window.confirm(`Permanently delete “${submission.label || submission.id}”? This removes the upload, all evaluation jobs and results, and its points from everyone's comparisons.`)) return;
   const mine = session;
   deletingSubmission = true;
@@ -956,16 +994,24 @@ async function deleteSubmission(submission) {
 
 function renderDetails(submission) {
   $("details-title").textContent = submission.label || submission.id || "Submission";
-  const baseline = config.team_type === "baseline";
+  const admin = config.team_type === "admin";
   const running = submission.jobs.some((job) => job.status === "running");
-  $("delete-submission").hidden = !baseline;
-  $("delete-submission").disabled = deletingSubmission || running;
+  $("delete-submission").hidden = !admin;
+  $("delete-submission").disabled = deletingSubmission || adminSaving || running;
   $("delete-submission").onclick = () => deleteSubmission(submission);
-  $("delete-hint").hidden = !baseline || !running;
+  $("delete-hint").hidden = !admin || !running;
+  $("baseline-form").hidden = !admin;
+  const checkbox = $("submission-baseline");
+  if (checkbox.dataset.submission !== submission.id || checkbox.checked === (checkbox.dataset.saved === "true")) {
+    checkbox.checked = Boolean(submission.baseline);
+  }
+  checkbox.dataset.submission = submission.id;
+  checkbox.dataset.saved = String(Boolean(submission.baseline));
   const facts = $("details-facts");
   facts.replaceChildren();
   const account = config.team_type === "admin" ? [["Team", submission.team_name], ["Account", submission.team_type]] : [];
   for (const [label, value] of [["Id", submission.id], ...account,
+                                ["Baseline", submission.baseline ? "yes" : "no"],
                                 ["File", `${submission.filename || DASH} (${size(submission.bytes)})`],
                                 ["SHA-256", submission.sha256], ["Status", submission.status], ["Error", submission.error],
                                 ["Submitted", time(submission.created)]]) {
@@ -993,7 +1039,6 @@ function renderDetails(submission) {
   }
   const jobs = $("details-jobs");
   jobs.replaceChildren();
-  const admin = config.team_type === "admin";
   const headers = ["Episode", "Status", "Current set", "Sim(3) ATE (m)", "Max fuel/frame", "Error"];
   if (admin) headers.push("Actions");
   jobs.append(table(headers, submission.jobs.map((job) => {
@@ -1074,6 +1119,7 @@ $("evaluation-rerun").addEventListener("click", () => updateEvaluations("evaluat
 $("evaluation-rerun-failed").addEventListener("click", () => updateEvaluations("evaluations/rerun-failed", "POST", {}));
 $("evaluation-preset").addEventListener("change", renderAdminButtons);
 $("settings-form").addEventListener("submit", saveSettings);
+$("baseline-form").addEventListener("submit", saveBaseline);
 $("schedule-form").addEventListener("submit", scheduleSubmission);
 $("refresh").addEventListener("click", () => {
   retryMs = POLL_MS;

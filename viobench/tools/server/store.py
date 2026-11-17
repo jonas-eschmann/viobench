@@ -1,6 +1,6 @@
 """SQLite accounts, current evaluation selection, and one job per submission/episode.
 
-A team is its token: submissions belong to a token. Baseline accounts share comparison scores;
+A team is its token: submissions belong to a token. Selected baseline submissions share comparison scores;
 admin accounts can see every team's submissions and pause new uploads."""
 import hashlib
 import json
@@ -21,8 +21,9 @@ DEFAULT_DIR = Path(os.environ.get("VIOBENCH_SERVER_DIR", "server-data"))
 TOKEN_BYTES = 24  # a token is 32 base64url characters
 ID_BYTES = 8  # a submission id is 16 hex digits, random: it says nothing about how many submissions exist
 MAX_PAUSE_MESSAGE = 1000
-TEAM_TYPES = ("test", "participant", "baseline", "admin")
-COLUMNS = ("submissions.id, label, filename, sha256, bytes, submissions.created, "
+TEAM_TYPES = ("test", "participant", "admin")
+SCHEMA_VERSION = 1
+COLUMNS = ("submissions.id, label, filename, sha256, bytes, submissions.created, submissions.baseline, "
            "teams.name AS team_name, teams.type AS team_type")  # API fields; never include tokens
 
 SCHEMA = """
@@ -31,11 +32,12 @@ CREATE TABLE IF NOT EXISTS teams (
     unlimited INTEGER NOT NULL DEFAULT 0,
     daily_quota INTEGER CHECK (daily_quota >= 0),
     extra_uploads INTEGER NOT NULL DEFAULT 0 CHECK (extra_uploads >= 0), extra_day REAL,
-    type TEXT NOT NULL DEFAULT 'test' CHECK (type IN ('test', 'participant', 'baseline', 'admin'))
+    type TEXT NOT NULL DEFAULT 'test' CHECK (type IN ('test', 'participant', 'admin'))
 );
 CREATE TABLE IF NOT EXISTS submissions (
     id TEXT PRIMARY KEY, token TEXT NOT NULL REFERENCES teams(token), label TEXT,
-    filename TEXT NOT NULL, sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, created REAL NOT NULL
+    filename TEXT NOT NULL, sha256 TEXT NOT NULL, bytes INTEGER NOT NULL, created REAL NOT NULL,
+    baseline INTEGER NOT NULL DEFAULT 0 CHECK (baseline IN (0, 1))
 );
 CREATE INDEX IF NOT EXISTS submissions_token ON submissions(token, created);
 CREATE TABLE IF NOT EXISTS submission_control (
@@ -79,10 +81,16 @@ class Store:
             path.mkdir(parents=True, exist_ok=True)
         self.path = self.directory / "submissions.sqlite"
         with self._connect() as connection:
+            existing = connection.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'submissions'").fetchone()
+            if existing and connection.execute("PRAGMA user_version").fetchone()[0] != SCHEMA_VERSION:
+                raise RuntimeError("This database needs an explicit baseline migration. Stop the app and worker and run "
+                                   "python -m viobench.tools.server.migrate SOURCE_DIRECTORY DESTINATION_DIRECTORY; "
+                                   "then use the migrated directory as VIOBENCH_SERVER_DIR.")
             connection.executescript("BEGIN IMMEDIATE;" + SCHEMA)
             hashes = default_hashes()
             connection.execute("INSERT OR IGNORE INTO submission_control (id, evaluation_hashes, config) VALUES (1, ?, ?)",
                                (json.dumps(hashes), json.dumps(load_config().as_dict())))
+            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
     def _connect(self):
         connection = sqlite3.connect(self.path, timeout=30)
@@ -338,14 +346,22 @@ class Store:
             self.upload_path(submission_id).write_bytes(data)
         return submission_id
 
+    def set_baseline(self, submission_id, baseline):
+        """Select shared comparison scores without changing ownership or account permissions."""
+        if type(baseline) is not bool:
+            raise ValueError("baseline must be a boolean")
+        with self._connect() as connection:
+            if not connection.execute("UPDATE submissions SET baseline = ? WHERE id = ?", (baseline, submission_id)).rowcount:
+                raise LookupError("no such submission")
+
     def delete_submission(self, token, submission_id):
-        """Delete a baseline account's own submission unless any of its jobs is running."""
+        """Admin deletion of a submission unless any of its jobs is running."""
         with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             team = connection.execute("SELECT type FROM teams WHERE token = ?", (token,)).fetchone()
-            if team is None or team["type"] != "baseline":
-                raise PermissionError("only baseline accounts can delete submissions")
-            if connection.execute("SELECT 1 FROM submissions WHERE id = ? AND token = ?", (submission_id, token)).fetchone() is None:
+            if team is None or team["type"] != "admin":
+                raise PermissionError("only admins can delete submissions")
+            if connection.execute("SELECT 1 FROM submissions WHERE id = ?", (submission_id,)).fetchone() is None:
                 raise LookupError("no such submission")
             if connection.execute("SELECT 1 FROM evaluation_jobs WHERE submission_id = ? AND status = 'running' LIMIT 1",
                                   (submission_id,)).fetchone() is not None:
@@ -381,6 +397,7 @@ class Store:
 
     def _view(self, connection, row, hashes, evaluation_config, details):
         submission = dict(row)
+        submission["baseline"] = bool(submission["baseline"])
         jobs = self._jobs(connection, row["id"], hashes, evaluation_config)
         selected = [jobs[digest] for digest in hashes if digest in jobs]
         terminal = [job for job in selected if job["status"] in ("done", "failed")]
@@ -425,9 +442,9 @@ class Store:
             hashes = self._evaluation_hashes(connection)
             evaluation_config = self._config(connection).evaluation.as_dict()
             rows = connection.execute(
-                "SELECT submissions.id, label, teams.name AS team_name, teams.type AS team_type, "
+                "SELECT submissions.id, label, submissions.baseline AS is_baseline, teams.name AS team_name, teams.type AS team_type, "
                 "submissions.token = ? AS own FROM submissions JOIN teams USING (token) "
-                "WHERE submissions.token = ? OR teams.type = 'baseline' ORDER BY submissions.created, submissions.id",
+                "WHERE submissions.token = ? OR submissions.baseline = 1 ORDER BY submissions.created, submissions.id",
                 (token, token)).fetchall()
             return comparison_for(self, hashes, [(dict(row), self._jobs(connection, row["id"], hashes, evaluation_config)) for row in rows],
                                   evaluation_config)

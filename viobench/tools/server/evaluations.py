@@ -68,7 +68,7 @@ def dominated_area(points, max_fuel, max_error, *, min_fuel=FUEL_FLOOR, min_erro
 
 
 def comparison_for(store, hashes, submissions, evaluation_config):
-    """Compare complete selected reports and measure additional dominated area beyond the baselines."""
+    """Compare complete reports and credit the best single submission's gain beyond the baselines."""
     def valid(value):
         return isinstance(value, (int, float)) and isfinite(value) and value >= 0
 
@@ -87,21 +87,34 @@ def comparison_for(store, hashes, submissions, evaluation_config):
             continue
         points.append({
             "id": row["id"], "label": row["label"] or row["id"], "team_name": row["team_name"],
-            "team_type": row["team_type"], "own": bool(row["own"]),
+            "team_type": row["team_type"], "own": bool(row["own"]), "is_baseline": bool(row["is_baseline"]),
             "fuel_per_frame_max": fuel, "sim3_ate_rmse_mean": score,
         })
     fuel_reference = 1.2 * evaluation_config["limits"]["step_fuel"]
-    baselines = [point for point in points if point["team_type"] == "baseline"]
+    baselines = [point for point in points if point["is_baseline"]]
     coordinates = [(max(point["fuel_per_frame_max"], FUEL_FLOOR), max(point["sim3_ate_rmse_mean"], ERROR_FLOOR))
                    for point in points]
     baseline_coordinates = [(max(point["fuel_per_frame_max"], FUEL_FLOOR), max(point["sim3_ate_rmse_mean"], ERROR_FLOOR))
                             for point in baselines]
     error_reference = 1.2 * max(error for _, error in baseline_coordinates) if baselines else None
-    claimed_area = None if error_reference is None else max(
-        0.0, dominated_area(coordinates, fuel_reference, error_reference)
-        - dominated_area(baseline_coordinates, fuel_reference, error_reference))
+    claimed_area, best_submission_id = None, None
+    if error_reference is not None:
+        baseline_area = dominated_area(baseline_coordinates, fuel_reference, error_reference)
+        claimed_area = 0.0
+        for point, coordinate in zip(points, coordinates):
+            if not point["own"]:
+                continue
+            gain = max(0.0, dominated_area([*baseline_coordinates, coordinate], fuel_reference, error_reference) - baseline_area)
+            # Store supplies creation/id order, so exact ties consistently select the earliest submission.
+            if best_submission_id is None or gain > claimed_area:
+                claimed_area, best_submission_id = gain, point["id"]
+    best_points = [point for point in points if point["is_baseline"] or point["id"] == best_submission_id]
+    best_coordinates = [(max(point["fuel_per_frame_max"], FUEL_FLOOR), max(point["sim3_ate_rmse_mean"], ERROR_FLOOR))
+                        for point in best_points]
     return {"evaluation_hashes": hashes, "fuel_floor": FUEL_FLOOR, "error_floor": ERROR_FLOOR,
             "fuel_reference": fuel_reference, "points": points,
             "baseline_frontier": [baselines[index]["id"] for index in pareto_front(baseline_coordinates)],
             "frontier": [points[index]["id"] for index in pareto_front(coordinates)],
+            "best_submission_id": best_submission_id,
+            "best_frontier": [best_points[index]["id"] for index in pareto_front(best_coordinates)],
             "error_reference": error_reference, "claimed_area": claimed_area}

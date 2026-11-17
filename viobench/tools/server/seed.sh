@@ -16,7 +16,7 @@ fi
 curl --fail --silent --show-error --max-time 10 "$server_url/" >/dev/null
 
 python -m viobench.tools.server.teams add --type participant --token test-participant participant
-baseline=$(python -m viobench.tools.server.teams add --type baseline --unlimited --token test-baseline baseline)
+baseline=$(python -m viobench.tools.server.teams add --type participant --unlimited --token test-baseline baseline)
 printf '%s\n' "$baseline"
 python -m viobench.tools.server.teams add --type admin --token test-admin admin
 baseline_token=${baseline%% *}
@@ -24,7 +24,11 @@ baseline_token=${baseline%% *}
 for file in "${files[@]}"; do
     name=${file##*/}
     printf 'Uploading %s\n' "$name"
-    curl --fail-with-body --silent --show-error -H "Authorization: Bearer $baseline_token" \
-        -F "file=@$file" --form-string "label=${name%.wasm}" "$server_url/submissions"
+    submission=$(curl --fail-with-body --silent --show-error -H "Authorization: Bearer $baseline_token" \
+        -F "file=@$file" --form-string "label=${name%.wasm}" "$server_url/submissions")
+    printf '%s\n' "$submission"
+    submission_id=$(printf '%s\n' "$submission" | python -c 'import json, sys; print(json.load(sys.stdin)["id"])')
+    curl --fail-with-body --silent --show-error -X PUT -H "Authorization: Bearer test-admin" \
+        -H 'Content-Type: application/json' --data '{"baseline":true}' "$server_url/submissions/$submission_id/baseline"
     printf '\n'
 done

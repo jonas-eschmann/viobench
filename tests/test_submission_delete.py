@@ -1,4 +1,4 @@
-"""Baseline deletion removes only idle owned submissions, including their evaluation artifacts."""
+"""Admins can delete idle submissions; baseline flags never grant deletion permission."""
 from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
@@ -9,9 +9,10 @@ from tests.test_server import MODULE, api, finish_submission, results
 A, B, C = (letter * 40 for letter in "abc")
 
 
-def baseline(store):
-    token = store.add_team("reference", team_type="baseline")
-    return token, {"Authorization": f"Bearer {token}"}
+def reference_admin(store):
+    owner = store.add_team("reference", team_type="participant")
+    admin = store.add_team("instructors", team_type="admin")
+    return owner, {"Authorization": f"Bearer {admin}"}
 
 
 @pytest.mark.parametrize("authorization", [None, "Bearer wrong"])
@@ -23,34 +24,35 @@ def test_delete_requires_authentication(api, authorization):
     assert response.status_code == 401 and response.headers["www-authenticate"] == "Bearer"
 
 
-@pytest.mark.parametrize("kind", ["test", "participant", "admin"])
-def test_only_current_baseline_accounts_can_delete(api, kind):
+@pytest.mark.parametrize("kind", ["test", "participant"])
+def test_baseline_flag_does_not_allow_owner_to_delete(api, kind):
     client, store = api
-    token, headers = baseline(store)
+    token = store.add_team("reference", team_type=kind)
+    headers = {"Authorization": f"Bearer {token}"}
     submission_id = store.add(token, "old baseline", "solution.wasm", MODULE)
-    store.update_team(token, team_type=kind)
+    store.set_baseline(submission_id, True)
     response = client.delete(f"/submissions/{submission_id}", headers=headers)
     assert response.status_code == 403
     assert store.get(token, submission_id) is not None
     assert store.upload_path(submission_id).read_bytes() == MODULE
-    if kind != "admin":
-        assert client.post("/submissions", files={"file": ("next.wasm", MODULE)}, headers=headers).status_code == 429
+    assert client.post("/submissions", files={"file": ("next.wasm", MODULE)}, headers=headers).status_code == 429
 
 
-def test_baseline_cannot_delete_foreign_or_missing_submissions(api):
+def test_admin_can_delete_foreign_submission_but_missing_is_404(api):
     client, store = api
-    _, headers = baseline(store)
+    _, headers = reference_admin(store)
     foreign = client.post("/submissions", files={"file": ("other.wasm", MODULE)}).json()["id"]
-    for submission_id in (foreign, "missing"):
-        assert client.delete(f"/submissions/{submission_id}", headers=headers).status_code == 404
-    assert client.get(f"/submissions/{foreign}").status_code == 200
-    assert store.upload_path(foreign).read_bytes() == MODULE
+    assert client.delete("/submissions/missing", headers=headers).status_code == 404
+    assert client.delete(f"/submissions/{foreign}", headers=headers).status_code == 200
+    assert client.get(f"/submissions/{foreign}").status_code == 404
+    assert not store.upload_path(foreign).exists()
 
 
 def test_delete_removes_all_jobs_and_artifacts_and_baseline_comparison_point(api, tmp_path):
     client, store = api
-    token, headers = baseline(store)
+    token, headers = reference_admin(store)
     submission_id = store.add(token, "reference", "solution.wasm", MODULE)
+    store.set_baseline(submission_id, True)
     finish_submission(store, submission_id, results=results(0.1))
     store.schedule_evaluations([B, C], submission_id=submission_id)
     with store._connect() as connection:
@@ -86,14 +88,15 @@ def test_delete_removes_all_jobs_and_artifacts_and_baseline_comparison_point(api
     assert store.claim_next()["submission_id"] == other
 
 
-def test_deleting_queued_submission_removes_queue_entry_and_frees_baseline_quota(api):
+def test_deleting_queued_submission_removes_queue_entry_and_frees_owner_quota(api):
     client, store = api
-    _, headers = baseline(store)
+    token, admin = reference_admin(store)
+    headers = {"Authorization": f"Bearer {token}"}
     first = client.post("/submissions", files={"file": ("solution.wasm", MODULE)}, headers=headers)
     assert first.status_code == 201
     submission_id = first.json()["id"]
     assert client.post("/submissions", files={"file": ("solution.wasm", MODULE)}, headers=headers).status_code == 429
-    assert client.delete(f"/submissions/{submission_id}", headers=headers).status_code == 200
+    assert client.delete(f"/submissions/{submission_id}", headers=admin).status_code == 200
     assert store.claim_next() is None
     replacement = client.post("/submissions", files={"file": ("replacement.wasm", MODULE)}, headers=headers)
     assert replacement.status_code == 201 and replacement.json()["id"] != submission_id
@@ -101,7 +104,7 @@ def test_deleting_queued_submission_removes_queue_entry_and_frees_baseline_quota
 
 def test_failed_submission_with_missing_files_can_be_deleted(api):
     client, store = api
-    token, headers = baseline(store)
+    token, headers = reference_admin(store)
     submission_id = store.add(token, "failed", "solution.wasm", MODULE)
     finish_submission(store, submission_id, error="evaluation failed")
     store.upload_path(submission_id).unlink()
@@ -113,7 +116,7 @@ def test_failed_submission_with_missing_files_can_be_deleted(api):
 
 def test_file_cleanup_permission_error_is_sanitized_after_database_deletion(api, monkeypatch):
     client, store = api
-    token, headers = baseline(store)
+    token, headers = reference_admin(store)
     submission_id = store.add(token, "queued", "solution.wasm", MODULE)
     directory = store.report_dir(submission_id, A)
     directory.mkdir(parents=True)
@@ -134,7 +137,7 @@ def test_file_cleanup_permission_error_is_sanitized_after_database_deletion(api,
 @pytest.mark.parametrize("selected", [True, False])
 def test_any_running_job_prevents_deletion_even_outside_current_selection(api, selected):
     client, store = api
-    token, headers = baseline(store)
+    token, headers = reference_admin(store)
     submission_id = store.add(token, "running", "solution.wasm", MODULE)
     job = store.claim_next()
     report = store.report_dir(submission_id, A) / "worker.txt"
@@ -152,7 +155,7 @@ def test_any_running_job_prevents_deletion_even_outside_current_selection(api, s
 
 def test_worker_claim_and_deletion_cannot_both_win(api):
     client, store = api
-    token, headers = baseline(store)
+    token, headers = reference_admin(store)
     submission_id = store.add(token, "queued", "solution.wasm", MODULE)
     barrier = Barrier(2)
 
