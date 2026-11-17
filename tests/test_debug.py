@@ -19,12 +19,51 @@ REPO = Path(__file__).resolve().parent.parent
 EXAMPLES = REPO / "viobench" / "solution" / "examples"
 
 
+def dead_reckoning_states(episode):
+    estimator = direct.PythonSolution(EXAMPLES / "python" / "dead_reckoning").create({"T_cam_imu": np.eye(4).tolist()})
+    frame = np.zeros((240, 320, 3), dtype=np.uint8)
+    return np.array([estimator.step(t, frame, episode.imu_window(i)) for i, t in enumerate(episode.frame_times)])
+
+
+def test_dead_reckoning_tracks_a_steady_turn_from_frame_zero():
+    episode = synthetic_episode(n_frames=31)
+    rate = 0.7  # rad/s about vertical, with no translation
+    episode.imu[:, 1:] = [0, 0, 9.81, 0, 0, rate]
+    states = dead_reckoning_states(episode)
+    yaw = np.unwrap(2 * np.arctan2(states[:, 5], states[:, 6]))
+    np.testing.assert_allclose(yaw, rate * (episode.frame_times - episode.frame_times[0]), atol=1e-6)
+    np.testing.assert_allclose(states[1:, 12], rate, atol=1e-6)
+    np.testing.assert_allclose(states[:, :3], 0, atol=1e-9)
+
+
+def test_dead_reckoning_moves_on_an_acceleration_pulse_then_loses_speed():
+    episode = synthetic_episode(n_frames=120)
+    episode.imu[:, 1:] = [0, 0, 9.81, 0, 0, 0]
+    pulse = (episode.imu[:, 0] > 1) & (episode.imu[:, 0] <= 1.5)
+    episode.imu[pulse, 3] += 1  # 0.5 s of upward acceleration at 1 m/s²
+    states = dead_reckoning_states(episode)
+    np.testing.assert_allclose(states[episode.frame_times <= 1, :3], 0, atol=1e-9)
+    at_pulse_end = states[episode.frame_times <= 1.5][-1]
+    assert at_pulse_end[2] > 0.02 and at_pulse_end[9] > 0.1
+    assert states[-1, 2] > at_pulse_end[2]
+    assert abs(states[-1, 9]) < 0.25 * at_pulse_end[9]
+
+
+def test_dead_reckoning_uses_gravity_to_correct_slow_tilt_drift():
+    episode = synthetic_episode(n_frames=240)
+    episode.imu[:, 1:] = [0, 0, 9.81, 0, 0, 0]
+    episode.imu[episode.imu[:, 0] > 1, 4] = 0.04  # gyro offset appears after a quiet startup
+    states = dead_reckoning_states(episode)
+    roll = 2 * np.arctan2(states[:, 3], states[:, 6])
+    assert np.abs(roll).max() < np.deg2rad(10)  # gyro alone accumulates about 25 degrees
+
+
 def test_direct_run_matches_the_sandbox(engine, runtime_path, tmp_path):
     """dead_reckoning on the host and inside the runtime give the same poses (same code, same inputs, host numpy)."""
     from viobench.solution.runtime.python.bundler.bundle import bundle
     from viobench.tools.runner.run import evaluate
 
-    episode = synthetic_episode(n_frames=30, width=640, height=480)  # 1.5 s: dead reckoning calibrates on the first 0.5 s (identity), then estimates
+    episode = synthetic_episode(n_frames=30, width=640, height=480)  # exercises startup calibration and subsequent motion estimates
     dataset = tmp_path / "set"
     digest = archive_hash(write_episode(episode, dataset / f"{episode.name}.zip"))
     solution = direct.PythonSolution(EXAMPLES / "python" / "dead_reckoning")

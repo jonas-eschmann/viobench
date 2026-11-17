@@ -8,7 +8,7 @@ See each native example's README for library prerequisites and direct build comm
 | example | method | fuel/frame |
 |---|---|---|
 | `python/minimal` | identity pose, zero twist | 0.09 M |
-| `python/dead_reckoning` | IMU only: gravity and gyro bias from the first half second, then integration | 4.1 M |
+| `python/dead_reckoning` | IMU-only gyro integration with gravity-based tilt correction and damped velocity | 4.0 M |
 | `python/klt_imu` | KLT tracks and the essential matrix for direction, gyro for rotation, IMU for scale | 50–130 M, p95 up to 500 M |
 | `python/tiny_cnn` | CNN trained in PyTorch, run through `cv2.dnn` | 14 M |
 | `native/cpp_minimal` | the minimal solution in C++ (reads every pixel once) | 2.2 M |
@@ -17,4 +17,4 @@ See each native example's README for library prerequisites and direct build comm
 | [`native/vins_mono`](native/vins_mono/README.md) | VINS-Mono (GPL-3.0): KLT tracks, IMU preintegration, sliding-window optimization | not yet measured |
 
 Fuel per frame at 320 × 240 RGB: medians over simulated episodes with the current runtime (`openvins`: the demo
-episode). Only `klt_imu`, `openvins`, `orbslam3`, and `vins_mono` depend on the image content (feature count); the others are constant.
+episode). Image content affects fuel consumption for `klt_imu`, `openvins`, `orbslam3`, and `vins_mono` through the number of features.

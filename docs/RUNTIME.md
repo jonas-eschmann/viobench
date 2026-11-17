@@ -35,7 +35,7 @@ The zip is uncompressed (no zlib in the guest): save arrays with `np.savez`, not
 ## Fuel
 
 Deterministic for the same code and input; the first steps of an instance cost more. Per step at 320 × 240: empty
-solution 0.09 M, numpy dead reckoning 4.1 M, tiny CNN via `cv2.dnn` 14 M, KLT baseline 50–130 M depending on the
+solution 0.09 M, numpy dead reckoning 4.0 M, tiny CNN via `cv2.dnn` 14 M, KLT baseline 50–130 M depending on the
 image (p95 up to 500 M).
 
 ## Building
