@@ -165,9 +165,10 @@ the upload, all its queued/finished/failed jobs, reports and comparison points. 
 finishes, including jobs outside the current evaluation set. Baseline selection grants no deletion permission.
 Deleting an upload counted in the current quota day frees its daily upload slot.
 
-One plot compares each submission's mean episode Sim(3)-aligned ATE (metres) with its maximum fuel per frame,
+One plot compares each submission's mean episode ATE without alignment (metres) with its maximum fuel per frame,
 both across the entire current evaluation set. The arithmetic mean gives each selected hash equal weight,
-regardless of its frame count. Baselines are squares, the viewer's other submissions are circles, and the dashed
+regardless of its frame count. The comparison uses `ate_rmse_mean`; Sim(3)-aligned ATE and median ATE remain
+available as diagnostics in submission details. Baselines are squares, the viewer's other submissions are circles, and the dashed
 line marks the baseline Pareto frontier. The solid frontier combines baselines with the viewer's best single
 submission; shading shows that solution's additional area beyond the baselines (lower is better on both axes).
 All eligible comparison points remain visible, and the best solution is identified beside the score and in its tooltip.

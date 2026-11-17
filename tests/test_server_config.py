@@ -103,7 +103,7 @@ def test_evaluate_cli_passes_explicit_limits_file(tmp_path, monkeypatch):
 
     def evaluate(wasm, episodes, **kwargs):
         captured.append(kwargs["limits"])
-        return {"summary": {"episodes": 1, "completed": 1, "sim3_ate_rmse_mean": 0,
+        return {"summary": {"episodes": 1, "completed": 1, "sim3_ate_rmse_mean": 0, "ate_rmse_mean": 0,
                             "fuel_per_frame_max": 1, "fuel_per_frame_mean": 1, "fuel_per_frame_median": 1,
                             "fuel_per_frame_p95": 1, "fuel_per_frame_p99": 1}}
 

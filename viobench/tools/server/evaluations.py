@@ -72,7 +72,7 @@ def _valid_score(value):
 
 
 def _scored_episodes(episodes):
-    return all(_valid_score(episode["metrics"].get("sim3_ate_rmse")) for episode in episodes)
+    return all(_valid_score(episode["metrics"].get("ate_rmse")) for episode in episodes)
 
 
 def comparison_point(row, results):
@@ -84,16 +84,16 @@ def comparison_point(row, results):
     summary = results["summary"]
     if summary is None:
         return None
-    fuel, score = summary["fuel_per_frame_max"], summary["sim3_ate_rmse_mean"]
+    fuel, score = summary["fuel_per_frame_max"], summary["ate_rmse_mean"]
     if not _valid_score(fuel) or not _valid_score(score):
         return None
     return {"id": row["id"], "label": row["label"] or row["id"], "team_name": row["team_name"],
             "team_type": row["team_type"], "own": bool(row.get("own", False)), "is_baseline": bool(row["baseline"]),
-            "fuel_per_frame_max": fuel, "sim3_ate_rmse_mean": score}
+            "fuel_per_frame_max": fuel, "ate_rmse_mean": score}
 
 
 def _coordinates(point):
-    return max(point["fuel_per_frame_max"], FUEL_FLOOR), max(point["sim3_ate_rmse_mean"], ERROR_FLOOR)
+    return max(point["fuel_per_frame_max"], FUEL_FLOOR), max(point["ate_rmse_mean"], ERROR_FLOOR)
 
 
 def area_gains(points, fuel_reference):

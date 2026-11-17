@@ -6,7 +6,7 @@ import pytest
 import wasmtime
 
 from viobench import Limits, abi
-from viobench.tools.runner.leaderboard import markdown_table, pareto_front, rows
+from viobench.tools.runner.leaderboard import markdown_table, pareto_front, plot, rows
 from viobench.tools.runner.run import evaluate, summarize
 from viobench.tools.server.worker import public_episode
 from tests.test_datasets import synthetic_episode
@@ -72,8 +72,9 @@ def test_peak_fuel_across_frames_and_episodes(engine, tmp_path, monkeypatch):
     table = rows([("metered", saved)])
     assert len(table) == 1 and table[0]["fuel_per_frame"] == maximum
     assert table[0]["sim3_ate_m"] == summary["sim3_ate_rmse_mean"]
+    assert table[0]["ate_m"] == summary["ate_rmse_mean"]
     assert "max fuel/frame" in markdown_table(table) and "dataset" not in markdown_table(table)
-    assert "Sim(3) ATE [m]" in markdown_table(table)
+    assert "mean raw ATE [m]" in markdown_table(table) and "mean Sim(3) ATE [m]" in markdown_table(table)
     assert all("fuel/frame max" in message for message in messages[:-1])
     public = public_episode(saved["episodes"][0])
     assert public["fuel_per_frame_max"] == maximum
@@ -92,6 +93,7 @@ def test_diagnostics_pool_frames_from_unequal_episodes(engine, tmp_path, monkeyp
     summary = report["summary"]
     scores = [episode["metrics"]["sim3_ate_rmse"] for episode in report["episodes"]]
     assert summary["sim3_ate_rmse_mean"] == pytest.approx(np.mean(scores))
+    assert summary["ate_rmse_mean"] == pytest.approx(np.mean([episode["metrics"]["ate_rmse"] for episode in report["episodes"]]))
     assert summary["frames_attempted"] == len(pooled)
     assert summary["fuel_total"] == sum(pooled)
     assert summary["fuel_per_frame_mean"] == pytest.approx(np.mean(pooled))
@@ -112,6 +114,7 @@ def test_no_attempted_frames_has_zero_fuel_statistics(engine, tmp_path, monkeypa
     assert report["episodes"][0]["failure"].startswith("init failed")
     assert report["episodes"][0]["metrics"]["filled_frames"] == 24
     assert np.isfinite(report["summary"]["sim3_ate_rmse_mean"])
+    assert np.isfinite(report["summary"]["ate_rmse_mean"])
     assert rows([("init failure", report)])[0]["fuel_per_frame"] == 0
     for summary in (report["episodes"][0], report["summary"]):
         assert summary["frames_attempted"] == summary["fuel_total"] == 0
@@ -171,6 +174,7 @@ def test_summary_aggregates_every_hash_with_mean_ate_and_pooled_fuel():
     summary = summarize(reports, fuels)
     assert summary["episodes"] == summary["completed"] == 3
     assert summary["sim3_ate_rmse_mean"] == pytest.approx(104 / 3)  # each episode has equal weight, irrespective of frame count
+    assert summary["ate_rmse_mean"] == pytest.approx(104 / 3)
     assert summary["ate_rmse_median"] == 3
     assert summary["frames_attempted"] == 10
     assert summary["fuel_per_frame_mean"] == 21.5
@@ -179,3 +183,46 @@ def test_summary_aggregates_every_hash_with_mean_ate_and_pooled_fuel():
     assert "overall" not in summary and "datasets" not in summary
     with pytest.raises(ValueError):
         summarize(reports, fuels[:-1])
+
+
+@pytest.mark.parametrize("legacy", [False, True])
+def test_leaderboard_uses_equal_episode_mean_raw_ate_for_current_and_legacy_reports(legacy):
+    from types import SimpleNamespace
+
+    metric_names = ("rpe_translation_rmse", "rpe_rotation_rmse", "rotation_rmse", "velocity_rmse", "angular_velocity_rmse")
+    saved = []
+    for name, raw_scores, sim3 in (("aligned-winner", (1, 1, 100), 0.01), ("raw-winner", (5, 5, 5), 2)):
+        episodes = [SimpleNamespace(completed=True, duration_s=frames, wall_per_frame_median_ms=1,
+                                    frames=frames, metrics=dict.fromkeys(metric_names, 0) | {"ate_rmse": raw, "sim3_ate_rmse": sim3})
+                    for raw, frames in zip(raw_scores, (1, 1, 7))]
+        summary = summarize(episodes, [np.full(episode.frames, 10) for episode in episodes])
+        if legacy:
+            del summary["ate_rmse_mean"]  # Old reports have the raw median and individual episode errors.
+        saved.append((name, {"summary": summary, "episodes": [vars(episode) for episode in episodes]}))
+    table = rows(saved)
+    assert [row["ate_m"] for row in table] == [34, 5]
+    assert [row["sim3_ate_m"] for row in table] == [0.01, 2]
+    assert saved[0][1]["summary"]["ate_rmse_median"] == 1
+    lines = markdown_table(table).splitlines()
+    assert lines[2].startswith("| raw-winner |")  # Both median raw error and aligned error would rank the other solution first.
+    assert "| 5.000 |" in lines[2] and lines[3].startswith("| aligned-winner |")
+
+
+def test_leaderboard_plot_uses_raw_ate_for_points_and_frontier(tmp_path, monkeypatch):
+    pytest.importorskip("matplotlib")
+    from matplotlib.axes import Axes
+
+    points = []
+    scatter = Axes.scatter
+
+    def record(axis, x, y, **kwargs):
+        points.append((x, y, kwargs["marker"]))
+        return scatter(axis, x, y, **kwargs)
+
+    monkeypatch.setattr(Axes, "scatter", record)
+    table = [{"submission": "aligned-winner", "fuel_per_frame": 10, "ate_m": 34, "sim3_ate_m": 0.01},
+             {"submission": "raw-winner", "fuel_per_frame": 10, "ate_m": 5, "sim3_ate_m": 2}]
+    output = tmp_path / "pareto.png"
+    assert plot(table, output) == output
+    assert output.read_bytes().startswith(b"\x89PNG")
+    assert points == [(10, 34, "x"), (10, 5, "o")]

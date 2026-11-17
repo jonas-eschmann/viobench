@@ -77,9 +77,10 @@ The instructors select individual submissions as shared baselines. Selection kee
 shares comparison scores; files and detailed results remain private to the owner and admins. Your own selected
 submission can appear as both yours and a baseline.
 
-The comparison plot shows your submissions alongside shared baselines. Lower **Sim(3)-aligned ATE** and lower
+The comparison plot shows your submissions alongside shared baselines. Lower **ATE without alignment** and lower
 **maximum fuel per frame** are better. Each submission uses the mean ATE (equal weight per episode) and maximum fuel over the
-whole selected set. Your score is the largest individual area gain among your eligible submissions, each measured
+whole selected set. Sim(3)-aligned ATE remains available as a diagnostic in submission details.
+Your score is the largest individual area gain among your eligible submissions, each measured
 against the same baselines. The dashed frontier uses baselines; the solid frontier adds your best single solution.
 Shading shows that solution's gain. Your other points remain visible, but their areas do not combine into your score.
 Your submissions appear once in the submission list. A selected baseline has a **Baseline** badge, and your best
@@ -100,7 +101,7 @@ calculation until rerun. Running evaluations finish with their original settings
 each job's settings. Upload quotas and allowances do not affect result validity.
 
 After a solution error, the failed and remaining frames are scored with zero position, identity rotation, and zero
-twist. Sim(3) alignment and ATE include every frame. Fuel counts actual attempted steps, including a failing step;
+twist. ATE and the diagnostic Sim(3)-aligned ATE include every frame. Fuel counts actual attempted steps, including a failing step;
 the fallback predictions do not add fuel. Other teams' submissions and baseline submission details remain private.
 
 ## Tips

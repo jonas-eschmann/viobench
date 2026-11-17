@@ -5,8 +5,8 @@ States are (N, 13) arrays [x, y, z, qx, qy, qz, qw, vx, vy, vz, wx, wy, wz], one
 recorded from the first failed step onward, or a zero quaternion) is replaced by the origin, identity rotation and
 zero twist, so every metric runs over the complete trajectory.
 
-The headline is position RMSE after one Sim(3) alignment of the complete estimated trajectory to ground truth.
-Unaligned ATE, one-second relative pose error (RPE), rotation and twist errors are also reported as diagnostics.
+The headline is raw position RMSE without trajectory alignment. ATE after one Sim(3) alignment of the complete
+estimated trajectory to ground truth, one-second relative pose error (RPE), rotation and twist errors are diagnostics.
 """
 from dataclasses import asdict, dataclass
 
@@ -59,13 +59,13 @@ class TrajectoryMetrics:
     rpe_translation_rmse: float  # m over windows of delta_seconds
     rpe_rotation_rmse: float  # rad over windows of delta_seconds
     rpe_pairs: int  # windows (frame pairs delta_seconds apart)
-    ate_rmse: float  # m, no alignment
+    ate_rmse: float  # headline: m, no alignment
     rotation_rmse: float  # rad
     rotation_max: float  # rad
     velocity_rmse: float  # m/s, velocity of the camera centre in camera-k axes
     angular_velocity_rmse: float  # rad/s, in camera-k axes
     sim3_scale: float  # diagnostic: scale factor that best aligns the estimate to ground truth
-    sim3_ate_rmse: float  # headline: m, after Sim(3) alignment of the complete trajectory
+    sim3_ate_rmse: float  # diagnostic: m, after Sim(3) alignment of the complete trajectory
     distance_travelled: float  # m, ground truth
     final_drift: float  # m, position error at the last frame
     drift_per_metre: float  # final_drift / distance_travelled

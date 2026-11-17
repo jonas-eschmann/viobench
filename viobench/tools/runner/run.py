@@ -108,16 +108,17 @@ def run_episode(wasm_path, episode, engine, limits, log_dir):
 
 
 def summarize(reports, frame_fuels):
-    """Aggregate all episodes: mean Sim(3) ATE, median diagnostics, and fuel pooled across every attempted frame."""
+    """Aggregate all episodes: mean raw ATE, diagnostics, and fuel pooled across every attempted frame."""
     reports, frame_fuels = zip(*zip(reports, frame_fuels, strict=True))
     return {
         "episodes": len(reports),
         "completed": sum(r.completed for r in reports),
         "duration_s_median": float(np.median([r.duration_s for r in reports])),
-        "sim3_ate_rmse_mean": float(np.mean([r.metrics["sim3_ate_rmse"] for r in reports])),  # the headline
+        "ate_rmse_mean": float(np.mean([r.metrics.get("ate_rmse", float("nan")) for r in reports], dtype=float)),  # the headline
+        "sim3_ate_rmse_mean": float(np.mean([r.metrics.get("sim3_ate_rmse", float("nan")) for r in reports], dtype=float)),
         "rpe_translation_rmse_median": float(np.nanmedian([r.metrics["rpe_translation_rmse"] for r in reports])),
         "rpe_rotation_rmse_median": float(np.nanmedian([r.metrics["rpe_rotation_rmse"] for r in reports])),
-        "ate_rmse_median": float(np.median([r.metrics["ate_rmse"] for r in reports])),
+        "ate_rmse_median": float(np.median(np.asarray([r.metrics.get("ate_rmse", float("nan")) for r in reports], dtype=float))),
         "rotation_rmse_median": float(np.median([r.metrics["rotation_rmse"] for r in reports])),
         "velocity_rmse_median": float(np.median([r.metrics["velocity_rmse"] for r in reports])),
         "angular_velocity_rmse_median": float(np.median([r.metrics["angular_velocity_rmse"] for r in reports])),

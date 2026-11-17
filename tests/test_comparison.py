@@ -25,14 +25,15 @@ def comparison(tmp_path, monkeypatch):
     return store, TestClient(server.app)
 
 
-def submit(store, token, scores=(1, 3), fuel=(2, 5), completed=True, label="", baseline=False):
+def submit(store, token, scores=(1, 3), fuel=(2, 5), completed=True, label="", baseline=False, sim3_scores=None):
     submission_id = store.add(token, label, "solution.wasm", MODULE)
     if baseline:
         store.set_baseline(submission_id, True)
     with store._connect() as connection:
         jobs = connection.execute("SELECT * FROM evaluation_jobs WHERE submission_id = ? ORDER BY id", (submission_id,)).fetchall()
-    for job, score, used in zip(jobs, scores, fuel):
-        succeed(store, submission_id, job, fuel=(used,), sim3=score, completed=completed)
+    sim3_scores = scores if sim3_scores is None else sim3_scores
+    for job, score, used, sim3 in zip(jobs, scores, fuel, sim3_scores):
+        succeed(store, submission_id, job, fuel=(used,), ate=score, sim3=sim3, completed=completed)
     return submission_id
 
 
@@ -88,11 +89,11 @@ def test_comparison_shares_only_baseline_scores_even_with_admin_viewer(compariso
         assert points[expected_own]["own"] is True
         assert points[baseline_id] == {
             "id": baseline_id, "label": baseline_id, "team_name": "reference", "team_type": "participant", "is_baseline": True,
-            "own": token == baseline, "fuel_per_frame_max": 9, "sim3_ate_rmse_mean": 3,
+            "own": token == baseline, "fuel_per_frame_max": 9, "ate_rmse_mean": 3,
         }
         assert not any(secret in str(response) for secret in (own, other, test, baseline, admin, *hidden))
     own_point = view(client, own)["points"][0]
-    assert own_point["label"] == "zero" and own_point["fuel_per_frame_max"] == own_point["sim3_ate_rmse_mean"] == 0
+    assert own_point["label"] == "zero" and own_point["fuel_per_frame_max"] == own_point["ate_rmse_mean"] == 0
     headers = {"Authorization": f"Bearer {own}"}
     assert client.get(f"/submissions/{baseline_id}", headers=headers).status_code == 404
     assert [row["id"] for row in client.get("/submissions", headers=headers).json()] == [own_id]
@@ -139,12 +140,12 @@ def test_comparison_aggregates_legacy_sources_once_and_tracks_baselines_and_sele
     before = view(client, viewer)
     [point] = before["points"]
     assert point["id"] == first and point["fuel_per_frame_max"] == 11
-    assert point["sim3_ate_rmse_mean"] == 5
+    assert point["ate_rmse_mean"] == 5
     assert before["error_reference"] == 6 and before["claimed_area"] == 0
     store.set_evaluations([A])
     selected = view(client, viewer)
     assert selected["evaluation_hashes"] == [A]
-    assert [(point["id"], point["fuel_per_frame_max"], point["sim3_ate_rmse_mean"])
+    assert [(point["id"], point["fuel_per_frame_max"], point["ate_rmse_mean"])
             for point in selected["points"]] == [(first, 3, 2), (second, 2, 1)]
     assert selected["error_reference"] == pytest.approx(2.4)
     headers = {"Authorization": f"Bearer {token}"}
@@ -153,7 +154,7 @@ def test_comparison_aggregates_legacy_sources_once_and_tracks_baselines_and_sele
         assert response.status_code == 200
         assert all(key not in response.text for key in ('"dataset"', '"datasets"', '"overall"', "legacy-source-"))
     detail = client.get(f"/submissions/{first}", headers=headers).json()
-    assert detail["results"]["summary"]["sim3_ate_rmse_mean"] == 2
+    assert detail["results"]["summary"]["ate_rmse_mean"] == 2
     assert [episode["hash"] for episode in detail["results"]["episodes"]] == [A]
     assert len(detail["jobs"]) == 2  # Old jobs remain stored without influencing the selected aggregate.
     store.set_evaluations([B, A])
@@ -297,24 +298,25 @@ def test_mean_ate_weights_selected_episodes_equally_for_points_references_and_ar
     baseline_id = store.add(baseline, "", "solution.wasm", MODULE)
     store.set_baseline(baseline_id, True)
     for score, frames, fuel in [(1, 1, 1), (1, 2, 2), (10, 7, 3)]:
-        succeed(store, baseline_id, store.claim_next(), fuel=(fuel,) * frames, sim3=score)
+        succeed(store, baseline_id, store.claim_next(), fuel=(fuel,) * frames, ate=score, sim3=score / 100)
     own_id = submit(store, viewer, scores=(1, 2, 3), fuel=(2, 4, 6))
 
     result = view(client, viewer)
     points = {point["id"]: point for point in result["points"]}
-    assert points[baseline_id]["sim3_ate_rmse_mean"] == 4  # Median is 1; frame-weighted mean is 7.3.
-    assert points[own_id]["sim3_ate_rmse_mean"] == 2
+    assert points[baseline_id]["ate_rmse_mean"] == 4  # Median is 1; frame-weighted mean is 7.3.
+    assert points[own_id]["ate_rmse_mean"] == 2
     assert result["error_reference"] == pytest.approx(4.8)
     assert result["claimed_area"] == pytest.approx(log(2) ** 2)
     headers = {"Authorization": f"Bearer {baseline}"}
     [listed] = client.get("/submissions", headers=headers).json()
     summary = client.get(f"/submissions/{baseline_id}", headers=headers).json()["results"]["summary"]
     assert summary == listed["summary"] and summary["frames_attempted"] == 10
-    assert summary["sim3_ate_rmse_mean"] == 4 and "sim3_ate_rmse_median" not in summary
+    assert summary["ate_rmse_mean"] == 4 and summary["ate_rmse_median"] == 1
+    assert summary["sim3_ate_rmse_mean"] == pytest.approx(0.04)  # Aligned error remains a separate diagnostic.
 
     store.set_evaluations([A, B])
     narrowed = view(client, viewer)
-    assert {point["id"]: point["sim3_ate_rmse_mean"] for point in narrowed["points"]} == {baseline_id: 1, own_id: 1.5}
+    assert {point["id"]: point["ate_rmse_mean"] for point in narrowed["points"]} == {baseline_id: 1, own_id: 1.5}
     assert narrowed["error_reference"] == pytest.approx(1.2) and narrowed["claimed_area"] == 0
 
 
@@ -342,7 +344,7 @@ def test_zero_and_subfloor_scores_tie_for_scoring_without_changing_raw_points(co
     assert result["frontier"] == [zero, subfloor, own]
     assert result["error_reference"] == pytest.approx(0.0012) and result["claimed_area"] == 0
     assert result["best_submission_id"] == own and result["best_frontier"] == [zero, subfloor, own]
-    assert [(point["fuel_per_frame_max"], point["sim3_ate_rmse_mean"]) for point in result["points"]] == [
+    assert [(point["fuel_per_frame_max"], point["ate_rmse_mean"]) for point in result["points"]] == [
         (0, 0), (1, 0.0005), (0, 0.0008)]
 
 
@@ -492,3 +494,43 @@ def test_submission_list_zero_gain_ties_include_owned_baselines_and_use_stable_o
         connection.execute("UPDATE submissions SET created = 99 WHERE id = ?", (max(tied),))
     assert listed_best(store, client, viewer) == {max(tied)}
     assert view(client, viewer)["best_submission_id"] == max(tied)
+
+
+def test_raw_ate_reverses_aligned_ranking_for_frontiers_area_and_best_markers(comparison):
+    store, client = comparison
+    reference = store.add_team("reference")
+    viewer = store.add_team("viewer", unlimited=True)
+    admin = store.add_team("admin", team_type="admin")
+    baseline = submit(store, reference, scores=(4, 4), sim3_scores=(0.5, 0.5), fuel=(4, 4), baseline=True)
+    aligned_winner = submit(store, viewer, scores=(3, 3), sim3_scores=(0.01, 0.01), fuel=(2, 2))
+    raw_winner = submit(store, viewer, scores=(1, 1), sim3_scores=(0.2, 0.2), fuel=(2, 2))
+    result = view(client, viewer)
+    assert result["baseline_frontier"] == [baseline]
+    assert result["frontier"] == result["best_frontier"] == [raw_winner]
+    assert result["best_submission_id"] == raw_winner
+    assert result["error_reference"] == pytest.approx(4.8)
+    assert result["claimed_area"] == pytest.approx(log(6) * log(4.8) - log(3) * log(1.2))
+    assert {point["id"]: point["ate_rmse_mean"] for point in result["points"]} == {
+        baseline: 4, aligned_winner: 3, raw_winner: 1}
+    assert all("sim3_ate_rmse_mean" not in point for point in result["points"])
+    assert listed_best(store, client, viewer) == {raw_winner}
+    assert listed_best(store, client, admin) == {baseline, raw_winner}
+    summaries = {row["id"]: row["summary"] for row in client.get(
+        "/submissions", headers={"Authorization": f"Bearer {viewer}"}).json()}
+    assert summaries[aligned_winner]["sim3_ate_rmse_mean"] == 0.01
+    assert summaries[raw_winner]["sim3_ate_rmse_mean"] == 0.2
+
+
+@pytest.mark.parametrize("invalid_sim3", [None, float("nan"), float("inf"), -1])
+def test_raw_scores_control_eligibility_even_when_aligned_diagnostics_are_invalid(comparison, invalid_sim3):
+    store, client = comparison
+    reference = store.add_team("reference")
+    viewer = store.add_team("viewer", unlimited=True)
+    baseline = submit(store, reference, scores=(4, 4), sim3_scores=(0.5, 0.5), fuel=(4, 4), baseline=True)
+    valid = submit(store, viewer, scores=(1, 1), sim3_scores=(invalid_sim3, invalid_sim3), fuel=(2, 2))
+    for invalid_raw in (None, float("nan"), float("inf"), -1):
+        submit(store, viewer, scores=(1, invalid_raw), sim3_scores=(0.01, 0.01), fuel=(1, 1))
+    result = view(client, viewer)
+    assert {point["id"] for point in result["points"]} == {baseline, valid}
+    assert result["best_submission_id"] == valid and result["best_frontier"] == [valid]
+    assert listed_best(store, client, viewer) == {valid}

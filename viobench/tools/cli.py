@@ -152,7 +152,7 @@ def command_evaluate(arguments):
     def run(episodes):
         result = evaluate(arguments.wasm, episodes, output_dir=arguments.output, max_episodes=arguments.max_episodes, limits=limits)
         summary = result["summary"]
-        print(f"summary: {summary['completed']}/{summary['episodes']} episodes completed, Sim(3) ATE mean {summary['sim3_ate_rmse_mean']:.3f} m, "
+        print(f"summary: {summary['completed']}/{summary['episodes']} episodes completed, raw ATE mean {summary['ate_rmse_mean']:.3f} m, "
               f"fuel/frame max {summary['fuel_per_frame_max']:,.0f} "
               f"(mean {summary['fuel_per_frame_mean']:,.0f}, median {summary['fuel_per_frame_median']:,.0f}, "
               f"p95 {summary['fuel_per_frame_p95']:,.0f}, p99 {summary['fuel_per_frame_p99']:,.0f})")
@@ -331,10 +331,10 @@ def main(argv=None):
     score.add_argument("tum", help="estimate.tum (TUM: t x y z qx qy qz qw) written by a debug build or your own script; twist.txt (t vx vy vz wx wy wz) must sit next to it")
     score.set_defaults(function=command_score)
 
-    leaderboard = commands.add_parser("leaderboard", help="[runner] aggregate report.json files into the Sim(3)-ATE-vs-max-fuel table (and plot)")
+    leaderboard = commands.add_parser("leaderboard", help="[runner] aggregate report.json files into the raw-ATE-vs-max-fuel table (and plot)")
     leaderboard.add_argument("reports", nargs="+", help="report.json files or directories containing them")
     leaderboard.add_argument("-o", "--output", help="write the markdown table here")
-    leaderboard.add_argument("--plot", help="write a Sim(3)-ATE-vs-max-fuel PNG here (needs matplotlib)")
+    leaderboard.add_argument("--plot", help="write a raw-ATE-vs-max-fuel PNG here (needs matplotlib)")
     leaderboard.set_defaults(function=command_leaderboard)
 
     simulate = commands.add_parser("simulate", help="[episodes] write episodes generated with HyperDrone (needs an NVIDIA GPU)")

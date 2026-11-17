@@ -652,7 +652,7 @@ function renderList(rows) {
       label.append(" ", badge);
     }
     const entry = tableRow([time(row.created), ...(config.team_type === "admin" ? [row.team_name || DASH, row.team_type] : []),
-                            label, status, decimal(summary.sim3_ate_rmse_mean),
+                            label, status, decimal(summary.ate_rmse_mean),
                             fuel(summary.fuel_per_frame_max), progress, button]);
     if (row.is_best) entry.className = "best-submission";
     body.append(entry);
@@ -703,7 +703,7 @@ function comparisonTooltip(container, chart) {
       hide();
       activeMark = mark;
       const metrics = node("dl");
-      metrics.append(node("dt", "Mean Sim(3) ATE"), node("dd", `${point.sim3_ate_rmse_mean} m`),
+      metrics.append(node("dt", "Mean ATE"), node("dd", `${point.ate_rmse_mean} m`),
                      node("dt", "Max fuel/frame"), node("dd", String(point.fuel_per_frame_max)));
       tooltip.replaceChildren(node("strong", point.label || point.id),
         node("div", `${point.team_name}${point.own ? " · Your submission" : ""}${point.is_baseline ? " · Baseline" : ""}${isBest ? " · Best solution" : ""}${onFrontier ? " · Scoring frontier" : ""}`, "hint"), metrics);
@@ -742,7 +742,7 @@ function renderComparison(comparison) {
     return;
   }
   const points = comparison.points.filter((point) => isNumber(point.fuel_per_frame_max) && point.fuel_per_frame_max >= 0 &&
-                                                  isNumber(point.sim3_ate_rmse_mean) && point.sim3_ate_rmse_mean >= 0);
+                                                  isNumber(point.ate_rmse_mean) && point.ate_rmse_mean >= 0);
   if (!points.length) {
     container.append(node("p", "No comparable results for the current set yet.", "hint"));
     return;
@@ -751,8 +751,8 @@ function renderComparison(comparison) {
   const visiblePoints = points.filter((point) => point.fuel_per_frame_max <= maxX);
   // Zoom the display to one decade below the data, without changing the scoring reference.
   const minX = visiblePoints.length ? Math.max(fuelFloor, Math.min(...visiblePoints.map((point) => point.fuel_per_frame_max)) / 10) : fuelFloor;
-  const minY = visiblePoints.length ? Math.max(errorFloor, Math.min(...visiblePoints.map((point) => point.sim3_ate_rmse_mean)) / 10) : errorFloor;
-  const maxY = Math.max(errorFloor * 1.2, comparison.error_reference || 0, ...visiblePoints.map((point) => point.sim3_ate_rmse_mean * 1.1));
+  const minY = visiblePoints.length ? Math.max(errorFloor, Math.min(...visiblePoints.map((point) => point.ate_rmse_mean)) / 10) : errorFloor;
+  const maxY = Math.max(errorFloor * 1.2, comparison.error_reference || 0, ...visiblePoints.map((point) => point.ate_rmse_mean * 1.1));
   const x = (used) => 76 + Math.log(Math.max(fuelFloor, used) / minX) / Math.log(maxX / minX) * 580;
   const y = (error) => 280 - Math.log(Math.max(errorFloor, error) / minY) / Math.log(maxY / minY) * 256;
   const frontierIds = new Set(comparison.best_frontier);
@@ -763,7 +763,7 @@ function renderComparison(comparison) {
   const steps = (ids, ceiling) => {
     const coordinates = [[minX, ceiling]];
     const ordered = visiblePoints.filter((point) => ids.has(point.id))
-      .map((point) => [Math.max(fuelFloor, point.fuel_per_frame_max), Math.max(errorFloor, point.sim3_ate_rmse_mean)])
+      .map((point) => [Math.max(fuelFloor, point.fuel_per_frame_max), Math.max(errorFloor, point.ate_rmse_mean)])
       .sort((a, b) => a[0] - b[0] || a[1] - b[1]);
     for (const [used, error] of ordered) {
       if (error >= ceiling) continue;
@@ -775,7 +775,7 @@ function renderComparison(comparison) {
   };
   const svgPoints = (coordinates) => coordinates.map(([used, error]) => `${x(used)},${y(error)}`).join(" ");
   const chart = svgNode("svg", {viewBox: "0 0 680 340", class: "comparison-chart", role: "group",
-                                "aria-label": "Current set: mean Sim(3) ATE versus maximum fuel per frame, both on logarithmic scales. Lower is better."});
+                                "aria-label": "Current set: mean unaligned ATE versus maximum fuel per frame, both on logarithmic scales. Lower is better."});
   const attachTooltip = comparisonTooltip(container, chart);
   for (const tick of logTicks(minX, maxX)) {
     const px = x(tick);
@@ -788,7 +788,7 @@ function renderComparison(comparison) {
                  svgNode("text", {x: 65, y: py + 4, "text-anchor": "end"}, decimal(tick)));
   }
   chart.append(svgNode("text", {x: 366, y: 330, "text-anchor": "middle"}, "Maximum fuel/frame (log scale)"),
-               svgNode("text", {x: 18, y: 152, transform: "rotate(-90 18 152)", "text-anchor": "middle"}, "Mean Sim(3) ATE (m, log scale)"));
+               svgNode("text", {x: 18, y: 152, transform: "rotate(-90 18 152)", "text-anchor": "middle"}, "Mean ATE (m, log scale)"));
   if (comparison.claimed_area > 0) {
     const boundary = steps(baselineIds, comparison.error_reference)
       .concat(steps(frontierIds, comparison.error_reference).reverse());
@@ -804,13 +804,13 @@ function renderComparison(comparison) {
     const name = point.label || point.id;
     const onFrontier = frontierIds.has(point.id);
     const isBest = point.id === comparison.best_submission_id;
-    const description = `${point.team_name}: ${name}; maximum fuel/frame ${point.fuel_per_frame_max}; mean Sim(3) ATE ${point.sim3_ate_rmse_mean} m${point.is_baseline ? "; baseline" : ""}${isBest ? "; best solution" : ""}${onFrontier ? "; on scoring frontier" : ""}`;
+    const description = `${point.team_name}: ${name}; maximum fuel/frame ${point.fuel_per_frame_max}; mean unaligned ATE ${point.ate_rmse_mean} m${point.is_baseline ? "; baseline" : ""}${isBest ? "; best solution" : ""}${onFrontier ? "; on scoring frontier" : ""}`;
     const canOpen = point.own || config.team_type === "admin";
     const mark = svgNode("g", {class: `comparison-point ${point.own ? "own" : "baseline"}${onFrontier ? " frontier" : ""}`,
                                role: canOpen ? "button" : "img", tabindex: 0, "aria-label": description});
-    mark.append(svgNode("circle", {cx: x(point.fuel_per_frame_max), cy: y(point.sim3_ate_rmse_mean), r: 12, class: "comparison-hit"}), point.is_baseline ?
-                svgNode("rect", {x: x(point.fuel_per_frame_max) - 5, y: y(point.sim3_ate_rmse_mean) - 5, width: 10, height: 10}) :
-                svgNode("circle", {cx: x(point.fuel_per_frame_max), cy: y(point.sim3_ate_rmse_mean), r: 5}));
+    mark.append(svgNode("circle", {cx: x(point.fuel_per_frame_max), cy: y(point.ate_rmse_mean), r: 12, class: "comparison-hit"}), point.is_baseline ?
+                svgNode("rect", {x: x(point.fuel_per_frame_max) - 5, y: y(point.ate_rmse_mean) - 5, width: 10, height: 10}) :
+                svgNode("circle", {cx: x(point.fuel_per_frame_max), cy: y(point.ate_rmse_mean), r: 5}));
     attachTooltip(mark, point, onFrontier, canOpen, isBest);
     if (canOpen) {
       mark.addEventListener("click", () => showDetails(point.id, true));
@@ -835,7 +835,7 @@ function renderComparison(comparison) {
     const fraction = comparison.claimed_area / (Math.log(maxX / fuelFloor) * Math.log(comparison.error_reference / errorFloor));
     const winner = best ? `Best solution: “${best.label || best.id}”. ` : "No eligible submission of your own. ";
     container.append(node("p", winner + `Claimed area: ${decimal(fraction * 100)}% of the log–log reference rectangle. ` +
-      `Scoring reference: ${fuel(fuelFloor)}–${fuel(maxX)} fuel/frame and ${decimal(errorFloor)}–${decimal(comparison.error_reference)} m mean Sim(3) ATE.`, "hint"));
+      `Scoring reference: ${fuel(fuelFloor)}–${fuel(maxX)} fuel/frame and ${decimal(errorFloor)}–${decimal(comparison.error_reference)} m mean unaligned ATE.`, "hint"));
   }
   if (points.some((point) => point.fuel_per_frame_max > maxX)) {
     container.append(node("p", "Submissions beyond the fuel axis are outside the plot's scoring reference.", "hint"));
@@ -886,9 +886,10 @@ async function submit(event) {
 
 const SUMMARY_COLUMNS = [
   ["Episodes", (s) => (isNumber(s.episodes) ? `${s.completed}/${s.episodes}` : DASH)],
+  ["Mean ATE (m)", (s) => decimal(s.ate_rmse_mean)],
   ["Mean Sim(3) ATE (m)", (s) => decimal(s.sim3_ate_rmse_mean)],
   ["RPE (rad)", (s) => decimal(s.rpe_rotation_rmse_median)],
-  ["ATE (m)", (s) => decimal(s.ate_rmse_median)],
+  ["Median ATE (m)", (s) => decimal(s.ate_rmse_median)],
   ["Velocity (m/s)", (s) => decimal(s.velocity_rmse_median)],
   ["Max fuel/frame", (s) => fuel(s.fuel_per_frame_max)],
   ["Fuel/frame p95", (s) => fuel(s.fuel_per_frame_p95)],
@@ -899,9 +900,9 @@ const EPISODE_COLUMNS = [
   ["Frames", (e) => e.frames],
   ["Completed", (e) => (e.completed === true ? "yes" : e.completed === false ? "no" : DASH)],
   ["Filled frames", (e) => get(e, "metrics", "filled_frames") ?? DASH],
+  ["ATE (m)", (e) => decimal(get(e, "metrics", "ate_rmse"))],
   ["Sim(3) ATE (m)", (e) => decimal(get(e, "metrics", "sim3_ate_rmse"))],
   ["RPE (rad)", (e) => decimal(get(e, "metrics", "rpe_rotation_rmse"))],
-  ["ATE (m)", (e) => decimal(get(e, "metrics", "ate_rmse"))],
   ["Drift/m", (e) => decimal(get(e, "metrics", "drift_per_metre"))],
   ["Max fuel/frame", (e) => fuel(e.fuel_per_frame_max)],
   ["Fuel/frame p95", (e) => fuel(e.fuel_per_frame_p95)],
@@ -1032,6 +1033,7 @@ function renderDetails(submission) {
   const summary = get(submission, "results", "summary");
   if (summary && typeof summary === "object") {
     results.append(node("h3", "Current-set summary"),
+                   node("p", "Scoring uses mean unaligned ATE. Sim(3)-aligned ATE and median ATE are diagnostics.", "hint"),
                    table(SUMMARY_COLUMNS.map(([title]) => title), [SUMMARY_COLUMNS.map(([, format]) => format(summary))]));
   }
   const episodes = get(submission, "results", "episodes");
@@ -1041,12 +1043,12 @@ function renderDetails(submission) {
   }
   const jobs = $("details-jobs");
   jobs.replaceChildren();
-  const headers = ["Episode", "Status", "Current set", "Sim(3) ATE (m)", "Max fuel/frame", "Error"];
+  const headers = ["Episode", "Status", "Current set", "ATE (m)", "Max fuel/frame", "Error"];
   if (admin) headers.push("Actions");
   jobs.append(table(headers, submission.jobs.map((job) => {
     const cells = [episodeHash(job.episode_hash), node("span", job.status + (job.outdated ? " (outdated settings)" : ""), `status ${job.outdated ? "outdated" : job.status}`),
                    job.selected ? "yes" : "no",
-                   decimal(get(job, "result", "metrics", "sim3_ate_rmse")), fuel(get(job, "result", "fuel_per_frame_max")), job.error || DASH];
+                   decimal(get(job, "result", "metrics", "ate_rmse")), fuel(get(job, "result", "fuel_per_frame_max")), job.error || DASH];
     if (admin) {
       let action = DASH;
       if (job.status === "done" || job.status === "failed") {

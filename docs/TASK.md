@@ -17,26 +17,27 @@ Per step: a frame, its timestamp and the IMU samples since the previous frame; t
 
 Per episode (`viobench.tools.runner.metrics`):
 
-- **Sim(3) ATE** (the headline): position RMSE after fitting one rotation, translation and uniform scale to align
-  the complete estimated trajectory to ground truth. Every frame contributes, including filled predictions after failure.
+- **ATE** (the headline): position RMSE in frame-0 coordinates, without alignment.
+  Every frame contributes, including filled predictions after failure.
 - RPE: for all frame pairs `(i, j)` one second apart,
   `E = (T_gt,i⁻¹ T_gt,j)⁻¹ (T_est,i⁻¹ T_est,j)`; the RMSE of `|trans(E)|` in metres, and of the angle of `E`.
-- ATE: position RMSE in frame-0 coordinates, without alignment.
+- Sim(3) ATE (diagnostic): position RMSE after fitting one rotation, translation and uniform scale to align
+  the complete estimated trajectory to ground truth.
 - Rotation RMSE, velocity RMSE, angular-velocity RMSE.
 - Diagnostics: fitted Sim(3) scale, final drift per metre, and the number of filled frames (`filled_frames`).
 - Compute: the maximum fuel consumed by a single `step` call across all frames in the selected episodes.
   This is Wasmtime's deterministic fuel count for a fixed module, input and runtime version. Failed calls count too.
   Initialization fuel is reported separately and has its own budget.
 
-A submission is one point: maximum fuel per frame and arithmetic mean Sim(3) ATE across all selected episodes.
+A submission is one point: maximum fuel per frame and arithmetic mean unaligned ATE across all selected episodes.
 Every selected episode has equal weight in the mean, regardless of its frame count.
 Named presets only select episode hashes; they do not split scoring into groups. From the first failed step onward, missing predictions
 are filled with position `[0, 0, 0]`, identity quaternion `[0, 0, 0, 1]`, and zero twist before scoring the complete trajectory.
 Missing or invalid states in exported estimates use the same rule. Raw exports retain missing values for diagnosis.
-Attempted frames, including the failing call, contribute to the fuel maximum. A constant predicted position uses scale 1
-and identity rotation and is translated to the ground-truth centroid; its Sim(3) ATE is the ground-truth trajectory's RMS
-spread around that centroid. Zero predictions are therefore scored normally, not assigned an artificial failure penalty.
-Sim(3) ATE requires at least three frames; shorter episodes have no Sim(3) score.
+Attempted frames, including the failing call, contribute to the fuel maximum. Zero predictions receive their normal
+unaligned position error. For the diagnostic Sim(3) calculation, a constant predicted position uses scale 1 and identity
+rotation and is translated to the ground-truth centroid; its diagnostic error is the ground-truth trajectory's RMS
+spread around that centroid. Sim(3) ATE requires at least three frames; shorter episodes have no Sim(3) diagnostic.
 
 For analysis, each episode and the aggregate report also records mean, median, p95 and p99 fuel per frame,
 total step fuel and the number of attempted frames. Aggregate statistics pool all attempted frames, so the
