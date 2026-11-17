@@ -39,7 +39,22 @@ private = [
     {"description": "private/episode-0010.zip", "hash": "b279397f8716e7747b65aa69e40aa746f4b98130"},
     {"description": "private/episode-0011.zip", "hash": "aae136ee7d2a71289fc17a7085281bc385e93590"},
     {"description": "private/episode-0012.zip", "hash": "824adabc69acecdafe2d71e840992e71cf9e9831"},
-    {"description": "private/episode-0013.zip", "hash": "b1012aa11bf8a72834e07d9a45d0ed2bd3977ac0"},
 ]
 
-SETS = {"public": public, "private": private, "public+private-10": public + private[:10]}
+private_stage2 = [
+    {"description": "private_stage2/episode-0000.zip", "hash": "b1012aa11bf8a72834e07d9a45d0ed2bd3977ac0"},
+    {"description": "private_stage2/episode-0001.zip", "hash": "004c5894ac968aae213ed3ec57426accb931efb9"},
+    {"description": "private_stage2/episode-0002.zip", "hash": "1c6e73f3323e2ed13ace3e9f396fe9198025320f"},
+    {"description": "private_stage2/episode-0003.zip", "hash": "21494468052b8747b0c0521d58055c0a40cf9892"},
+    {"description": "private_stage2/episode-0004.zip", "hash": "726458d9bc3167a808af77c5a86429f5edbacc1d"},
+    {"description": "private_stage2/episode-0005.zip", "hash": "78ed493f5b51b5ef6b985cc6945175b1aa7c85f0"},
+    {"description": "private_stage2/episode-0006.zip", "hash": "8950399d97f58ba1195258752dedd3be71980d69"},
+    {"description": "private_stage2/episode-0007.zip", "hash": "89f8c99e0a08cb30cab6ad67977dda2d49010244"},
+    {"description": "private_stage2/episode-0008.zip", "hash": "a61ad08d7b50a01c3933a3076bcedf5702fd2845"},
+    {"description": "private_stage2/episode-0009.zip", "hash": "cd6dc704267af373a3c3404571ac57de1d628bf3"},
+    {"description": "private_stage2/episode-0010.zip", "hash": "dd7a737e6813dced18112fb2013c725055b357cb"},
+    {"description": "private_stage2/episode-0011.zip", "hash": "e7aa5aee7fb75a9257fd4e1d48d04905db407c74"},
+    {"description": "private_stage2/episode-0012.zip", "hash": "f7c2546ff0f292874d371a006eac265cc9e6ae2b"},
+]
+
+SETS = {"public": public, "private": private, "public+private-10": public + private[:10], "private_stage2": private_stage2}
