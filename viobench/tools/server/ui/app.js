@@ -796,7 +796,7 @@ function renderComparison(comparison) {
   }
   for (const [ids, className] of [[frontierIds, "comparison-frontier"], [baselineIds, "comparison-frontier baseline"]]) {
     if (visiblePoints.some((point) => ids.has(point.id))) {
-      chart.append(svgNode("polyline", {points: svgPoints(steps(ids, maxY)), class: className}));
+      chart.append(svgNode("polyline", {points: svgPoints(steps(ids, comparison.error_reference ?? maxY)), class: className}));
     }
   }
   const ownMarks = [];

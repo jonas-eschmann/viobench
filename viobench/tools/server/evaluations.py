@@ -101,7 +101,8 @@ def area_gains(points, fuel_reference):
     baselines = [_coordinates(point) for point in points if point["is_baseline"]]
     if not baselines:
         return None, {}
-    error_reference = 1.2 * max(error for _, error in baselines)
+    # The leftmost baseline anchors the reference; at equal fuel, use the lower error on the frontier.
+    error_reference = 1.2 * min(baselines)[1]
     baseline_area = dominated_area(baselines, fuel_reference, error_reference)
     gains = {point["id"]: 0.0 if point["is_baseline"] else
              max(0.0, dominated_area([*baselines, _coordinates(point)], fuel_reference, error_reference) - baseline_area)

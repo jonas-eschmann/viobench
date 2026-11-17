@@ -147,7 +147,7 @@ def test_comparison_aggregates_legacy_sources_once_and_tracks_baselines_and_sele
     assert selected["evaluation_hashes"] == [A]
     assert [(point["id"], point["fuel_per_frame_max"], point["ate_rmse_mean"])
             for point in selected["points"]] == [(first, 3, 2), (second, 2, 1)]
-    assert selected["error_reference"] == pytest.approx(2.4)
+    assert selected["error_reference"] == pytest.approx(1.2)  # The second submission is now the fastest eligible baseline.
     headers = {"Authorization": f"Bearer {token}"}
     for path in ("/submissions", f"/submissions/{first}", "/comparison"):
         response = client.get(path, headers=headers)
@@ -202,7 +202,7 @@ def test_baseline_frontier_retains_ties_and_zero_coordinates(comparison):
     assert result["baseline_frontier"] == result["frontier"]
     assert result["best_submission_id"] == zero_fuel  # Every owned baseline has exactly zero added area.
     assert result["best_frontier"] == result["baseline_frontier"]  # The winning baseline is not duplicated.
-    assert result["error_reference"] == pytest.approx(4.8) and result["claimed_area"] == 0
+    assert result["error_reference"] == pytest.approx(2.4) and result["claimed_area"] == 0
 
 
 @pytest.mark.parametrize("points, expected", [
@@ -242,10 +242,10 @@ def test_claimed_area_credits_high_fuel_tail_with_viewer_independent_references(
     observer = store.add_team("observer")
     baseline = store.add_team("reference", team_type="participant", unlimited=True)
     best = submit(store, baseline, scores=(4, 4), fuel=(4, 4), baseline=True)
-    submit(store, baseline, scores=(6, 6), fuel=(6, 6), baseline=True)  # Even a dominated baseline sets the worst baseline error.
+    submit(store, baseline, scores=(6, 6), fuel=(6, 6), baseline=True)  # A slower dominated baseline does not move the reference.
     before = view(client, viewer)
     assert before["baseline_frontier"] == [best] and before["frontier"] == [best]
-    assert before["error_reference"] == pytest.approx(7.2) and before["claimed_area"] == 0
+    assert before["error_reference"] == pytest.approx(4.8) and before["claimed_area"] == 0
     assert before["best_submission_id"] is None and before["best_frontier"] == [best]
 
     own = submit(store, viewer, scores=(2, 2), fuel=(10, 10))
@@ -257,10 +257,10 @@ def test_claimed_area_credits_high_fuel_tail_with_viewer_independent_references(
     submit(store, viewer, scores=(0, 0), fuel=(12, 12))  # No width remains at the reference boundary.
     after = view(client, viewer)
     assert after["fuel_reference"] == before["fuel_reference"] == view(client, observer)["fuel_reference"] == 12
-    assert after["error_reference"] == pytest.approx(7.2)
+    assert after["error_reference"] == pytest.approx(4.8)
     assert after["claimed_area"] == pytest.approx(log(1.2) * log(2))
     assert after["best_submission_id"] == own and after["best_frontier"] == [best, own]
-    assert view(client, observer)["error_reference"] == pytest.approx(7.2)
+    assert view(client, observer)["error_reference"] == pytest.approx(4.8)
     assert view(client, observer)["claimed_area"] == 0
 
     for submission in store.submissions(baseline):
@@ -287,7 +287,7 @@ def test_claimed_area_and_reference_follow_current_baselines_and_episode_selecti
         assert result["claimed_area"] == pytest.approx(area)
     submit(store, baseline, scores=(20,), fuel=(9, 9), baseline=True)  # Current selection contains only B.
     result = view(client, viewer)
-    assert result["error_reference"] == 24 and result["claimed_area"] == pytest.approx(log(2) * log(10 / 6))
+    assert result["error_reference"] == 12 and result["claimed_area"] == pytest.approx(log(2) * log(10 / 6))
 
 
 def test_mean_ate_weights_selected_episodes_equally_for_points_references_and_area(comparison):
@@ -534,3 +534,91 @@ def test_raw_scores_control_eligibility_even_when_aligned_diagnostics_are_invali
     assert {point["id"] for point in result["points"]} == {baseline, valid}
     assert result["best_submission_id"] == valid and result["best_frontier"] == [valid]
     assert listed_best(store, client, viewer) == {valid}
+
+
+def test_slow_high_error_baseline_cannot_inflate_reference_area_or_best_marker(comparison):
+    store, client = comparison
+    reference = store.add_team("reference", unlimited=True)
+    viewer = store.add_team("viewer", unlimited=True)
+    admin = store.add_team("admin", team_type="admin")
+    baseline = submit(store, reference, scores=(4, 4), fuel=(4, 4), baseline=True)
+    fast_but_inaccurate = submit(store, viewer, scores=(5, 5), fuel=(1, 1))
+    winner = submit(store, viewer, scores=(1, 1), fuel=(5, 5))
+    before = view(client, viewer)
+    expected_area = log(12 / 5) * log(4)
+    assert before["error_reference"] == pytest.approx(4.8)
+    assert before["claimed_area"] == pytest.approx(expected_area)
+    assert before["best_submission_id"] == winner
+
+    slow = submit(store, reference, scores=(100, 100), fuel=(9, 9), baseline=True)
+    after = view(client, viewer)
+    assert {point["id"] for point in after["points"]} == {baseline, fast_but_inaccurate, winner, slow}
+    assert after["error_reference"] == before["error_reference"]
+    assert after["claimed_area"] == pytest.approx(expected_area)
+    assert after["best_submission_id"] == winner and after["best_frontier"] == [baseline, winner]
+    assert listed_best(store, client, viewer) == {winner}
+    assert listed_best(store, client, admin) == {baseline, winner}
+
+    faster = submit(store, reference, scores=(8, 8), fuel=(2, 2), baseline=True)
+    changed = view(client, viewer)
+    assert changed["error_reference"] == pytest.approx(9.6)  # The anchor changes when an actually faster baseline arrives.
+    assert changed["baseline_frontier"] == [faster, baseline]
+    assert changed["claimed_area"] == pytest.approx(expected_area)
+    assert changed["best_submission_id"] == winner
+    assert listed_best(store, client, viewer) == {winner}
+
+
+@pytest.mark.parametrize("reverse_order", [False, True])
+def test_fastest_baseline_fuel_ties_use_lower_error_independently_of_upload_order(comparison, reverse_order):
+    store, client = comparison
+    reference = store.add_team("reference", unlimited=True)
+    viewer = store.add_team("viewer")
+    tied = {}
+    for error in ((2, 8) if reverse_order else (8, 2)):
+        tied[error] = submit(store, reference, scores=(error, error), fuel=(4, 4), baseline=True)
+    slower = submit(store, reference, scores=(0.5, 0.5), fuel=(6, 6), baseline=True)
+    own = submit(store, viewer, scores=(1, 1), fuel=(2, 2))
+    result = view(client, viewer)
+    assert result["error_reference"] == pytest.approx(2.4)
+    assert result["baseline_frontier"] == [tied[2], slower]
+    assert result["best_submission_id"] == own
+    assert listed_best(store, client, viewer) == {own}
+
+
+def test_fastest_baseline_ties_use_plotted_fuel_floor_before_raw_speed(comparison):
+    store, client = comparison
+    reference = store.add_team("reference", unlimited=True)
+    viewer = store.add_team("viewer")
+    submit(store, reference, scores=(8, 8), fuel=(0, 0), baseline=True)
+    submit(store, reference, scores=(4, 4), fuel=(0, 0), baseline=True)
+    leftmost = submit(store, reference, scores=(2, 2), fuel=(1, 1), baseline=True)
+    slower = submit(store, reference, scores=(0.1, 0.1), fuel=(2, 2), baseline=True)
+    result = view(client, viewer)
+    assert result["fuel_floor"] == 1 and result["error_reference"] == pytest.approx(2.4)
+    assert result["baseline_frontier"] == [leftmost, slower]
+    assert [(point["fuel_per_frame_max"], point["ate_rmse_mean"]) for point in result["points"]] == [
+        (0, 8), (0, 4), (1, 2), (2, 0.1)]
+
+
+def test_fastest_baseline_reference_excludes_incomplete_and_outdated_results(comparison):
+    store, client = comparison
+    reference = store.add_team("reference", unlimited=True)
+    viewer = store.add_team("viewer")
+    admin = store.add_team("admin", team_type="admin")
+    baseline = submit(store, reference, scores=(4, 4), fuel=(4, 4), baseline=True)
+    incomplete = submit(store, reference, scores=(1,), fuel=(1, 1), baseline=True)
+    outdated = submit(store, reference, scores=(2, 2), fuel=(2, 2), baseline=True)
+    with store._connect() as connection:
+        connection.execute("UPDATE evaluation_jobs SET evaluation_config = NULL WHERE submission_id = ?", (outdated,))
+    own = submit(store, viewer, scores=(3, 3), fuel=(3, 3))
+    result = view(client, viewer)
+    assert {point["id"] for point in result["points"]} == {baseline, own}
+    assert result["error_reference"] == pytest.approx(4.8)
+    assert listed_best(store, client, viewer) == {own}
+    assert listed_best(store, client, admin) == {baseline, own}
+    store.set_evaluations([A])
+    changed = view(client, viewer)
+    assert changed["error_reference"] == pytest.approx(1.2)
+    assert changed["baseline_frontier"] == [incomplete]
+    assert changed["claimed_area"] == 0 and changed["best_submission_id"] == own
+    assert listed_best(store, client, viewer) == {own}

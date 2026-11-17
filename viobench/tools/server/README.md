@@ -179,8 +179,10 @@ The list remains newest first; selecting a baseline does not duplicate or move i
 Both axes and the area calculation use logarithms, giving equal proportional improvements equal weight. For the
 plot, frontiers and area only, fuel is clamped to at least `1` per frame and ATE to `0.001 m`; labels and reported
 metrics keep their raw values. The fuel reference is `X = 1.2 × step_fuel`; the error reference is
-`Y = 1.2 ×` the worst eligible baseline's mean ATE after clamping. Thus all-zero baseline errors give `Y = 0.0012 m`,
-and fuel improvements can still earn area. Nonbaseline uploads do not change these references.
+`Y = 1.2 ×` the mean unaligned ATE of the fastest eligible baseline after clamping. Select that baseline by the
+lowest plotted maximum fuel per frame; ties use the lowest plotted mean ATE. Both coordinates use their scoring
+floors for this selection. A zero error for the selected baseline gives `Y = 0.0012 m`, and fuel improvements can
+still earn area. Nonbaseline uploads do not change these references.
 For each owned submission `s`, its gain is `area(baselines + s) - area(baselines)` in natural-log coordinates,
 using the same baseline set and reference rectangle for every candidate. The team's claimed area is the largest
 individual gain. Complementary submissions do not combine their areas into the team score. Exact ties select the
@@ -188,6 +190,7 @@ earliest submission, then its ID; no eligible owned submissions gives zero area 
 Its percentage is `100 × claimed area / (ln(X / 1) × ln(Y / 0.001))`, unavailable until a baseline exists.
 The plot zooms each lower bound to one tenth of the visible minimum, never below its scoring floor.
 This changes only the display: the full scoring reference and denominator, and upper fuel bound `1.2 × step_fuel`, stay unchanged.
+Frontier lines and shading start at the error reference, even when the plot expands upward to show larger-error points.
 The fuel interval from `step_fuel` to `1.2 × step_fuel` still contributes `ln(1.2)` width, with less relative
 weight than on linear axes. Hover or focus a plot point to read its name and exact scores. Other teams' baseline
 details, files, and historical jobs remain private; their shared comparison points do not add rows to a team's own list.

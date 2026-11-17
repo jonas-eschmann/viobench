@@ -88,8 +88,9 @@ eligible submission has a **Best solution** badge; both can appear on the same r
 appear in the plot. Hover or focus a point to read its exact scores.
 Exact ties select the earliest submission, then its ID. Area uses logarithmic coordinates, so equal proportional
 improvements have equal weight. The plot, frontiers and area score use floors of `1` fuel/frame and `0.001 m` ATE; reported metrics
-and labels stay unchanged. The reference bounds are `1.2 × step_fuel` and `1.2 ×` the worst eligible baseline ATE
-after applying the floor (`0.0012 m` when all baseline errors are zero). Improvement is the shaded area as a percentage
+and labels stay unchanged. The reference bounds are `1.2 × step_fuel` and `1.2 ×` the mean unaligned ATE of the fastest
+eligible baseline after applying the floors. Fastest means the lowest plotted maximum fuel per frame; ties use the
+lower plotted mean ATE. A zero error for that baseline gives a `0.0012 m` error reference. Improvement is the shaded area as a percentage
 of this log-space rectangle, unavailable without a baseline. Nonbaseline uploads do not change the references.
 The plot zooms each lower bound to one tenth of the visible minimum, never below its scoring floor.
 The full scoring reference and percentage denominator stay unchanged, as does the upper fuel bound `1.2 × step_fuel`.
