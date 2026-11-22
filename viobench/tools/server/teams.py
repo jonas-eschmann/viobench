@@ -7,6 +7,7 @@
     python -m viobench.tools.server.teams add --type participant --unlimited "reference"  # admin selects individual uploads as baselines
     python -m viobench.tools.server.teams add --type admin --token test-admin admin  # fixed token for local testing
     python -m viobench.tools.server.teams update --type participant -- "$TOKEN"  # change an existing account's type
+    python -m viobench.tools.server.teams rotate -- "$TOKEN"       # replace a leaked token; prints "<new token>  <name>"
     python -m viobench.tools.server.teams list                     # every team's token and name
 
 A token defaults to 24 random bytes as 32 base64url characters; --token supplies an explicit token for one account.
@@ -19,7 +20,7 @@ from .store import TEAM_TYPES, Store
 
 
 def main():
-    parser = argparse.ArgumentParser(prog="python -m viobench.tools.server.teams", description="Create, update and list team and admin accounts.")
+    parser = argparse.ArgumentParser(prog="python -m viobench.tools.server.teams", description="Create, update, rotate and list team and admin accounts.")
     commands = parser.add_subparsers(dest="command", required=True)
     add = commands.add_parser("add", help="create teams and print their tokens")
     add.add_argument("names", nargs="+")
@@ -29,6 +30,8 @@ def main():
     update = commands.add_parser("update", help="change an existing team's account type")
     update.add_argument("token", help="the team's token, as shown by list")
     update.add_argument("--type", choices=TEAM_TYPES, required=True, help="new account type")
+    rotate = commands.add_parser("rotate", help="replace a team's token with a new random one and print it")
+    rotate.add_argument("token", help="the team's current token, as shown by list")
     commands.add_parser("list", help="print every team's token and name")
     arguments = parser.parse_args()
     if arguments.command == "add" and arguments.token is not None and len(arguments.names) != 1:
@@ -47,6 +50,12 @@ def main():
         except ValueError as error:
             parser.error(str(error))
         print("Updated team.")
+    elif arguments.command == "rotate":
+        try:
+            token = store.rotate_team(arguments.token)
+        except ValueError as error:
+            parser.error(str(error))
+        print(f"{token}  {store.team_name(token)}")
     else:
         for token, name, unlimited, kind in store.teams():
             print(f"{token}  {name}  ({kind}){'  (unlimited)' if unlimited else ''}")

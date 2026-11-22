@@ -146,6 +146,8 @@ python -m viobench.tools.server.teams update --type test -- "$TOKEN"  # also rev
 Updates keep the token, submissions and quota setting. API permissions change immediately;
 the browser's account view updates on its next refresh. With Compose, run the same command through `exec app` as above.
 
+If a token leaks, `python -m viobench.tools.server.teams rotate -- "$TOKEN"` replaces it with a new random one and prints `<new token>  <name>`. The old token stops authenticating immediately (its browser sessions return to the sign-in form); the account keeps its submissions, type, quota settings and today's usage. `--` keeps a token that starts with `-` from being parsed as an option.
+
 Create an ordinary uploader for instructor reference solutions:
 
 ```bash

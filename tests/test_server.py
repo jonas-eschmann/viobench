@@ -414,6 +414,37 @@ def test_invalid_role_updates_leave_accounts_unchanged(api, monkeypatch, capsys)
     assert store.teams() == before
 
 
+def test_cli_rotation_revokes_the_token_and_keeps_the_account(api, monkeypatch, capsys):
+    client, store = api
+    leaked = store.add_team("leaked", team_type="participant", unlimited=True, token="-leaked")  # needs `--`
+    old = {"Authorization": f"Bearer {leaked}"}
+    own = client.post("/submissions", files={"file": ("own.wasm", MODULE)}, headers=old).json()["id"]
+    finish_submission(store, own, results=results(0.1))
+    original = client.get(f"/submissions/{own}", headers=old).json()
+    allowance = client.get("/config", headers=old).json()["allowance"]
+    other = store.teams()[0]
+    monkeypatch.setattr(teams, "Store", lambda: store)
+    monkeypatch.setattr(sys, "argv", ["teams", "rotate", "--", leaked])
+    teams.main()
+    token, name = capsys.readouterr().out.split()
+    assert name == "leaked" and token != leaked
+    assert store.teams() == [other, (token, "leaked", True, "participant")]
+    assert client.get("/submissions", headers=old).status_code == 401
+    new = {"Authorization": f"Bearer {token}"}
+    assert client.get(f"/submissions/{own}", headers=new).json() == original
+    assert [row["id"] for row in client.get("/submissions", headers=new).json()] == [own]
+    assert client.get("/config", headers=new).json()["allowance"] == allowance
+    with store._connect() as connection:
+        assert connection.execute("PRAGMA foreign_key_check").fetchall() == []
+
+    before = store.teams()
+    monkeypatch.setattr(sys, "argv", ["teams", "rotate", "--", leaked])
+    with pytest.raises(SystemExit) as error:
+        teams.main()
+    assert error.value.code == 2 and leaked not in capsys.readouterr().err
+    assert store.teams() == before
+
+
 def test_pause_control_requires_admin_and_a_valid_message(api):
     client, store = api
     admin = {"Authorization": f"Bearer {store.add_team('admin', team_type="admin")}"}

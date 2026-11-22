@@ -154,6 +154,17 @@ class Store:
             if not connection.execute("UPDATE teams SET type = ? WHERE token = ?", (team_type, token)).rowcount:
                 raise ValueError("no such team")
 
+    def rotate_team(self, token):
+        """Replace a (leaked) token with a new random one, keeping the account and its submissions."""
+        new = secrets.token_urlsafe(TOKEN_BYTES)
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            connection.execute("PRAGMA defer_foreign_keys = ON")  # submissions.token references teams.token
+            if not connection.execute("UPDATE teams SET token = ? WHERE token = ?", (new, token)).rowcount:
+                raise ValueError("no such team")
+            connection.execute("UPDATE submissions SET token = ? WHERE token = ?", (new, token))
+        return new
+
     def teams(self):
         """[(token, name, unlimited, team_type)] in the order they were created."""
         with self._connect() as connection:
