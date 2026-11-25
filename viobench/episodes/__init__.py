@@ -84,4 +84,4 @@ private_stage3 = [
     {"description": "private_stage3/episode-0023.zip",  "hash": "ea5ede02321a9d1f92df38efc8abf9b85420ed40"}
 ]
 
-SETS = {"public": public, "private": private, "public+private-10": public + private[:10], "private_stage2": private_stage2}
+SETS = {"public": public, "private": private, "public+private-10": public + private[:10], "private_stage2": private_stage2, "private_stage3": private_stage3}
