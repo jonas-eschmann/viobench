@@ -57,4 +57,31 @@ private_stage2 = [
     {"description": "private_stage2/episode-0011.zip", "hash": "f7c2546ff0f292874d371a006eac265cc9e6ae2b"},
 ]
 
+private_stage3 = [
+    {"description": "private_stage3/episode-0000.zip", "hash": "30755ac25f178027de87c789fc84479dddf293f1"},
+    {"description": "private_stage3/episode-0001.zip", "hash": "500bc1fdb426fabd63317942060484b2e0fba0d7"},
+    {"description": "private_stage3/episode-0002.zip", "hash": "92c12d5a6a048ed0e8b7dd47ef42428acf666c0f"},
+    {"description": "private_stage3/episode-0003.zip", "hash": "9d8c612ee5ad775f77f54efbbf542f5b61ac3578"},
+    {"description": "private_stage3/episode-0004.zip", "hash": "d6337f1033b1abc6324d3e1f1926937826bdb31c"},
+    {"description": "private_stage3/episode-0005.zip", "hash": "9affc13d7522343cfe4edd888c427bcc47fc3f2e"},
+    {"description": "private_stage3/episode-0006.zip", "hash": "bffcea9dd7953a3c5f921535603a22192dfcaf70"},
+    {"description": "private_stage3/episode-0007.zip", "hash": "3cc7fd3d0baee5564b98681ea2e250eef44d475d"},
+    {"description": "private_stage3/episode-0008.zip", "hash": "f794e77752be1200e8cb3c2d815d4d44ef1584ab"},
+    {"description": "private_stage3/episode-0009.zip", "hash": "7519dd967783dbfb7d424b535d4b66243bf31596"},
+    {"description": "private_stage3/episode-0010.zip", "hash": "e5cc48d7b6d89ce490af00431200a2781fd9c5fb"},
+    {"description": "private_stage3/episode-0011.zip", "hash": "293ef2a9a0d0f14f0bec5ec1f3823a5a17b91627"},
+    {"description": "private_stage3/episode-0012.zip",  "hash": "5672eb24b81b929174743ef11fee342e38026c04"},
+    {"description": "private_stage3/episode-0013.zip",  "hash": "f141220807fd9276019c226bad9cfe3978e04173"},
+    {"description": "private_stage3/episode-0014.zip",  "hash": "72bef50e78e672e42c2291784a8857f7fb3e32f6"},
+    {"description": "private_stage3/episode-0015.zip",  "hash": "c31ed49113cd798c29ed8e84eaeb293c90955ac6"},
+    {"description": "private_stage3/episode-0016.zip",  "hash": "34c68d36d10c489b33a201037242df5469cf0321"},
+    {"description": "private_stage3/episode-0017.zip",  "hash": "6fd93fa326fdb4c10159a25f7e5c2647b7857249"},
+    {"description": "private_stage3/episode-0018.zip",  "hash": "dc4e9bfa15c8299535b47df63d64f8e52d0ca9ef"},
+    {"description": "private_stage3/episode-0019.zip",  "hash": "616b85ed75c0a92c5b4829a3ac2905369eb9706e"},
+    {"description": "private_stage3/episode-0020.zip",  "hash": "4fb55ea93a6f22ca59d0bb3db2ffb00beefbd66f"},
+    {"description": "private_stage3/episode-0021.zip",  "hash": "9f250c4f6691d11aed2f6a011a64b97b2d7cdb1d"},
+    {"description": "private_stage3/episode-0022.zip",  "hash": "1411ebe11cf348657ea4371fd58d2681d01a4d5b"},
+    {"description": "private_stage3/episode-0023.zip",  "hash": "ea5ede02321a9d1f92df38efc8abf9b85420ed40"}
+]
+
 SETS = {"public": public, "private": private, "public+private-10": public + private[:10], "private_stage2": private_stage2}
